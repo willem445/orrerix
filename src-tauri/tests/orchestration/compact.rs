@@ -137,16 +137,33 @@ fn compact_nudge_role_gate_defaults_to_orchestrator_only() {
 }
 
 #[test]
-fn compact_nudge_cli_gate_covers_claude_and_copilot() {
-    // Both currently-supported CLIs have a real `/compact` command (Copilot's
-    // confirmed via docs.github.com/en/copilot/reference/copilot-cli-reference/
-    // cli-command-reference — an earlier round of this feature wrongly
-    // asserted Copilot has none). Anything outside `SUPPORTED_CLIS` still
-    // gets no nudge.
-    assert!(compact_nudge_cli_supported("claude"));
-    assert!(compact_nudge_cli_supported("copilot"));
-    assert!(!compact_nudge_cli_supported("codex"));
-    assert!(!compact_nudge_cli_supported(""));
+fn compact_command_for_is_the_cli_caps_row_for_every_supported_cli() {
+    // #413 S4: the gate is the `CliCaps.compact_command` row, not a list of its
+    // own — read from the table rather than restated, so a row that gains or
+    // loses a command moves the gate with it.
+    for cli in SUPPORTED_CLIS {
+        assert_eq!(compact_command_for(cli), cli_caps(cli).unwrap().compact_command, "{cli}");
+    }
+    // The CLIs the old `matches!(cli, "claude" | "copilot")` shut out, whose
+    // rows carry a command: now admitted.
+    for cli in ["pi", "codex", "opencode"] {
+        assert_eq!(compact_command_for(cli), Some("/compact"), "{cli}");
+    }
+    // The negative controls: a row with no command, and no row at all.
+    assert_eq!(compact_command_for("gemini"), None);
+    assert_eq!(compact_command_for(""), None);
+    assert_eq!(compact_command_for("totally-unknown-cli"), None);
+}
+
+#[test]
+fn compact_unsupported_reason_carries_the_rows_note() {
+    let gemini = cli_caps("gemini").unwrap();
+    assert!(gemini.compact_command.is_none() && !gemini.compact_note.trim().is_empty(), "fixture: gemini's row");
+    let reason = compact_unsupported_reason("gemini");
+    assert!(reason.contains("gemini") && reason.contains(gemini.compact_note.trim()), "{reason}");
+    // No row, no note: still names the CLI, and never an empty sentence.
+    let unknown = compact_unsupported_reason("totally-unknown-cli");
+    assert!(unknown.contains("totally-unknown-cli") && !unknown.ends_with(": "), "{unknown}");
 }
 
 #[test]
@@ -584,7 +601,7 @@ fn copilot_precompact_hook_marker_is_trusted_evidence_too() {
     // Same evidence class as Claude's `precompact` case (`compact_pending_trusted =
     // true`) — a hook telling loomux a compaction is starting is equally trustworthy
     // regardless of which CLI's hook fired it. Before #417's CLI-gate widening
-    // (`compact_nudge_cli_supported`), a copilot agent never even reached this code —
+    // (now `compact_command_for`, #413 S4), a copilot agent never even reached this code —
     // the per-agent loop's admission gate used to be claude-only, so this marker
     // would have been silently ignored forever.
     let (reg, _d, gid, oid) = compact_nudge_setup_copilot(20);
@@ -2111,7 +2128,7 @@ fn compact_nudge_skips_a_role_not_in_the_eligible_set() {
 fn compact_nudge_no_longer_skips_copilot_which_has_its_own_compact_equivalent() {
     // #417 correction round 2: this test used to prove copilot was skipped
     // entirely ("/compact has no copilot equivalent"). That claim was wrong
-    // — see `compact_nudge_cli_supported`'s doc — so it now proves the
+    // — see `compact_command_for`'s doc — so it now proves the
     // opposite: a copilot agent gets nudged exactly like a Claude one.
     let (reg, _d) = test_registry();
     let copilot_rails = Guardrails {
@@ -2319,25 +2336,25 @@ fn compact_escalation_notice_names_the_percent_and_the_recovery_move() {
 fn compact_nudge_context_floor_met_unset_applies_the_smart_default_only_when_nudge_is_on() {
     // None (unset) + parent feature ON: the 50% smart default applies —
     // zero config needed to get the fix a live benchtest showed was missing.
-    assert!(!compact_nudge_context_floor_met(Some(30), None, 20), "30% is under the smart default (50%)");
-    assert!(compact_nudge_context_floor_met(Some(60), None, 20), "60% clears the smart default (50%)");
+    assert!(!compact_nudge_context_floor_met(Some(30), false, None, 20), "30% is under the smart default (50%)");
+    assert!(compact_nudge_context_floor_met(Some(60), false, None, 20), "60% clears the smart default (50%)");
     // None (unset) + parent feature OFF: inert — there's nothing to gate
     // either way (the heuristic itself never fires when compact_nudge_minutes
     // is 0), but the function must still read as "met" on its own terms.
-    assert!(compact_nudge_context_floor_met(Some(5), None, 0));
+    assert!(compact_nudge_context_floor_met(Some(5), false, None, 0));
 }
 
 #[test]
 fn compact_nudge_context_floor_met_explicit_zero_disables_regardless_of_parent() {
-    assert!(compact_nudge_context_floor_met(Some(1), Some(0), 20), "explicit Some(0) = disabled, any reading passes");
-    assert!(compact_nudge_context_floor_met(None, Some(0), 20));
+    assert!(compact_nudge_context_floor_met(Some(1), false, Some(0), 20), "explicit Some(0) = disabled, any reading passes");
+    assert!(compact_nudge_context_floor_met(None, false, Some(0), 20));
 }
 
 #[test]
 fn compact_nudge_context_floor_met_explicit_value_gates_at_that_value() {
-    assert!(!compact_nudge_context_floor_met(Some(30), Some(70), 20), "below an explicit 70% floor");
-    assert!(compact_nudge_context_floor_met(Some(70), Some(70), 20), "exactly at an explicit floor allows it");
-    assert!(compact_nudge_context_floor_met(Some(80), Some(70), 20));
+    assert!(!compact_nudge_context_floor_met(Some(30), false, Some(70), 20), "below an explicit 70% floor");
+    assert!(compact_nudge_context_floor_met(Some(70), false, Some(70), 20), "exactly at an explicit floor allows it");
+    assert!(compact_nudge_context_floor_met(Some(80), false, Some(70), 20));
 }
 
 #[test]
@@ -2345,8 +2362,38 @@ fn compact_nudge_context_floor_met_fails_open_with_no_reading() {
     // A missing/stale context reading must never silently disable the whole
     // heuristic nudge — degrade, don't deny (the same posture #332's intake
     // gate takes on a `gh` failure) — true under every floor state.
-    assert!(compact_nudge_context_floor_met(None, None, 20), "smart default, no reading");
-    assert!(compact_nudge_context_floor_met(None, Some(70), 20), "explicit floor, no reading");
+    assert!(compact_nudge_context_floor_met(None, false, None, 20), "smart default, no reading");
+    assert!(compact_nudge_context_floor_met(None, false, Some(70), 20), "explicit floor, no reading");
+}
+
+#[test]
+fn compact_nudge_context_floor_met_fails_closed_on_a_reading_with_no_window() {
+    // #413 S4, the human's decision: tokens and no window is missing BY DESIGN
+    // (opencode; codex/pi before a report), not briefly — failing open would
+    // lull-compact such a pane at any fill level.
+    assert!(!compact_nudge_context_floor_met(None, true, None, 20), "smart default, unwindowed");
+    assert!(!compact_nudge_context_floor_met(None, true, Some(70), 20), "explicit floor, unwindowed");
+    // No floor in force: nothing to fail, the lull alone decides.
+    assert!(compact_nudge_context_floor_met(None, true, Some(0), 20), "explicitly disabled floor");
+    assert!(compact_nudge_context_floor_met(None, true, None, 0), "parent feature off");
+}
+
+#[test]
+fn context_window_unknown_is_the_published_window_rule() {
+    use loomux_lib::modelstate::ContextSource;
+    // Tokens, no report, a non-Claude reader: unknown.
+    for source in [ContextSource::CodexRollout, ContextSource::PiSession, ContextSource::OpencodeDb] {
+        assert!(context_window_unknown(Some(150_000), None, None, false, Some("x"), Some(source)), "{source:?}");
+        // An override or a report makes it known.
+        assert!(!context_window_unknown(Some(150_000), Some(200_000), None, false, Some("x"), Some(source)), "{source:?}");
+        assert!(!context_window_unknown(Some(150_000), None, Some(272_000), false, Some("x"), Some(source)), "{source:?}");
+    }
+    // Claude's readers keep the table: never unknown.
+    for source in [ContextSource::Transcript, ContextSource::Statusline] {
+        assert!(!context_window_unknown(Some(150_000), None, None, false, Some("claude-sonnet-4-6"), Some(source)));
+    }
+    // No tokens is no reading, not an unwindowed one.
+    assert!(!context_window_unknown(None, None, None, false, None, Some(ContextSource::OpencodeDb)));
 }
 
 #[test]
@@ -3165,20 +3212,12 @@ fn mcp_note_directive_requires_text() {
 
 // The previous version of this test used "copilot" as its non-Claude
 // example CLI, proving `request_compact` rejected it — #417 correction
-// round 2 made that claim wrong (Copilot has its own `/compact` too, see
-// `compact_nudge_cli_supported`'s doc), so that assertion inverted to
-// `request_compact_now_accepts_a_copilot_caller` above. There is no
-// remaining way to construct this rejection through the public API: any
-// group's `agent_cli` is coerced into `SUPPORTED_CLIS` by `clamped()`, and
-// any per-role CLI override is rejected at `spawn_agent` time rather than
-// reaching a live agent (see `clamped()`'s own doc, issue #4) — so a
-// successfully spawned agent's CLI is always a `compact_nudge_cli_
-// supported` member today. The gate itself (and its "codex"/""-return-false
-// cases) stays covered directly at the pure-function level by
-// `compact_nudge_cli_gate_covers_claude_and_copilot` above; `request_
-// compact`'s own `if !compact_nudge_cli_supported` branch is defensive
-// belt-and-braces against a hand-edited or pre-#4 persisted group.json, not
-// something a live test can trigger without bypassing the public API.
+// round 2 made that claim wrong (Copilot has its own `/compact` too), so that
+// assertion inverted to `request_compact_now_accepts_a_copilot_caller`
+// below. #413 S4 made the rejection reachable again through the public API:
+// the gate is now the `CliCaps.compact_command` row (`compact_command_for`),
+// and gemini — a spawnable CLI — has none; see
+// `request_compact_refuses_a_cli_with_no_compact_command_with_its_caps_note`.
 
 #[test]
 fn request_compact_now_accepts_a_copilot_caller() {
@@ -3193,6 +3232,127 @@ fn request_compact_now_accepts_a_copilot_caller() {
     let msg = reg.request_compact(&o.id).unwrap();
     assert!(msg.contains("compact requested"), "got: {msg}");
     assert!(reg.agent(&o.id).unwrap().compact_requested, "flag set on the calling copilot agent");
+}
+
+/// #413 S4: a group on a CLI whose `CliCaps` row has no compact command
+/// (gemini) and one on claude, otherwise identical — the pair every
+/// no-command test below reads, so the claude half is the positive control
+/// that the SAME inputs do reach a paste.
+fn gemini_and_claude_groups(rails_for: impl Fn(&str) -> Guardrails) -> (OrchRegistry, tempfile::TempDir, [(GroupId, String); 2]) {
+    let (reg, dir) = test_registry();
+    let mut out = Vec::new();
+    for cli in ["gemini", "claude"] {
+        let g = reg.create_group(&format!("C:/tmp/repo-{cli}"), rails_for(cli)).unwrap();
+        let o = reg.spawn_agent(&g.id, Role::Orchestrator, "orch", "", false, None).unwrap();
+        let block = reg.agent(&o.id).unwrap().block;
+        assert_eq!(g.guardrails.cli_for_block(&block, Role::Orchestrator), cli, "fixture: the pane runs {cli}");
+        out.push((g.id, o.id));
+    }
+    let [gemini, claude]: [(GroupId, String); 2] = out.try_into().unwrap();
+    (reg, dir, [gemini, claude])
+}
+
+/// The texts `deliver_prompt` was handed for `agent` after audit row `from`.
+/// A test registry's panes have no terminal, so every delivery is refused at
+/// the front door and audited as `delivery-dropped` carrying its full `text` —
+/// which makes that row the record of exactly what reached `deliver_prompt`.
+fn delivered_texts(reg: &OrchRegistry, group: &GroupId, agent: &str, from: usize) -> Vec<String> {
+    reg.audit_log(group)
+        .into_iter()
+        .skip(from)
+        .filter(|e| e.action == "delivery-dropped" && e.detail["to"] == agent)
+        .filter_map(|e| e.detail["text"].as_str().map(str::to_owned))
+        .collect()
+}
+
+/// A lull-nudge fire for a `cli` orchestrator; returns what reached
+/// `deliver_prompt` for it.
+fn lull_paste_for(cli: &str) -> Vec<String> {
+    let (reg, dir) = test_registry();
+    reg.set_codex_home_override(dir.path().join("codex-home"));
+    let g = reg
+        .create_group(&format!("C:/tmp/repo-{cli}"), Guardrails { agent_cli: cli.into(), ..compact_rails(20, &["orchestrator"]) })
+        .unwrap();
+    let o = reg.spawn_agent(&g.id, Role::Orchestrator, "orch", "", false, None).unwrap();
+    let from = reg.audit_log(&g.id).len();
+    let nudged = reg.compact_nudge_tick(FAR, &HashMap::new(), &HashMap::new(), &HashMap::new(), &HashMap::new(), &HashMap::new(), &HashMap::new());
+    assert_eq!(nudged, vec![o.id.clone()], "{cli}: the lull nudge fired");
+    delivered_texts(&reg, &g.id, &o.id, from)
+}
+
+#[test]
+fn compact_nudge_pastes_each_clis_own_row_command_into_deliver_prompt() {
+    // #413 S4 review: one case per CLI that pastes, reading the expected
+    // string off the row rather than restating it.
+    let mut pasting = 0;
+    for cli in SUPPORTED_CLIS {
+        let Some(command) = cli_caps(cli).unwrap().compact_command else { continue };
+        assert_eq!(lull_paste_for(cli), vec![command.to_string()], "{cli}: exactly its row's command reached deliver_prompt");
+        pasting += 1;
+    }
+    assert_eq!(pasting, 5, "claude, copilot, codex, pi and opencode all paste");
+}
+
+#[test]
+fn compact_nudge_pastes_a_spelling_no_row_has_when_the_row_says_so() {
+    // The case above cannot tell "the row's string" from a hard-coded
+    // `/compact`, since every row spells it that way. A spelling no row has
+    // can: a paste site that ignored the row would send `/compact` here.
+    struct Restore;
+    impl Drop for Restore {
+        fn drop(&mut self) {
+            set_compact_command_for_test(None);
+        }
+    }
+    let _restore = Restore;
+    set_compact_command_for_test(Some(("pi", "/compact-spelled-otherwise")));
+    assert_eq!(compact_command_for("pi"), Some("/compact-spelled-otherwise"), "fixture: the seam answers");
+    assert_eq!(compact_command_for("claude"), Some("/compact"), "fixture: only the named CLI is overridden");
+    assert_eq!(lull_paste_for("pi"), vec!["/compact-spelled-otherwise".to_string()]);
+}
+
+#[test]
+fn request_compact_refuses_a_cli_with_no_compact_command_with_its_caps_note() {
+    let (reg, _d, [(gemini_g, gemini), (claude_g, claude)]) =
+        gemini_and_claude_groups(|cli| Guardrails { agent_cli: cli.into(), ..rails() });
+    let note = cli_caps("gemini").unwrap().compact_note.trim();
+
+    let err = reg.request_compact(&gemini).unwrap_err();
+    assert!(err.contains(note), "the refusal carries the row's reason: {err}");
+    let err = reg.human_request_compact(&gemini_g, &gemini).unwrap_err();
+    assert!(err.contains(note), "the human's Compact now says the same: {err}");
+    assert!(!reg.agent(&gemini).unwrap().compact_requested, "a refused request sets nothing");
+
+    // Positive control: the same call on claude is accepted.
+    assert!(reg.request_compact(&claude).is_ok());
+    assert!(reg.human_request_compact(&claude_g, &claude).is_ok());
+}
+
+#[test]
+fn compact_nudge_tick_never_pastes_into_a_cli_with_no_compact_command() {
+    // The lull nudge and the escalation, on inputs that fire both for claude.
+    let (reg, _d, [(gemini_g, _), (claude_g, claude)]) = gemini_and_claude_groups(|cli| Guardrails {
+        agent_cli: cli.into(),
+        compact_context_threshold_percent: 50,
+        ..compact_rails(20, &["orchestrator"])
+    });
+    let nudged = reg.compact_nudge_tick(FAR, &HashMap::new(), &HashMap::new(), &HashMap::new(), &HashMap::new(), &HashMap::new(), &HashMap::new());
+    assert_eq!(nudged, vec![claude.clone()], "the lull nudge reaches the claude pane and never the gemini one");
+    assert_eq!(audit_count(&reg, &gemini_g, "compact-nudge"), 0);
+    let fired = audit_entries(&reg, &claude_g, "compact-nudge");
+    assert_eq!(fired.len(), 1);
+    assert_eq!(fired[0]["detail"]["command"], "/compact", "the paste is the row's own command: {}", fired[0]);
+
+    // Escalation, on a pane with no arm in flight: 80% for both.
+    let (reg, _d, [(gemini_g, gemini), (claude_g, claude)]) = gemini_and_claude_groups(|cli| Guardrails {
+        agent_cli: cli.into(),
+        compact_context_threshold_percent: 50,
+        ..compact_rails(0, &["orchestrator"])
+    });
+    let contexts = HashMap::from([(gemini.clone(), 80), (claude.clone(), 80)]);
+    reg.compact_nudge_tick(FAR, &HashMap::new(), &HashMap::new(), &contexts, &HashMap::new(), &HashMap::new(), &HashMap::new());
+    assert_eq!(audit_count(&reg, &gemini_g, "compact-escalation"), 0, "no command, so no escalation to ask for one");
+    assert_eq!(audit_count(&reg, &claude_g, "compact-escalation"), 1, "positive control: claude escalates on the same 80%");
 }
 
 #[test]
@@ -3445,7 +3605,7 @@ fn compact_nudge_tick_ignores_a_busy_pane_that_merely_mentions_the_banner() {
 #[test]
 fn compact_nudge_tick_never_reads_claudes_auto_compact_banner_for_a_copilot_agent() {
     // Banner detection is keyed PER-CLI (`auto_compact_banner_substrings`),
-    // independent of the broader `compact_nudge_cli_supported` admission
+    // independent of the broader `compact_command_for` admission
     // gate — a copilot agent is admitted to the loop now (#417 correction
     // round 2: Copilot has its own `/compact` too), but it still has no
     // banner substring of its own registered, so Claude's exact "Compacting

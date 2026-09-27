@@ -3439,12 +3439,30 @@ limit.
   `Guardrails`/`group.json` path and is live-settable the same way `idle_tick_minutes` is
   (`set_compact_nudge_minutes` / `set_compact_nudge_roles`, `orch_set_compact_nudge_minutes`
   / `orch_set_compact_nudge_roles`, mirroring `orch_set_idle_tick_minutes`).
-- **Per-CLI gate.** `/compact` is a Claude Code built-in with no equivalent on the other
-  supported CLIs, so `compact_nudge_cli_supported` gates the nudge to
-  `Guardrails::cli_for_block` resolving to `"claude"` for the eligible agent's own
-  BLOCK — not for its role's default block, which is a different question
-  wherever a roster declares two blocks of one kind (#2167) — and an unsupported CLI
-  is silently excluded rather than typing a slash command it won't understand.
+- **Per-CLI gate (#413 S4).** `compact_command_for(cli)` reads the CLI's
+  `CliCaps.compact_command` row, and that row is the whole gate: a `Some` admits the pane to
+  `compact_nudge_tick`'s loop, `request_compact`, the human's "Compact now" and the
+  idle-compact backstop, and is the exact string the paste sends through `deliver_prompt`;
+  a `None` (gemini, whose command is `/compress`, and any CLI with no row) is excluded rather
+  than sent a slash command it won't understand, and `request_compact` refuses with the row's
+  `compact_note` (`compact_unsupported_reason`). The CLI is `Guardrails::cli_for_block` for
+  the eligible agent's own BLOCK — not for its role's default block, which is a different
+  question wherever a roster declares two blocks of one kind (#2167). It replaced
+  `compact_nudge_cli_supported`, a `matches!(cli, "claude" | "copilot")` that kept pi, codex
+  and opencode out of the loop whatever their rows said.
+- **Escalation needs a window, not just tokens (#413 S4).** `agent_context_percents` computes
+  a percent only against a window `modelstate::published_window` accepts — the same rule
+  `group_summary` publishes by, so the panel and the escalation cannot disagree. The ladder's
+  model-name TABLE rung is Claude's (`usage::claude_context_window_tokens`), so
+  `ContextSource::table_rung_applies` admits it for Claude's readers only: a codex or pi
+  reading with no CLI-reported window, and every opencode reading (its store records none),
+  gets no percent unless the group sets `context_window_tokens_override`. No percent means no
+  escalation, the lull floor fails closed (`context_window_unknown` → `compact_nudge_context_floor_met`'s
+  `window_unknown`), and the idle-compact backstop
+  fails closed. Each such reading in an escalation-eligible seat is audited once per episode
+  as `compact-escalation-skipped` (`note_unwindowed_escalations`, latched in
+  `compact_unwindowed_noted`), so the timeline says why a full-looking pane was never
+  escalated.
 - **`request_compact` (#328): agent-initiated, self-scoped, no new trust surface beyond a
   one-bit flag.** An MCP tool (shared tier — every non-solo role, not orchestrator-only) that
   sets `AgentEntry.compact_requested` on the CALLING agent's own entry, resolved from its MCP
@@ -4857,7 +4875,11 @@ itself is retained as belt-and-braces against a hand-edited or pre-existing grou
 unsupported CLI string, since `Guardrails::clamped()` and `spawn_agent`'s own per-role validation
 mean no group/agent created through the current API can ever reach it with an unsupported value —
 see `request_compact_now_accepts_a_copilot_caller`'s sibling test note in `tests/orchestration/`
-for why no integration test exercises that branch directly anymore).
+for why no integration test exercises that branch directly anymore). #413 S4 superseded both
+halves of that: the function is now `compact_command_for`, reading the `CliCaps` row (see the
+**Per-CLI gate** bullet above), and the refusal IS reachable through the API again — gemini is
+spawnable and has no compact command — so
+`request_compact_refuses_a_cli_with_no_compact_command_with_its_caps_note` exercises it.
 
 **Updated capability matrix for #417** (supersedes the informal claims embedded in the
 "Copilot wiring" prose above — that section's ARM/CONFIRM analysis is otherwise unchanged, only
@@ -5306,7 +5328,11 @@ right timing, wrong context level.
   `context_window_tokens_override`.
 - **Fails open with no reading**, in every one of the three states — a missing/stale
   context-percent reading must never silently disable the whole heuristic nudge, the same
-  "degrade, don't deny" posture #332's intake gate takes on a `gh` failure.
+  "degrade, don't deny" posture #332's intake gate takes on a `gh` failure. **Fails closed on
+  a reading with no window** (#413 S4): tokens with no window the panel would publish — opencode
+  always, codex or pi before their CLI reports one — is missing by design, not briefly, so
+  failing open there would lull-compact the pane at any fill level. A group override gives it
+  a window; an explicitly disabled floor still fires on the lull alone.
 - **Template guidance, not a tool change.** `orchestrator.md`'s existing "Compact at lulls"
   section and `docs/orchestration.md`'s user-facing **Compact-nudge** section both name the smart
   default and its number (50%) explicitly, so the template and the config never quote different

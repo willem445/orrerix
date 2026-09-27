@@ -9698,42 +9698,87 @@ fn canonicalize_compact_nudge_roles(roles: Vec<String>) -> Vec<String> {
     out
 }
 
-/// Compact-nudge (#287; widened #417 correction round): whether `cli` has a
-/// `/compact` equivalent loomux can drive the same way (a bare pane write +
-/// CR) AND gets a seat in `compact_nudge_tick`'s per-agent loop at all.
+/// Compact-nudge (#287, #413 S4): the command loomux pastes to compact a `cli`
+/// pane — `None` when it has none it may drive. Read off the CLI's
+/// [`CliCaps::compact_command`](loomux_engine::model::CliCaps) row, the one
+/// table that answers per-CLI questions (CLAUDE.md constraint 8), so admitting
+/// a CLI is a row edit and a CLI's own spelling is pasted verbatim rather than
+/// assumed to be `/compact`.
 ///
-/// An earlier round of this feature asserted Copilot has no `/compact`
-/// command and kept this claude-only, admitting Copilot to the loop through
-/// a separate, broader `compact_hook_cli_supported` gate instead (for its
-/// `PreCompact` hook alone). That claim was wrong: GitHub's own CLI command
-/// reference (docs.github.com/en/copilot/reference/copilot-cli-reference/cli-command-reference)
-/// documents `/compact [FOCUS-INSTRUCTIONS]` as a real Copilot CLI command,
-/// identical in spirit to Claude's. Claude and Copilot agreeing made the
-/// separate broader gate pure duplication, so it was folded back into this one
-/// function — see `git log` for the prior two-gate shape if a future CLI ever
-/// needs hook-admission without `/compact`-paste (or vice versa), which would
-/// be the reason to split them again. Pure so the gate is testable without a
-/// registry; `cli` comes from `Guardrails::cli_for_block` — the agent's OWN
-/// block, not its class's default block (#2167). Both feeders pass it: the loop
-/// admission gate reads `g.cli_for_block(&a.block, a.role)` directly, and
-/// `request_compact` reaches it through `OrchRegistry::cli_for_agent`. Feeding
-/// this `cli_for(role)` instead is what silently excluded every claude delegate
-/// in a two-block class from compact nudges, since this list does not admit
-/// `opencode`.
+/// `Some` is also the whole admission test for `compact_nudge_tick`'s
+/// per-agent loop, `request_compact`, the human's "Compact now" and the
+/// orchestrator's idle-compact backstop: a pane with no command gets no paste
+/// from any of them, and nothing else the loop does is worth running for a
+/// pane it can never compact. An unknown CLI has no row and so no command.
 ///
-/// **This is no longer "every supported CLI" (#267).** Gemini is spawnable
-/// since #267 stage 2 and is deliberately NOT in this list: its equivalent
-/// command is spelled `/compress` ("Replace the entire chat context with a
-/// summary"), per its own
-/// [commands reference](https://github.com/google-gemini/gemini-cli/blob/main/docs/reference/commands.md)
-/// — there is no `/compact` for the nudge to paste. Admitting gemini here
-/// would type a command that does not exist into a live pane. Teaching the
-/// nudge a per-CLI command *spelling* is a real follow-up on #287/#328's
-/// machinery, not a line to smuggle into a reviewer-adapter PR; until then a
-/// gemini agent simply gets no compact nudge, which is the pre-#287 behavior
-/// and costs nothing structurally.
-pub fn compact_nudge_cli_supported(cli: &str) -> bool {
-    matches!(cli, "claude" | "copilot")
+/// `cli` comes from `Guardrails::cli_for_block` — the agent's OWN block, not
+/// its class's default block (#2167). The loop reads
+/// `g.cli_for_block(&a.block, a.role)` directly, and `request_compact` reaches
+/// it through `OrchRegistry::cli_for_agent`. Feeding this `cli_for(role)`
+/// instead is what once silently excluded every claude delegate in a
+/// two-block class from compact nudges.
+///
+/// Before #413 S4 this was a `matches!(cli, "claude" | "copilot")` predicate:
+/// every other CLI was outside the loop whatever its row said, so pi, codex
+/// and opencode panes were never escalated even once their readers (#993
+/// S2a–S2c) reported tokens. Gemini stays out because its row has no command:
+/// its equivalent is spelled `/compress`, which S0 did not establish, and
+/// pasting `/compact` there would type a command that does not exist into a
+/// live pane.
+pub fn compact_command_for(cli: &str) -> Option<&'static str> {
+    let over = COMPACT_COMMAND_OVERRIDE
+        .with(|c| c.borrow().as_ref().and_then(|(k, spelling)| (k.as_str() == cli).then_some(*spelling)));
+    if over.is_some() {
+        return over;
+    }
+    loomux_engine::model::cli_caps(cli).and_then(|caps| caps.compact_command)
+}
+
+thread_local! {
+    /// Test seam for [`compact_command_for`]: `(cli, spelling)` answered in
+    /// place of that CLI's row, on the calling thread only (#413 S4 review).
+    /// Every row that carries a command spells it `/compact`, so without a
+    /// spelling no row has, a paste site that hard-coded `"/compact"` would pass
+    /// every test that reads the row — the specimen would be outside the class
+    /// it witnesses. `None` in production, always.
+    static COMPACT_COMMAND_OVERRIDE: std::cell::RefCell<Option<(String, &'static str)>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+/// Test-only seam: answer [`compact_command_for`]`(cli)` with `spelling` on the
+/// calling thread (`None` restores the rows). A real `pub` function rather than
+/// `#[cfg(test)]` because the integration tests that link the lib cannot see
+/// `cfg(test)` items — the `modelstate::set_probe_windows_for_test` precedent.
+#[doc(hidden)] // pub for the `tests/orchestration/compact.rs` spelling pin
+pub fn set_compact_command_for_test(over: Option<(&str, &'static str)>) {
+    COMPACT_COMMAND_OVERRIDE.with(|c| *c.borrow_mut() = over.map(|(cli, spelling)| (cli.to_string(), spelling)));
+}
+
+/// The refusal `request_compact` and the human's "Compact now" give for a
+/// pane [`compact_command_for`] has no command for (#413 S4): the CLI's
+/// `compact_note` — why its row is `None` — so the caller learns the reason
+/// rather than only the fact. An unknown CLI, or a row with no note, still
+/// says which CLI refused.
+pub fn compact_unsupported_reason(cli: &str) -> String {
+    let note = loomux_engine::model::cli_caps(cli)
+        .map(|caps| caps.compact_note.trim())
+        .filter(|note| !note.is_empty());
+    match note {
+        Some(note) => format!("orrerix has no compact command it may paste into a {cli} pane: {note}"),
+        None => format!("orrerix has no compact command it may paste into a {cli} pane"),
+    }
+}
+
+/// A context reading with tokens and no window a percent may be computed
+/// against (`modelstate::published_window` said `None`), in a group whose
+/// escalation threshold is on — the reading `compact_nudge_tick` can never
+/// escalate, carried from `agent_context_percents` to
+/// `note_unwindowed_escalations` so the audit says why (#413 S4).
+struct UnwindowedReading {
+    agent: String,
+    group: GroupId,
+    tokens: u64,
+    source: crate::modelstate::ContextSource,
 }
 
 /// Compact-nudge (#328): whether an agent-requested compact should fire NOW.
@@ -10028,12 +10073,30 @@ pub fn compact_escalation_should_fire(
 ///   pre-smart-default behavior, preserved as an explicit opt-out.
 /// - `Some(n)`, `n > 0`: an explicit floor.
 ///
-/// A reading not yet available (`percent: None`) fails OPEN regardless of
-/// which state the floor resolves to — never let a missing/stale context
-/// reading silently disable the whole heuristic nudge, the same
-/// "degrade, don't deny" posture every other opportunistic gate in this
-/// codebase takes.
-pub fn compact_nudge_context_floor_met(percent: Option<u32>, floor_config: Option<u32>, nudge_minutes: u32) -> bool {
+/// A reading not yet available (`percent: None`, `window_unknown: false`)
+/// fails OPEN regardless of which state the floor resolves to — never let a
+/// missing/stale context reading silently disable the whole heuristic nudge,
+/// the same "degrade, don't deny" posture every other opportunistic gate in
+/// this codebase takes. That covers a pane before its first reading, and a
+/// CLI with no context reader at all (copilot).
+///
+/// **A reading that has tokens and no window fails CLOSED** (`window_unknown:
+/// true`, from [`context_window_unknown`]; #413 S4, the human's decision). That
+/// is not a briefly-missing reading but one missing by design — a codex or pi
+/// pane whose CLI has not reported a window, and every opencode pane — so
+/// failing open would compact it at every lull at any fill level, the
+/// 20-30%-full re-grounding this floor exists to stop. Those CLIs compact
+/// themselves when they run out of room, so a floor-gated lull compact buys
+/// nothing measured. A group `context_window_tokens_override` gives such a
+/// pane a window, and with it a percent the floor reads normally. An
+/// explicitly disabled floor (`Some(0)`, or the parent feature off) has
+/// nothing to fail, and still fires on the lull alone.
+pub fn compact_nudge_context_floor_met(
+    percent: Option<u32>,
+    window_unknown: bool,
+    floor_config: Option<u32>,
+    nudge_minutes: u32,
+) -> bool {
     let effective_floor = match floor_config {
         None if nudge_minutes > 0 => DEFAULT_COMPACT_NUDGE_MIN_CONTEXT_PERCENT,
         None => 0, // parent feature off — nothing to gate; the floor is moot either way
@@ -10044,8 +10107,32 @@ pub fn compact_nudge_context_floor_met(percent: Option<u32>, floor_config: Optio
     }
     match percent {
         Some(p) => p >= effective_floor,
-        None => true,
+        None => !window_unknown,
     }
+}
+
+/// Whether a context reading has tokens but no window a percent may be
+/// computed against (#413 S4) — `modelstate::published_window` refusing the
+/// ladder's answer for this reading's source, the ONE rule the lifecycle panel
+/// publishes by and `agent_context_percents` escalates by. `false` with no
+/// tokens: that is no reading at all, not an unwindowed one. The inputs are
+/// the agent's cached reading (`AgentEntry::last_context_*`) and its group's
+/// override, so the compact-nudge tick can ask it without a second read.
+pub fn context_window_unknown(
+    tokens: Option<u64>,
+    override_tokens: Option<u64>,
+    reported_tokens: Option<u64>,
+    reported_rounded: bool,
+    model: Option<&str>,
+    source: Option<crate::modelstate::ContextSource>,
+) -> bool {
+    let Some(tokens) = tokens else { return false };
+    crate::modelstate::published_window(
+        effective_context_window_tokens(override_tokens, reported_tokens, reported_rounded, model, Some(tokens)),
+        source,
+        reported_tokens,
+    )
+    .is_none()
 }
 
 /// The escalation notice delivered when an agent's context usage crosses the
@@ -10140,8 +10227,8 @@ pub fn human_typed_compact_detected(tail: &str) -> bool {
 
 /// Directive ledger (#329 expansion): per-CLI stable substrings that appear in
 /// a pane's own rendered output while IT (not a human, not loomux) is
-/// actively auto-compacting. Keyed the same way `compact_nudge_cli_supported`
-/// gates the rest of this feature to `SUPPORTED_CLIS`, so adding a CLI's
+/// actively auto-compacting. Keyed per CLI the way `compact_command_for`
+/// gates the rest of this feature, so adding a CLI's
 /// banner is a one-line addition here, never a change to the generic
 /// detection/pipeline code that calls `auto_compact_banner_detected` — this
 /// repo is never allowed to bake one CLI's quirks into product code (see

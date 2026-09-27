@@ -736,10 +736,15 @@ test("unknown effort transitions do not create marks", () => {
   assert.deepEqual(marks(rows), []);
 });
 
-test("an omitted effort followed by null is still unknown and creates no mark", () => {
+test("a known effort followed by an omitted one is unknown and creates no mark", () => {
+  // The test above reaches the BEFORE side's `?? null` through an omitted
+  // field and the AFTER side only through an explicit `null`, which the
+  // both-known guard refuses on its own — so the after side's normalisation
+  // was pinned by nothing (#3571 residual). An omitted AFTER field is the
+  // case only that `?? null` turns into "unknown".
   const rows: SeriesRowLike[] = [
-    sample({ ts_ms: T0, key: "session", in: 0 }),
-    sample({ ts_ms: T0 + BUCKET, key: "session", effort: null, in: 100 }),
+    sample({ ts_ms: T0, key: "session", effort: "high", in: 0 }),
+    sample({ ts_ms: T0 + BUCKET, key: "session", in: 100 }),
   ];
   assert.deepEqual(marks(rows), []);
 });

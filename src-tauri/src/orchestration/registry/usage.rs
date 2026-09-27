@@ -1057,7 +1057,7 @@ impl OrchRegistry {
                 "last_wake": s.activity.last_wake,
                 "cache_ttl_minutes": ttl,
                 "cache_cooling_after_ms": ttl.map(loomux_engine::cacheage::cooling_after_ms),
-                "compact_supported": compact_nudge_cli_supported(&s.cli),
+                "compact_supported": compact_command_for(&s.cli).is_some(),
                 "tokens": {
                     "input": s.input_tokens,
                     "output": s.output_tokens,

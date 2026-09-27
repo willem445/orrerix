@@ -436,11 +436,18 @@ pub struct CompactionSignal {
     /// `reported-rounded` rather than `reported`. Always `false` when
     /// `window_tokens` is `None`, and for every reader but pi's.
     pub window_rounded: bool,
-    /// #993 S1: the live reasoning effort (status-line `effort.level`).
+    /// The reasoning effort this reading carries: Claude's status-line
+    /// `effort.level` (#993 S1), codex's `turn_context.effort` (S2a), pi's
+    /// newest `thinking_level_change` — else its launch knob, see
+    /// `effort_is_launch_fallback` (S2b) — or opencode's session `variant`
+    /// (S2c). Read it through [`Self::observed_effort`], never directly.
     pub effort: Option<String>,
-    /// True only when `effort` is the pi launch knob fallback, not a value its
-    /// session artifact reported. Display and sampling must not treat that
-    /// configuration default as an observed live effort.
+    /// True only when `effort` is pi's launch knob (`--thinking`) standing in
+    /// for a level the session tail does not name — configuration, not a
+    /// reading. Every consumer that publishes an effort reads it through
+    /// [`Self::observed_effort`], which drops it: the usage-series sample
+    /// (#993 S6) and `group_summary`'s `context.effort` (S3), where the knob
+    /// is published once, as `context.declared.effort`.
     pub effort_is_launch_fallback: bool,
     /// #993 S1: whether a status-line snapshot contributed to this reading.
     pub source: crate::modelstate::ContextSource,

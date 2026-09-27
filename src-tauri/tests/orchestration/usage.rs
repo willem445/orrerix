@@ -381,6 +381,41 @@ fn a_claude_series_sample_carries_effort_from_its_context_signal() {
 }
 
 #[test]
+fn a_pi_series_sample_persists_the_effort_its_session_reports() {
+    // #3571's other pi arm: the flag must be set ONLY for the fallback. Making
+    // it unconditionally true would silence every pi effort mark while the
+    // fallback test below stayed green. The block's knob (`high`) differs from
+    // the level the file names (`low`), so the row says which one it carries.
+    let (reg, _d) = test_registry();
+    reg.set_series_bucket_ms(0);
+    let mut pi_rails = rails();
+    pi_rails.agent_cli = "pi".into();
+    let worker = pi_rails.blocks.iter_mut().find(|block| block.kind == Role::Worker).unwrap();
+    worker.cli = "pi".into();
+    worker.effort = "high".into();
+    let g = reg.create_group("C:/tmp/pi-repo", pi_rails).unwrap();
+    let w = reg.spawn_agent(&g.id, Role::Worker, "w", "task", false, None).unwrap();
+    let sid = w.session_id.clone().expect("pi pre-mints its session id");
+
+    let pi_dir = reg.pi_sessions_dir(&g.id);
+    fs::create_dir_all(&pi_dir).unwrap();
+    let header = json!({"type":"session", "version":3, "id":sid, "cwd":"C:/tmp/pi-repo"});
+    let level = json!({"type":"thinking_level_change", "id":"e0", "parentId":null, "thinkingLevel":"low"});
+    let turn = json!({"type":"message", "id":"e1", "parentId":"e0", "message":{
+        "role":"assistant", "provider":"openrouter", "model":"moonshotai/kimi-k2.6",
+        "usage":{"input":100, "output":5, "cacheRead":0, "cacheWrite":0, "totalTokens":105}
+    }});
+    let path = pi_dir.join(format!("2026-09-03T03-06-45-266Z_{sid}.jsonl"));
+    fs::write(path, format!("{header}\n{level}\n{turn}\n")).unwrap();
+
+    reg.group_usage(&g.id);
+    let rows = series_lines(&reg, &g.id);
+    assert_eq!(rows.len(), 1, "the usage-bearing pi session writes a sample: {rows:?}");
+    let row: serde_json::Value = serde_json::from_str(&rows[0]).unwrap();
+    assert_eq!(row["effort"], "low", "a level the session reports is persisted, not the knob");
+}
+
+#[test]
 fn a_pi_series_sample_does_not_persist_the_launch_effort_fallback() {
     let (reg, _d) = test_registry();
     reg.set_series_bucket_ms(0);

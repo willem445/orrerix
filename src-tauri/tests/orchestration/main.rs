@@ -50,7 +50,7 @@ use loomux_lib::orchestration::{
     box_holds_paste, confirm_state_for, delivery_confirmed_late_notice, final_window_outcome,
     late_monitor_tick, poll_promptsubmit_hook, promptsubmit_marker_len, promptsubmit_marker_path,
     promptsubmit_records_since, prompt_landed, tier1_trusted,
-    compact_escalation_should_fire, compact_nudge_cli_supported, compact_nudge_context_floor_met,
+    compact_command_for, compact_escalation_should_fire, context_window_unknown, set_compact_command_for_test, compact_nudge_context_floor_met, compact_unsupported_reason,
     DEFAULT_COMPACT_CONTEXT_THRESHOLD_PERCENT,
     compact_nudge_role_allowed,
     compact_reinjection_notice, compact_request_should_fire, compaction_status, context_percent_used,

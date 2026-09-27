@@ -1311,3 +1311,186 @@ fn group_summary_publishes_a_pi_launch_fallback_as_declared_not_as_the_live_effo
     assert_eq!(ctx["effort"], "low", "a reported level publishes as effort: {ctx}");
     assert_eq!(ctx["declared"]["effort"], "high");
 }
+
+// ---------------------------------------------------------------------------
+// #413 S4: compaction escalation for a pi pane, through the real tick
+// ---------------------------------------------------------------------------
+
+/// The actions `run_compact_nudge` audited for `agent`, in order.
+fn audited(reg: &OrchRegistry, group: &loomux_lib::orchestration::GroupId, agent: &str, action: &str) -> Vec<Value> {
+    reg.audit_log(group)
+        .into_iter()
+        .filter(|e| e.action == action && e.detail["agent"] == agent)
+        .map(|e| e.detail)
+        .collect()
+}
+
+/// A pi orchestrator with 150,000 tokens in context, in a group whose
+/// escalation threshold is 50% — over it on any window up to 300K. `override`
+/// is the group's `context_window_tokens_override`. Returns the registry, the
+/// group and the orchestrator's id; the session file is written, so the next
+/// `run_compact_nudge` reads it.
+fn pi_orchestrator_at_150k(
+    over: Option<u64>,
+) -> (OrchRegistry, tempfile::TempDir, loomux_lib::orchestration::GroupId, String) {
+    let (reg, d) = test_registry();
+    let rails = Guardrails {
+        compact_context_threshold_percent: 50,
+        compact_nudge_roles: vec!["orchestrator".into()],
+        context_window_tokens_override: over,
+        ..rails("pi")
+    };
+    let g = reg.create_group("C:/tmp/pi-escalate", rails).unwrap();
+    let o = reg.spawn_agent(&g.id, Role::Orchestrator, "orch", "", false, None).unwrap();
+    let sid = o.session_id.clone().expect("a pi pane carries a preminted session id");
+    write_session(&reg.pi_sessions_dir(&g.id), &sid, &file(&[
+        header(&sid, "C:/tmp/pi-escalate"),
+        assistant("e1", "openrouter", "z-ai/glm-5.3-flash", Turn { input: 150_000, ..Turn::default() }),
+    ]));
+    (reg, d, g.id, o.id)
+}
+
+#[test]
+fn escalation_a_pi_orchestrator_with_tokens_and_a_reported_window_escalates() {
+    // The plan's red-before-green: before #413 S4 the gate was
+    // `matches!(cli, "claude" | "copilot")`, so a pi pane never reached the
+    // escalation however full it was.
+    let (reg, _d, gid, oid) = pi_orchestrator_at_150k(None);
+    set_probe_windows_for_test(Some(BTreeMap::from([(
+        "openrouter/z-ai/glm-5.3-flash".to_string(),
+        ReportedWindow { tokens: 200_000, rounded: false },
+    )])));
+    let _ = reg.run_compact_nudge(1);
+    set_probe_windows_for_test(None);
+
+    let fired = audited(&reg, &gid, &oid, "compact-escalation");
+    assert_eq!(fired.len(), 1, "150K of the reported 200K is 75%, over the 50% threshold");
+    assert_eq!(fired[0]["percent"], 75);
+    let ctx = summary_context(&reg, &gid, &oid);
+    assert_eq!((ctx["percent"].clone(), ctx["window_source"].clone()), (json!(75), json!("reported")), "{ctx}");
+    assert!(audited(&reg, &gid, &oid, "compact-escalation-skipped").is_empty());
+}
+
+#[test]
+fn escalation_a_pi_orchestrator_with_no_reported_window_never_escalates_and_shows_no_percent() {
+    // No `--list-models` row for the model: the only window left is Claude's
+    // table, which does not describe a pi model. No percent, no escalation —
+    // and the timeline says why, once.
+    let (reg, _d, gid, oid) = pi_orchestrator_at_150k(None);
+    set_probe_windows_for_test(Some(BTreeMap::new()));
+    let _ = reg.run_compact_nudge(1);
+    let _ = reg.run_compact_nudge(2);
+    set_probe_windows_for_test(None);
+
+    assert!(audited(&reg, &gid, &oid, "compact-escalation").is_empty(), "150K of a GUESSED 200K must not escalate");
+    let ctx = summary_context(&reg, &gid, &oid);
+    assert_eq!(ctx["tokens"], 150_000, "positive control: the reading reached the panel: {ctx}");
+    assert!(ctx["percent"].is_null() && ctx["window_tokens"].is_null() && ctx["window_source"].is_null(), "{ctx}");
+    let skipped = audited(&reg, &gid, &oid, "compact-escalation-skipped");
+    assert_eq!(skipped.len(), 1, "audited once per episode, not once per tick: {skipped:?}");
+    assert_eq!(skipped[0]["source"], "pi-session");
+    assert_eq!(skipped[0]["tokens"], 150_000);
+}
+
+#[test]
+fn escalation_a_pi_orchestrator_under_a_group_override_escalates() {
+    let (reg, _d, gid, oid) = pi_orchestrator_at_150k(Some(200_000));
+    set_probe_windows_for_test(Some(BTreeMap::new()));
+    let _ = reg.run_compact_nudge(1);
+    set_probe_windows_for_test(None);
+
+    let fired = audited(&reg, &gid, &oid, "compact-escalation");
+    assert_eq!(fired.len(), 1, "a human-set window is not a guess");
+    assert_eq!(fired[0]["percent"], 75);
+    assert_eq!(summary_context(&reg, &gid, &oid)["window_source"], "override");
+    assert!(audited(&reg, &gid, &oid, "compact-escalation-skipped").is_empty());
+}
+
+#[test]
+fn escalation_the_skip_audit_rearms_once_the_reading_has_had_a_window() {
+    // The latch is per episode: a window arriving ends it, and a later
+    // tokens-only stretch is a new one the timeline should see.
+    let (reg, _d, gid, oid) = pi_orchestrator_at_150k(None);
+    let listed = || {
+        BTreeMap::from([(
+            "openrouter/z-ai/glm-5.3-flash".to_string(),
+            ReportedWindow { tokens: 1_000_000, rounded: false },
+        )])
+    };
+    set_probe_windows_for_test(Some(BTreeMap::new()));
+    let _ = reg.run_compact_nudge(1);
+    set_probe_windows_for_test(Some(listed()));
+    let _ = reg.run_compact_nudge(2);
+    set_probe_windows_for_test(Some(BTreeMap::new()));
+    let _ = reg.run_compact_nudge(3);
+    set_probe_windows_for_test(None);
+    assert_eq!(audited(&reg, &gid, &oid, "compact-escalation-skipped").len(), 2);
+    assert!(audited(&reg, &gid, &oid, "compact-escalation").is_empty(), "15% of 1M never crossed 50%");
+}
+
+#[test]
+fn the_group_scoped_signal_read_never_reads_another_groups_panes() {
+    // #3571 residual: the usage sampler reads ONE group's signals, and the
+    // sampler indexes the answer by agent id, so a filter that did nothing
+    // would stay invisible to every test that goes through it.
+    let (reg, _d) = test_registry();
+    let mut seen = Vec::new();
+    for repo in ["C:/tmp/pi-a", "C:/tmp/pi-b"] {
+        let g = reg.create_group(repo, rails("pi")).unwrap();
+        let w = reg.spawn_agent(&g.id, Role::Worker, "w", "task", false, None).unwrap();
+        let sid = w.session_id.clone().unwrap();
+        write_session(&reg.pi_sessions_dir(&g.id), &sid, &file(&[
+            header(&sid, repo),
+            assistant("e1", "openrouter", "z-ai/glm-5.3-flash", Turn { input: 1_000, ..Turn::default() }),
+        ]));
+        seen.push((g.id, w.id));
+    }
+    let [(ga, a), (gb, b)]: [(loomux_lib::orchestration::GroupId, String); 2] = seen.try_into().unwrap();
+    // Positive control: unscoped, both panes are read.
+    let all = reg.agent_context_signals();
+    assert!(all.contains_key(&a) && all.contains_key(&b), "both groups' panes have a reading");
+    for (group, mine, theirs) in [(&ga, &a, &b), (&gb, &b, &a)] {
+        let scoped = reg.agent_context_signals_for_group(Some(group));
+        assert!(scoped.contains_key(mine) && !scoped.contains_key(theirs), "{:?}", scoped.keys().collect::<Vec<_>>());
+    }
+}
+
+/// Far enough past any real spawn time that the quiet window has elapsed.
+const LULL_NOW: u64 = 1_000_000_000_000_000;
+
+/// [`pi_orchestrator_at_150k`] with the lull nudge on (20 quiet minutes) and
+/// the floor at its 50% smart default.
+fn pi_orchestrator_at_150k_with_lull(over: Option<u64>) -> (OrchRegistry, tempfile::TempDir, loomux_lib::orchestration::GroupId, String) {
+    let (reg, d, gid, oid) = pi_orchestrator_at_150k(over);
+    reg.set_compact_nudge_minutes(&gid, 20).unwrap();
+    (reg, d, gid, oid)
+}
+
+#[test]
+fn lull_floor_an_unwindowed_pi_pane_at_a_lull_is_not_nudged() {
+    // #413 S4, the human's decision: tokens and no window fails the lull floor
+    // CLOSED. Before it, `compact_nudge_context_floor_met(None, …)` failed
+    // open and this pane got `/compact` at every lull at any fill level.
+    let (reg, _d, gid, oid) = pi_orchestrator_at_150k_with_lull(None);
+    set_probe_windows_for_test(Some(BTreeMap::new()));
+    let nudged = reg.run_compact_nudge(LULL_NOW);
+    set_probe_windows_for_test(None);
+    assert!(nudged.is_empty(), "no window, no percent, no floor pass: {nudged:?}");
+    assert!(audited(&reg, &gid, &oid, "compact-nudge").is_empty());
+    assert_eq!(summary_context(&reg, &gid, &oid)["tokens"], 150_000, "positive control: the pane had a reading");
+}
+
+#[test]
+fn lull_floor_the_same_pi_pane_under_a_group_override_is_nudged() {
+    // The converse that keeps the refusal above from passing by refusing every
+    // pi lull: an override gives the pane a window, 150K of 200K is 75%, over
+    // the 50% floor.
+    let (reg, _d, gid, oid) = pi_orchestrator_at_150k_with_lull(Some(200_000));
+    set_probe_windows_for_test(Some(BTreeMap::new()));
+    let nudged = reg.run_compact_nudge(LULL_NOW);
+    set_probe_windows_for_test(None);
+    assert_eq!(nudged, vec![oid.clone()]);
+    let fired = audited(&reg, &gid, &oid, "compact-nudge");
+    assert_eq!(fired.len(), 1);
+    assert_eq!(fired[0]["command"], "/compact");
+}

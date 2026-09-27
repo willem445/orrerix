@@ -154,22 +154,26 @@ impl ContextSource {
         }
     }
 
-    /// #993 S3: whether a window this source did NOT report may be filled from
-    /// the ladder's model-name table (rung 3) — and so from the clamp over it —
-    /// when `group_summary` publishes the reading. The table is Claude's
-    /// (`usage::claude_context_window_tokens`); the sources that fall to it
-    /// today keep the behaviour they shipped with. opencode's store records no
-    /// window and opencode documents no other source loomux may read, so a
-    /// table answer for it would be a guessed percent over a non-Claude id —
-    /// the thing the S2c section says must not happen. Exhaustive on purpose: a
-    /// new reader has to decide this rather than inherit the table.
+    /// Whether a window this source did NOT report may be filled from the
+    /// ladder's model-name table (rung 3) — and so from the clamp over it. One
+    /// rule for both readers of a window (#993 S3, #413 S4): what
+    /// `group_summary` publishes as a percent, and whether
+    /// `compact_nudge_tick` may escalate on it.
+    ///
+    /// Only Claude's own readers. The table is Claude's
+    /// (`usage::claude_context_window_tokens`: a model-name match over Claude
+    /// ids, 200K for everything else), so for any other CLI its answer is not
+    /// a conservative estimate but a guess about a model it does not describe
+    /// — and a guessed percent that ESCALATES types a request into a live pane.
+    /// A codex, pi or opencode reading with no reported window therefore shows
+    /// tokens without a percent and never escalates, until the CLI reports a
+    /// window (codex's `model_context_window`, pi's `--list-models` column) or
+    /// a human sets the group override. Exhaustive on purpose: a new reader
+    /// has to decide this rather than inherit the table.
     pub fn table_rung_applies(self) -> bool {
         match self {
-            ContextSource::Transcript
-            | ContextSource::Statusline
-            | ContextSource::CodexRollout
-            | ContextSource::PiSession => true,
-            ContextSource::OpencodeDb => false,
+            ContextSource::Transcript | ContextSource::Statusline => true,
+            ContextSource::CodexRollout | ContextSource::PiSession | ContextSource::OpencodeDb => false,
         }
     }
 }
@@ -256,10 +260,12 @@ pub fn label_rounded_report((window, source): (u64, WindowSource), reported_roun
     }
 }
 
-/// The window `group_summary` publishes for one reading (#993 S3): the ladder's
-/// answer, unless nothing but a guess decided it for a `source` whose table
-/// rung does not apply ([`ContextSource::table_rung_applies`]) — then `None`,
-/// and the panel shows tokens without a percent. A guess is the `table` rung,
+/// The window a percent may be computed against for one reading (#993 S3,
+/// #413 S4) — the one answer `group_summary` publishes AND
+/// `agent_context_percents` escalates on: the ladder's answer, unless nothing
+/// but a guess decided it for a `source` whose table rung does not apply
+/// ([`ContextSource::table_rung_applies`]) — then `None`, the panel shows
+/// tokens without a percent, and the reading never escalates. A guess is the `table` rung,
 /// or a `clamped` one with no report under it (the clamp then widened the
 /// table's answer, not the CLI's). An override still stands: a human set it.
 /// An unknown source (no reading cached yet) keeps the ladder's answer, which
@@ -416,8 +422,15 @@ pub fn codex_compaction_signal_in(
     root: &std::path::Path,
     session: &loomux_engine::pathseg::PathSegment,
 ) -> Option<crate::usage::CompactionSignal> {
-    let path = loomux_engine::sessions::find_codex_session_file(root, session)?;
-    let text = crate::usage::read_transcript_tail(&path)?;
+    codex_compaction_signal_at(&loomux_engine::sessions::find_codex_session_file(root, session)?)
+}
+
+/// [`codex_compaction_signal_in`] for a rollout already resolved — the half
+/// `OrchRegistry::agent_context_signals` calls with a REMEMBERED path, so a
+/// tick does not walk the whole store to find a file it found last tick
+/// (#3531, #413 S4; see [`reuse_remembered_rollout`]).
+pub fn codex_compaction_signal_at(path: &std::path::Path) -> Option<crate::usage::CompactionSignal> {
+    let text = crate::usage::read_transcript_tail(path)?;
     let reading = codex_context_signal(&text)?;
     Some(crate::usage::CompactionSignal {
         tokens: reading.tokens,
@@ -429,6 +442,45 @@ pub fn codex_compaction_signal_in(
         effort_is_launch_fallback: false,
         source: ContextSource::CodexRollout,
     })
+}
+
+/// How long a remembered Codex rollout path stands in for a store walk before
+/// the store is walked again (#3531, #413 S4).
+///
+/// `find_codex_session_file` visits every rollout under the `YYYY/MM/DD` tree —
+/// it must, for "newest" to mean anything — and codex compresses old rollouts
+/// but never deletes them, so on a years-old store that walk ran once per codex
+/// pane per compact-nudge tick. The memo keeps one stat per tick instead.
+///
+/// The stat alone cannot tell "the file still exists" from "this is still the
+/// session's file": `thread/revert` keeps the thread id, starts a NEW rollout
+/// and leaves the old one readable, so a memo validated only by `is_file()`
+/// would read the superseded rollout for the life of the process. This timer
+/// bounds that: a revert is seen within one interval. Five minutes, the value
+/// the usage cursor's identical re-resolution uses (`CURSOR_REVALIDATE_AFTER`
+/// in `usage.rs`) for the identical reason, so the two readers of one rollout
+/// never disagree for longer than each other.
+pub const CODEX_ROLLOUT_REVALIDATE_AFTER: std::time::Duration = std::time::Duration::from_secs(300);
+
+/// A Codex rollout path the store walk resolved for one session, and when.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct RememberedRollout {
+    pub path: std::path::PathBuf,
+    pub resolved: std::time::Instant,
+}
+
+/// Whether `remembered` may be read at `now` instead of walking the store: it
+/// was resolved less than `revalidate_after` ago ([`CODEX_ROLLOUT_REVALIDATE_AFTER`])
+/// AND `still_a_file` — the caller's one stat of it — says it has not gone. A
+/// rollout codex compressed is gone under its plain name, so the walk runs
+/// again and answers `None` for it, as it always did.
+pub fn reuse_remembered_rollout(
+    remembered: &RememberedRollout,
+    now: std::time::Instant,
+    revalidate_after: std::time::Duration,
+    still_a_file: bool,
+) -> bool {
+    still_a_file && now.saturating_duration_since(remembered.resolved) < revalidate_after
 }
 
 /// The latest context facts in a pi session file (#993 S2b). No window: the
@@ -905,41 +957,59 @@ mod tests {
     }
 
     #[test]
-    fn an_opencode_reading_never_publishes_a_window_only_the_table_decided() {
+    fn a_non_claude_reading_never_publishes_a_window_only_the_table_decided() {
+        // #413 S4: the table is Claude's, so for every other reader it is a
+        // guess — for codex and pi (a missing report) as for opencode (no
+        // report ever).
         let table = context_window_ladder(None, None, 200_000, Some(40_000));
         assert_eq!(table, (200_000, WindowSource::Table), "precondition: only the table answered");
-        assert_eq!(published_window(table, Some(ContextSource::OpencodeDb), None), None);
-        // A clamp over the table is the table's guess widened — still no report.
         let clamped = context_window_ladder(None, None, 200_000, Some(250_000));
         assert_eq!(clamped, (250_000, WindowSource::Clamped));
-        assert_eq!(published_window(clamped, Some(ContextSource::OpencodeDb), None), None);
-        // A human override is not a guess, for opencode as for anyone.
         let over = context_window_ladder(Some(128_000), None, 200_000, Some(40_000));
-        assert_eq!(published_window(over, Some(ContextSource::OpencodeDb), None), Some((128_000, WindowSource::Override)));
-        // A clamp over a REPORT widened the CLI's own figure, not the table's.
         let over_report = context_window_ladder(None, Some(100_000), 200_000, Some(150_000));
         assert_eq!(over_report, (150_000, WindowSource::Clamped));
-        assert_eq!(published_window(over_report, Some(ContextSource::OpencodeDb), Some(100_000)), Some(over_report));
+        for source in [ContextSource::CodexRollout, ContextSource::PiSession, ContextSource::OpencodeDb] {
+            assert!(!source.table_rung_applies(), "{source:?}");
+            assert_eq!(published_window(table, Some(source), None), None, "{source:?}");
+            // A clamp over the table is the table's guess widened — still no report.
+            assert_eq!(published_window(clamped, Some(source), None), None, "{source:?}");
+            // A human override is not a guess, for any CLI.
+            assert_eq!(published_window(over, Some(source), None), Some((128_000, WindowSource::Override)), "{source:?}");
+            // A clamp over a REPORT widened the CLI's own figure, not the table's.
+            assert_eq!(published_window(over_report, Some(source), Some(100_000)), Some(over_report), "{source:?}");
+        }
     }
 
     #[test]
-    fn every_other_source_and_the_pre_reading_state_keep_the_table_answer() {
-        // The converse that makes the opencode refusal discriminating: a
+    fn a_remembered_rollout_is_reused_only_while_fresh_and_present() {
+        let t0 = std::time::Instant::now();
+        let r = RememberedRollout { path: std::path::PathBuf::from("rollout.jsonl"), resolved: t0 };
+        let after = |secs| t0 + std::time::Duration::from_secs(secs);
+        let every = CODEX_ROLLOUT_REVALIDATE_AFTER;
+        assert!(reuse_remembered_rollout(&r, t0, every, true), "the tick after a walk reads the memo");
+        assert!(reuse_remembered_rollout(&r, after(299), every, true), "still inside the interval");
+        // The timer is what bounds a `thread/revert` the stat cannot see.
+        assert!(!reuse_remembered_rollout(&r, after(300), every, true), "due: walk again");
+        assert!(!reuse_remembered_rollout(&r, after(3_600), every, true));
+        // The stat: a file that has gone (compressed, deleted) is walked for at once.
+        assert!(!reuse_remembered_rollout(&r, t0, every, false));
+        // A clock that reads earlier than the resolution is not "expired".
+        assert!(reuse_remembered_rollout(&RememberedRollout { resolved: after(10), ..r.clone() }, t0, every, true));
+    }
+
+    #[test]
+    fn a_claude_reading_and_the_pre_reading_state_keep_the_table_answer() {
+        // The converse that makes the refusal above discriminating: a
         // `published_window` that refused every table answer would pass the
-        // test above and fail here.
+        // test above and fail here. Claude's own readers keep the table they
+        // have always escalated on.
         let table = context_window_ladder(None, None, 200_000, Some(40_000));
         let clamped = context_window_ladder(None, None, 200_000, Some(250_000));
-        for source in [
-            ContextSource::Transcript,
-            ContextSource::Statusline,
-            ContextSource::CodexRollout,
-            ContextSource::PiSession,
-        ] {
+        for source in [ContextSource::Transcript, ContextSource::Statusline] {
             assert!(source.table_rung_applies(), "{source:?}");
             assert_eq!(published_window(table, Some(source), None), Some(table), "{source:?}");
             assert_eq!(published_window(clamped, Some(source), None), Some(clamped), "{source:?}");
         }
-        assert!(!ContextSource::OpencodeDb.table_rung_applies());
         assert_eq!(published_window(table, None, None), Some(table), "no reading yet: the pre-S3 answer");
     }
 

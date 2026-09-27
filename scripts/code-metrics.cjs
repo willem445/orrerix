@@ -972,11 +972,6 @@ const FILE_BUDGETS = [
     blob: "1669f55d925c7336b5280f303f0acec90048abbe"
   },
   {
-    path: "src-tauri/src/orchestration/rdtick.rs",
-    ceiling: 6381,
-    blob: "f3aa72c058b97d6816d726e0cfa3c69ba91fe6af"
-  },
-  {
     path: "src-tauri/tests/reviewdrive.rs",
     ceiling: 16901,
     blob: "ff2fbca628885f89d6b417fea4d60ec24caed747"

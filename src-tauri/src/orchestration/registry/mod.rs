@@ -22,6 +22,7 @@ mod channels;
 mod merge;
 mod questions;
 mod tasks;
+mod agentfiles;
 mod lockseams;
 
 pub struct OrchRegistry {

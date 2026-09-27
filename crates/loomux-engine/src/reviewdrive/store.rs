@@ -416,7 +416,7 @@ pub struct DrivenPane {
 /// list is read by [`DriveEntry::driven_role`] — where a duplicate changes
 /// nothing — and printed in the exit notices, where naming `w-1715` twice reads
 /// as two panes a human then goes looking for.
-pub(super) fn retain_panes(prior: Vec<String>, current: &str) -> Vec<String> {
+fn retain_panes(prior: Vec<String>, current: &str) -> Vec<String> {
     let mut out: Vec<String> = Vec::new();
     for a in prior {
         if a.is_empty() || a == current || out.iter().any(|s| *s == a) {

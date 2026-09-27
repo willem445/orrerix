@@ -729,7 +729,7 @@ fn decide_gate_check(entry: &DriveEntry, facts: &DriveFacts, limits: &DriveLimit
     }
 }
 
-pub(super) fn minutes_ms(minutes: u64) -> u64 {
+fn minutes_ms(minutes: u64) -> u64 {
     minutes.saturating_mul(60_000)
 }
 

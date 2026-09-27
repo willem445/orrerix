@@ -277,11 +277,11 @@ pub enum DriveStep {
 }
 
 impl DriveStep {
-    pub(super) fn to(to: DriveState) -> DriveStep {
+    fn to(to: DriveState) -> DriveStep {
         DriveStep::Advance { to, held_reason: None, bump: None }
     }
 
-    pub(super) fn held(reason: HeldReason) -> DriveStep {
+    fn held(reason: HeldReason) -> DriveStep {
         DriveStep::Advance {
             to: DriveState::Held,
             held_reason: Some(reason),
@@ -289,7 +289,7 @@ impl DriveStep {
         }
     }
 
-    pub(super) fn spend(to: DriveState, bump: Counter) -> DriveStep {
+    fn spend(to: DriveState, bump: Counter) -> DriveStep {
         DriveStep::Advance { to, held_reason: None, bump: Some(bump) }
     }
 }

@@ -471,7 +471,7 @@ exactly as they did before.
 | Concern | File | Notes |
 | --- | --- | --- |
 | Guarded line-extraction (option A) | `src/panerestore.ts` — `adoptableSessionId`, `hasForkSession` | `--fork-session`-aware sibling of the existing unguarded `sessionIdFromCommand`; `hasForkSession` scans both `command` and `argv`, shared by A's guard and B3's exclusion below. Unit-tested. |
-| Learn-on-spawn fallback | `src/pane.ts` — `start()` / `respawnFresh()` | Falls back to `adoptableSessionId` when the caller doesn't already know the id. |
+| Learn-on-spawn fallback | `src/panelifecycle.ts` — `start()` / `respawnFresh()` | Falls back to `adoptableSessionId` when the caller doesn't already know the id. |
 | First-input timestamp (B2, corrected B2-R) | `src/pane.ts` — `firstInputMs` / `firstInputAt` / `markFirstInput()`, called from `term.onKey` and both `term.paste()` sites — NEVER `term.onData` | Reset to null on every `start`/`respawnFresh`; survives a respawn's listener reuse. `test/xterm-humaninput.test.ts` pins the underlying xterm fact this depends on. |
 | Fork exclusion (B3) | `src/pane.ts` — `hasForkSession` getter | Reads the live pane's own recorded command/argv via the shared helper above. |
 | Post-start matcher (option B) + D2 lookup | `src/sessionreconcile.ts` | Pure, DOM/IPC-free — `planSessionAdoption` (refusal-biased, strict no-slack boundary) and `dormantResumeCandidate` (advisory). Unit-tested. |

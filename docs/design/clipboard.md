@@ -136,7 +136,7 @@ a paste instead of letting that character reach the shell.
 `src/clipboard.ts` gained `readClipboard()`, the paste-side mirror of
 `writeClipboard`: async Clipboard API first, a hidden-`textarea` +
 `execCommand("paste")` fallback second, and an explicit `{ok: false}` only
-when *both* fail — never swallowed. `pane.ts`'s `pasteFromClipboard()` surfaces
+when *both* fail — never swallowed. `panecompose.ts`'s `pasteFromClipboard()` surfaces
 that with the same toast convention `copyToClipboard` already uses. An empty
 clipboard (`ok: true, text: ""`) is not a failure — it's a legitimate no-op.
 
@@ -225,7 +225,7 @@ into the terminal itself, independent of and in addition to loomux's own
   the native *context menu*; it does nothing about a native `paste` event
   triggered by a different code path.
 
-**Fix, for both:** `pane.ts` adds a capture-phase `"paste"` listener directly
+**Fix, for both:** `panecompose.ts` adds a capture-phase `"paste"` listener directly
 on `termEl` that unconditionally calls `preventDefault()`/`stopPropagation()`.
 Capture phase means it runs *before* the event ever reaches xterm's own
 listener (bound to a descendant, in the bubble phase), so it kills the native

@@ -87,20 +87,62 @@ read before its module has run. `workflowmodel.ts` over `workflowtypes`,
 the first instance (#3498 F2). `test/workflowmodel.test.ts` pins its graph
 acyclic and its barrel re-export-only.
 
+### Splitting a large class into satellites
+
 A large **class** is split into satellites it delegates to, one per panel or
-method cluster. Each satellite owns its cluster's state and reads the rest
-through a `view` back-reference, so a moved body differs from the original only
-in its receiver. Inside a family whose import graph is pinned acyclic with type
-imports included (the `workflow*` family is), that back-reference cannot be
-typed against the class module: the class imports every satellite, so even a
-type-only import back closes a cycle. It is typed against an **interface
-module** instead, which lists exactly the members that cross a file, and the
-class and each satellite `implements` their interface so the compiler keeps
-the lists in step. A member leaves `private` only when another file reaches it.
-Values the class and its satellites share live in a satellite, never in the
-class's module. `workflowview.ts` with `workflowviewapi.ts` and five satellites
-is the first instance (#3498 F3). `test/workflowmodel.test.ts` refuses a
-satellite importing the view.
+method cluster. There are two instances: `pane.ts` with `panelifecycle.ts`,
+`panebadges.ts`, `panecompose.ts`, `paneembeds.ts`, `paneviews.ts` and the
+free function `panecapture.ts` (#3498 F1), and `workflowview.ts` with
+`workflowviewapi.ts` and five satellites (#3498 F3). The shape, and why:
+
+- **Each satellite owns its cluster's state.** A field used only by one
+  cluster moves into that satellite; a field several clusters share stays on
+  the class. The satellite reads the rest through a back-reference (`pane` in
+  the pane family, `view` in the workflow family), so a moved body differs
+  from the original only in its receiver. That receiver rewrite is the whole
+  diff, which is what makes the move provable by normalising it away and
+  comparing bodies.
+- **The public API does not move.** Every moved PUBLIC member keeps a
+  one-line delegator on the class with its exact signature, so no caller
+  outside the family changes. A moved PRIVATE member has no delegator; the
+  class calls it as `this.<satellite>.<member>`.
+- **A member leaves `private` only when another file reaches it.** TypeScript
+  has no module-internal visibility, so that is as far as the compiler lets
+  the widening go. Where a public getter already answers the read, the
+  satellite uses the getter instead of widening the field:
+  `PaneBadges.isWatched` stays `private` with one writer (#3319), and
+  `capturePane` reads `pane.watched`.
+- **Constructor wiring moves in place.** A contiguous run of constructor
+  statements that builds one cluster's DOM becomes that satellite's
+  constructor (or a `wire…` method for a second run), called at the exact
+  point the statements used to run, so the header's DOM order is unchanged.
+- **Values the class and its satellites share live in a satellite, never in
+  the class's module.** The class imports every satellite, so a value import
+  back would be a cycle that evaluates the satellite's top level first. How
+  the back-reference is TYPED depends on the family's import pin:
+  - Where the family's graph is NOT pinned acyclic with type imports included
+    (the `pane*` family), a type-only import back is erased at compile time,
+    so `pane` is typed against `Pane` directly.
+  - Inside a family that IS pinned that way (the `workflow*` family), even a
+    type-only import back closes a cycle. There the back-reference is typed
+    against an **interface module**, which lists exactly the members that
+    cross a file, and the class and each satellite `implements` their
+    interface so the compiler keeps the lists in step.
+    `test/workflowmodel.test.ts` refuses a satellite importing the view.
+- **Source-scanning tests move with the code they pin.** A test that reads the
+  class file as text reads the satellite now holding the member, and a
+  "nothing else touches X" scan adds the satellites to its population. Each
+  re-point is a coverage change, so it is shown reddening on a planted
+  violation at the new path.
+- **What stays for a later cut.** Fit/resize stays on `Pane`, so nothing a
+  satellite does can reach a PTY resize that it could not reach before
+  (constraint 1). Satellites DO still reach one, through base call sites they
+  carried: `PaneLifecycle.attachPty`'s post-spawn `applyFit()` reconcile,
+  `start`'s `resizeObs.observe` (its callback is `applyFit`),
+  `start`/`respawnFresh`'s `fit.fit()`, and `PaneEmbeds.wireEmbedDivider`'s
+  resize hold, whose release runs `runFit()`. So constraint 1 applies to every
+  satellite, not only to `pane.ts`. The header-overflow ladder, the
+  content/welcome paths, and fit/resize are the remaining clusters.
 
 Folders are recommended only after files have been split, as a held slice by
 family: `src/pane/`, `src/workflow/`, `src/todo/`, `src/tokens/`, `src/files/`,

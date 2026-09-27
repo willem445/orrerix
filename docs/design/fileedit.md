@@ -141,7 +141,7 @@ A `regex` mode remains the obvious follow-up.
   the tree in the left column and drives in-tree hit highlighting (below); lazy
   tree render, editor mount, save / dirty dot / Ctrl+S, the conflict + discard
   dialogs (reusing the `.dlg-*` kit), the folder picker, and the agent-worktree
-  banner. Wired into every pane via `pane.ts` (`toggleFileEditView`, unconditional
+  banner. Wired into every pane via `paneviews.ts` (`toggleFileEditView`, unconditional
   header button, added to the close-every-other-overlay blocks + `activeOverlay` +
   `dispose`), `shortcuts.ts` (`Alt+F`), and `main.ts` (dispatch).
 

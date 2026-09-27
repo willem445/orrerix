@@ -116,7 +116,8 @@ test("the push reaches the manager pane and no other pane in its group", () => {
 
 // ── the seed latch, scanned as text (#1502 review N6) ──
 //
-// `src/pane.ts` has no test file of its own — this repo hand-validates DOM
+// `src/pane.ts` and its satellite `src/panebadges.ts`, where the latch now lives
+// (#3498 F1), have no test file of their own — this repo hand-validates DOM
 // wiring rather than simulating a DOM — so without this scan every claim about
 // the seed latch would rest on `tsc --noEmit` alone.
 //
@@ -144,14 +145,20 @@ test("the push reaches the manager pane and no other pane in its group", () => {
 
 import { readFileSync } from "node:fs";
 
-/** One method's body from `src/pane.ts`, by name. Scoped to the method rather
- *  than the file, `agenticons.test.ts`'s rule and for its reason. */
+/** One method's body from `src/panebadges.ts`, by name. Scoped to the method rather
+ *  than the file, `agenticons.test.ts`'s rule and for its reason.
+ *
+ *  The latch moved there with the rest of the header chips (#3498 F1), and this scan
+ *  moved WITH it rather than staying on `src/pane.ts`: pane.ts still carries a
+ *  one-line `applyMailSeed(unread: number): void { this.badges.… }` delegator with
+ *  the identical signature, so a scan left on the old file would find that
+ *  delegator, not the method, and read a body that has no latch in it. */
 function paneMethodBody(signature: string): string {
-  const src = readFileSync(new URL("../src/pane.ts", import.meta.url), "utf8");
+  const src = readFileSync(new URL("../src/panebadges.ts", import.meta.url), "utf8");
   const at = src.indexOf(signature);
   assert.ok(
     at >= 0,
-    `Pane's ${JSON.stringify(signature)} is gone or no longer matches the expected shape — ` +
+    `PaneBadges' ${JSON.stringify(signature)} is gone or no longer matches the expected shape — ` +
       `move this scan with it rather than deleting it`
   );
   const rest = src.slice(at);

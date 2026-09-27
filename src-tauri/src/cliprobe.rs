@@ -39,7 +39,7 @@ const VERSION_PROBES: &[&str] = &["claude"];
 /// unreadable version is an unknown one, never a guess.
 pub fn parse_cli_version(out: &str) -> Option<String> {
     out.split_whitespace().find_map(|tok| {
-        let tok = tok.strip_prefix('v').unwrap_or(tok);
+        let tok = tok;
         let mut parts = tok.split('.');
         let first = parts.next()?;
         let rest: Vec<&str> = parts.collect();

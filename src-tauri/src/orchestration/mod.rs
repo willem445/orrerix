@@ -38823,7 +38823,7 @@ impl OrchRegistry {
                 // non-terminal status (something other than the current
                 // pending/answered/withdrawn three) is still counted here by
                 // the SAME predicate `ask_human`'s own `PENDING_MAX` check
-                // uses (`!q.status.is_settled()`, mod.rs `ask_human`), rather
+                // uses (`!q.status.is_settled()`, registry/questions.rs `ask_human`), rather
                 // than by a second, independently-drifting spelling of "not
                 // done yet".
                 if !q.status.is_settled() {

@@ -957,11 +957,6 @@ const FILE_BUDGETS = [
     blob: "8b1ce3ffdad2234c4d528c4f04fc2db093a73cb6"
   },
   {
-    path: "crates/loomux-engine/src/workflow.rs",
-    ceiling: 7538,
-    blob: "9b95e14b299a880c597dd92ed0eb88be1db986fb"
-  },
-  {
     path: "src-tauri/src/orchestration/mcp.rs",
     ceiling: 5815,
     blob: "1669f55d925c7336b5280f303f0acec90048abbe"

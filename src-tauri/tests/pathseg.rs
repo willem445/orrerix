@@ -379,8 +379,8 @@ fn no_raw_identifier_is_interpolated_into_a_file_name() {
     /// make one impossible. Binding a proof to its enclosing function would mean
     /// parsing Rust, which is the line this scan deliberately does not cross —
     /// the compiler is what actually holds the type, and this is defence in
-    /// depth over the allowlist rotting. One proof is checked in a named other
-    /// file instead, because its argument is cross-file: `PROOF_ELSEWHERE` below.
+    /// depth over the allowlist rotting. Two proofs are checked in a named other
+    /// file instead, because their argument is cross-file: `PROOF_ELSEWHERE` below.
     ///
     /// Anything not listed is a finding until it is argued for and added — that
     /// is what makes this default-deny rather than a blocklist. Normalized
@@ -657,25 +657,55 @@ fn no_raw_identifier_is_interpolated_into_a_file_name() {
         ),
     ];
 
-    /// The one exception to "the proof is in the site's own file": a proof
-    /// that is cross-file by nature, keyed by its exact text and naming the file
-    /// (under `src-tauri/src`) it must still be in. The two hook-marker reads
-    /// above interpolate `a.id` in `orchestration/registry/compact.rs` (#3498 P3d), and the line that
-    /// makes `a.id` a minted id is in `spawn_agent_full`, which #3498 P3b moved
-    /// to `orchestration/registry/spawn.rs`. The proof text and its strength are
-    /// unchanged; only the file it is checked in moved. Every other row stays
-    /// file-scoped, and a row here that no `SANCTIONED` proof uses fails below.
-    const PROOF_ELSEWHERE: &[(&str, &str)] = &[(
-        "let agent_id = format!(\"{}-{seq}\", block.prefix());",
-        "orchestration/registry/spawn.rs",
-    )];
-    for (proof, rel) in PROOF_ELSEWHERE {
+    /// The two exceptions to "the proof is in the site's own file": a proof
+    /// that is cross-file by nature. Each entry is `(site file, proof, proof
+    /// file)`, both paths relative to `src-tauri/`, and it applies ONLY to a site
+    /// in its own site file. The key is the pair, not the proof text: keyed by
+    /// the proof alone, an entry would license its site text in ANY file while
+    /// the proof file still held the proof, which is looser than the file-scoped
+    /// rule it stands in for (#3667 review). A site anywhere else falls back to
+    /// that rule, and so needs the proof in its own file.
+    ///
+    /// The three hook-marker reads above interpolate `a.id` in
+    /// `orchestration/registry/compact.rs` (#3498 P3d), and the line that makes
+    /// `a.id` a minted id is in `spawn_agent_full`, which #3498 P3b moved to
+    /// `orchestration/registry/spawn.rs`. The block-id row's site, `Block`'s
+    /// `<id>.md` name, is in the engine's `workflow/schema.rs`, and the
+    /// `sanitize_id` call every block id passes through is in `parse_workflow`,
+    /// which #3498 P8 moved to `workflow/parse.rs`. In both, the proof text and
+    /// its strength are unchanged; only the file it is checked in moved. Every
+    /// other row stays file-scoped. An entry that no `SANCTIONED` proof uses, or
+    /// whose site file holds none of its sites, fails below.
+    const PROOF_ELSEWHERE: &[(&str, &str, &str)] = &[
+        (
+            "src/orchestration/registry/compact.rs",
+            "let agent_id = format!(\"{}-{seq}\", block.prefix());",
+            "src/orchestration/registry/spawn.rs",
+        ),
+        (
+            "../crates/loomux-engine/src/workflow/schema.rs",
+            "let Some(id) = sanitize_id(&rb.id) else {",
+            "../crates/loomux-engine/src/workflow/parse.rs",
+        ),
+    ];
+    for (site, proof, rel) in PROOF_ELSEWHERE {
         assert!(
             SANCTIONED.iter().any(|(_, _, p)| p == proof),
-            "`PROOF_ELSEWHERE` names `{proof}` ({rel}), but no `SANCTIONED` row uses that proof \
-             any more — drop the row"
+            "`PROOF_ELSEWHERE` names `{proof}` ({site} -> {rel}), but no `SANCTIONED` row uses \
+             that proof any more — drop the row"
         );
     }
+    // Each entry's site file, canonicalized once, so a site is matched to its
+    // entry by file identity rather than by a spelling of its path.
+    let manifest = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+    let elsewhere_sites: Vec<std::path::PathBuf> = PROOF_ELSEWHERE
+        .iter()
+        .map(|(site, _, _)| {
+            std::fs::canonicalize(manifest.join(site))
+                .unwrap_or_else(|e| panic!("`PROOF_ELSEWHERE` site file {site}: {e}"))
+        })
+        .collect();
+    let mut elsewhere_seen = vec![0usize; PROOF_ELSEWHERE.len()];
 
     fn normalize(line: &str) -> String {
         line.split_whitespace().collect::<Vec<_>>().join(" ")
@@ -746,6 +776,7 @@ fn no_raw_identifier_is_interpolated_into_a_file_name() {
     for (label, path) in &files {
         let src = std::fs::read_to_string(path).unwrap();
         let name = format!("{label}/{}", path.file_name().unwrap().to_string_lossy());
+        let canon = std::fs::canonicalize(path).ok();
         // `#[cfg(test)]` region tracking: `pending` arms on the attribute, the
         // region opens on the next `{` and closes when brace depth returns to
         // zero. Fixtures build file names from ids constantly — that is their
@@ -794,12 +825,17 @@ fn no_raw_identifier_is_interpolated_into_a_file_name() {
                     // leave this line byte-identical and the compiler silent —
                     // this assertion is the only thing that would notice.
                     let (_, whose, proof) = SANCTIONED[j];
-                    let home = PROOF_ELSEWHERE.iter().find(|(p, _)| *p == proof).map(|(_, rel)| *rel);
+                    // An entry applies only to a site in ITS site file; the
+                    // same site text anywhere else is checked file-scoped.
+                    let home = PROOF_ELSEWHERE.iter().zip(&elsewhere_sites).position(
+                        |((_, p, _), site)| *p == proof && canon.as_deref() == Some(site.as_path()),
+                    );
                     let holds = match home {
-                        Some(rel) => std::fs::read_to_string(
-                            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src").join(rel),
-                        )
-                        .is_ok_and(|s| s.contains(proof)),
+                        Some(k) => {
+                            elsewhere_seen[k] += 1;
+                            std::fs::read_to_string(manifest.join(PROOF_ELSEWHERE[k].2))
+                                .is_ok_and(|s| s.contains(proof))
+                        }
                         None => src.contains(proof),
                     };
                     if !holds {
@@ -807,7 +843,7 @@ fn no_raw_identifier_is_interpolated_into_a_file_name() {
                             "{name}:{}: allowlisted as `{whose}`, but its proof `{proof}` is no \
                              longer in {}",
                             i + 1,
-                            home.unwrap_or("this file")
+                            home.map_or("this file", |k| PROOF_ELSEWHERE[k].2)
                         ));
                     }
                 }
@@ -845,6 +881,15 @@ fn no_raw_identifier_is_interpolated_into_a_file_name() {
             sanctioned_seen[j] > 0,
             "`SANCTIONED` entry `{text}` ({whose}) matched nothing — the site moved or was \
              renamed, so this allowlist row is stale. Re-point it or drop it."
+        );
+    }
+    // The same for a cross-file entry: a site file that no longer holds any of
+    // its sites means the site moved, and the entry now licenses nothing.
+    for (k, (site, proof, _)) in PROOF_ELSEWHERE.iter().enumerate() {
+        assert!(
+            elsewhere_seen[k] > 0,
+            "`PROOF_ELSEWHERE` entry for `{proof}` names site file {site}, but no sanctioned site \
+             was found there — the site moved, so re-point the entry or drop it."
         );
     }
 }

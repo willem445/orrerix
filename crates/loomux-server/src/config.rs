@@ -139,7 +139,7 @@ impl std::error::Error for ConfigError {}
 /// into the same state with no gate on it, which is precisely the shape #904
 /// closed for `GroupId` by routing its `Deserialize` back through `parse`.
 ///
-/// `deny_unknown_fields` is the same choice `workflow.rs` makes for
+/// `deny_unknown_fields` is the same choice `workflow/parse.rs` makes for
 /// `.loomux/workflow.yml`, and for the same reason: this is a hand-edited file
 /// on the machine, so a key nobody recognises is a typo, and a typo that is
 /// silently ignored is a setting the operator believes is in force. That is

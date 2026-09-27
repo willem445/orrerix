@@ -24,7 +24,7 @@ pub const MAX_REBASE_CEILING: u32 = 1;
 /// The bounds one drive runs against — the value type [`decide`] consumes.
 ///
 /// **This is not a second parser of the `driver:` block.** §5.3's block is
-/// S2's, in `workflow.rs`, and that is where a malformed block goes loudly down
+/// S2's, in `workflow/parse.rs`, and that is where a malformed block goes loudly down
 /// the `workflow-invalid` path. What lives here is the *value* the pure core is
 /// handed.
 ///
@@ -303,7 +303,7 @@ pub fn counter_exhausted(spent: u32, bound: u32) -> bool {
 /// stamped by [`DriveEntry::open_lane`] from the step that chose the lane — and
 /// never the reviewer's prose, never a word the reviewer could type. #2509
 /// considered a `body_only` parameter on `review_verdict` and rejected it:
-/// `workflow.rs`'s line-5 marker is placed where it is precisely because "a
+/// `workflow/verdict.rs`'s line-5 marker is placed where it is precisely because "a
 /// marker a reviewer could type would be a marker a reviewer could forge", and
 /// a reviewer that can mark its own fail body-only can buy itself a round.
 ///
@@ -759,7 +759,7 @@ mod tests {
     fn the_two_layers_agree_on_invariant_9() {
         // **The cross-pin, and the reason it exists is the one thing it does NOT
         // change.** §2.3 puts INVARIANT 9's numbers behind two independent
-        // enforcers: `workflow.rs` refuses an out-of-range `driver:` value as it
+        // enforcers: `workflow/parse.rs` refuses an out-of-range `driver:` value as it
         // parses, and `decide` clamps again on the values it actually reads.
         // Both must keep enforcing — that is the consent boundary, and
         // `a_repo_cannot_raise_invariant_9_by_handing_decide_a_wider_bound` is

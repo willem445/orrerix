@@ -80,12 +80,13 @@ into those. Why: rustfmt needs 16–23 GB of RAM on a file that size (#3469),
 enough to exhaust the machine's memory.
 Those files get their syntax check from CI, like everything else.
 
-The known cases are the files over 5,000 lines themselves (`orchestration/mcp.rs`,
-and the engine's `workflow.rs`) and, by the recursion rule,
+The known cases are the file over 5,000 lines itself (`orchestration/mcp.rs`)
+and, by the recursion rule,
 `src-tauri/src/orchestration/mod.rs` (its `mod mcp;`),
 `src-tauri/tests/orchestration/main.rs` (~70k with its modules),
 `src-tauri/tests/reviewdrive/main.rs` (~16k) and `src-tauri/tests/workflow/main.rs`
 (~12k), `crates/loomux-engine/src/reviewdrive/mod.rs` (~10.6k with its modules),
+`crates/loomux-engine/src/workflow/mod.rs` (~7.2k with its modules),
 `src-tauri/src/lib.rs`
 and `crates/loomux-engine/src/lib.rs`. An entry given with a size is listed by
 its module tree's total, which is the conservative reading of the recursion
@@ -145,7 +146,7 @@ what `>/dev/null` is for). So:
 `src-tauri/src/orchestration/ghshim.rs` holds **three** generated shell scripts, each
 in a `const TPL: &str = r#"…"#`: `gh_shim_sh` (1007 lines, the merge gate),
 `git_shim_sh` (106, the release/tag-push gate) and `loomux_shim_sh` (25, the
-self-launch refusal). `workflow.rs`'s `BASE_*_JQ` consts hold jq programs the gh
+self-launch refusal). `workflow/gate.rs`'s `BASE_*_JQ` consts hold jq programs the gh
 shim interpolates. To rustfmt all of these are one string literal: it reports
 nothing, and **no local check parses them at all**. A dropped `;;` or an
 unbalanced quote therefore reaches CI intact, where it does not fail as one
@@ -1113,7 +1114,7 @@ would cite it, so any id written on this surface is one commit stale the moment
 it lands, and a stale id is what makes the whole line look untrustworthy.
 
 - To redden a **unit test in `crates/loomux-engine/src/`** (e.g.
-  `workflow.rs`) **or in `crates/loomux-server/src/`**, neuter the pure
+  `workflow/parse.rs`) **or in `crates/loomux-server/src/`**, neuter the pure
   function. Both `crates/` members run **first**, so the plant is reached
   before anything in `src-tauri` can stop the run. The cost is at the other
   end: everything in `src-tauri` runs after them, so a plant here stops the run

@@ -274,7 +274,7 @@ Worst functions at that run:
 | Rust | `call_tool` | `src-tauri/src/orchestration/mcp.rs` | 991 code lines |
 | Rust | `gh_shim_sh` | `src-tauri/src/orchestration/mod.rs` | 579 code lines |
 | Rust | `deliver_now` | `src-tauri/src/orchestration/mod.rs` | 526 code lines |
-| Rust | `parse_workflow` | `crates/loomux-engine/src/workflow.rs` | cognitive 85 |
+| Rust | `parse_workflow` | `crates/loomux-engine/src/workflow/parse.rs` | cognitive 85 |
 | Rust | `create_orchestration` | `src-tauri/src/orchestration/mod.rs` | 19 arguments |
 
 Roots, same run:

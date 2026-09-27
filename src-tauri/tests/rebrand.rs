@@ -251,9 +251,9 @@ fn every_banned_literal_is_one_the_app_still_accepts() {
 fn the_self_launch_shim_is_named_after_a_command_the_launcher_installs() {
     let src = std::fs::read_to_string(concat!(
         env!("CARGO_MANIFEST_DIR"),
-        "/src/orchestration/mod.rs"
+        "/src/orchestration/registry/agentlaunch.rs"
     ))
-    .expect("mod.rs");
+    .expect("registry/agentlaunch.rs");
     let call = "write_refusal_shim(&dir, ";
 
     // Every call site, not just the first: a second one that shimmed something

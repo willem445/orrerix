@@ -254,3 +254,106 @@ fn postcompact_hook_is_wired_into_claudes_settings_file() {
     assert!(cmd.contains(" postcompact \"") && cmd.ends_with(&format!("\"{}\"", w.id)), "{cmd}");
     assert!(cfg["hooks"]["PreCompact"][0]["hooks"][0]["command"].as_str().unwrap().contains(" precompact \""), "positive control");
 }
+
+// ---------- review round 1: the settle hold's reach, and the window's two edges ----------
+
+/// A claude orchestrator with a context reading over an 80% escalation threshold
+/// and, when `marker`, a fresh PostCompact marker beside it. The heuristic is out
+/// of reach (9999 minutes), so the only things that can act on the pane this tick
+/// are the escalation and whatever the caller queues.
+fn settling_fixture(marker: bool) -> (OrchRegistry, tempfile::TempDir, GroupId, String) {
+    let (reg, d, gid, oid) = compact_nudge_setup(9999);
+    reg.set_compact_context_threshold(&gid, 80).unwrap();
+    if marker {
+        let started_ms = reg.agent(&oid).unwrap().started_ms;
+        write_hook_marker(&postcompact_marker(&reg, &gid, &oid), started_ms, 1_000);
+    }
+    (reg, d, gid, oid)
+}
+
+#[test]
+fn postcompact_settle_holds_a_queued_compact_for_the_window() {
+    // rev-final N2: while a marker settles, nothing after the resolver acts on
+    // the pane — a compaction just FINISHED. The queued request here is the
+    // fire site; `postcompact_settle_holds_the_escalation_for_the_window` is the
+    // escalation site. Each is shown firing without the marker first, so the
+    // hold is what stops it and not the fixture.
+    for marker in [false, true] {
+        let (reg, _d, _gid, oid) = settling_fixture(marker);
+        reg.request_compact(&oid).unwrap();
+        let nudged = reg.compact_nudge_tick(1_000, &HashMap::new(), &HashMap::new(), &HashMap::new(), &HashMap::new(), &HashMap::new(), &HashMap::new());
+        if marker {
+            assert!(nudged.is_empty(), "no `/compact` is pasted while the marker settles: {nudged:?}");
+            let a = reg.agent(&oid).unwrap();
+            assert!(a.compact_requested, "held, not consumed: the request is still queued");
+            assert_eq!(a.compact_hook_postcompact_first_seen_ms, Some(1_000), "positive control: it IS settling");
+        } else {
+            assert_eq!(nudged, vec![oid.clone()], "control: with no marker the queued request fires on this tick");
+        }
+    }
+}
+
+#[test]
+fn postcompact_settle_holds_the_escalation_for_the_window() {
+    for marker in [false, true] {
+        let (reg, _d, gid, oid) = settling_fixture(marker);
+        let over: HashMap<String, u32> = [(oid.clone(), 90u32)].into_iter().collect();
+        let _ = reg.compact_nudge_tick(1_000, &HashMap::new(), &HashMap::new(), &over, &HashMap::new(), &HashMap::new(), &HashMap::new());
+        let expected = if marker { 0 } else { 1 };
+        assert_eq!(
+            audit_count(&reg, &gid, "compact-escalation"),
+            expected,
+            "marker={marker}: a pre-compaction reading escalates only when no PostCompact marker is settling"
+        );
+    }
+}
+
+#[test]
+fn postcompact_marker_with_a_future_mtime_still_resolves_on_the_tick_clock() {
+    // rev-std's skew edge, the direction the code handles: the settle window is
+    // measured from first sight on the tick's own clock, so a marker whose mtime
+    // is a day ahead of the host still resolves one window later instead of
+    // holding the pane until the clock catches up.
+    let (reg, _d, gid, oid) = compact_nudge_setup(20);
+    let started_ms = reg.agent(&oid).unwrap().started_ms;
+    let marker = postcompact_marker(&reg, &gid, &oid);
+    write_hook_marker(&marker, started_ms, 86_400_000);
+
+    quiet_tick(&reg, 1_000);
+    assert_eq!(reg.agent(&oid).unwrap().compact_hook_postcompact_first_seen_ms, Some(1_000), "positive control: seen and settling");
+    assert_eq!(audit_count(&reg, &gid, "compact-reinjection"), 0);
+
+    quiet_tick(&reg, 1_000 + POSTCOMPACT_SETTLE_MS);
+    assert_eq!(audit_count(&reg, &gid, "compact-resolved-postcompact"), 1, "resolved on the tick clock, a day before the mtime");
+    assert_eq!(audit_count(&reg, &gid, "compact-reinjection"), 1);
+    assert!(!marker.exists());
+}
+
+#[test]
+fn postcompact_a_sessionstart_after_the_settle_window_is_the_disclosed_duplicate() {
+    // rev-final N1 / rev-std premortem 1, pinned as the residual the design note
+    // discloses rather than claimed away: once the marker has resolved, loomux's
+    // reinjection is already queued, and a SessionStart(compact) arriving later
+    // only clears the delivery phase (rev-10 B1). It is not counted as a skip,
+    // because the paste went; Claude's hook still prints its native context, so
+    // this pane is re-grounded twice. A change that makes the window wait longer
+    // or pair across it turns this red — and must retire the residual with it.
+    let (reg, _d, gid, oid) = compact_nudge_setup(20);
+    let started_ms = reg.agent(&oid).unwrap().started_ms;
+    write_hook_marker(&postcompact_marker(&reg, &gid, &oid), started_ms, 1_000);
+    quiet_tick(&reg, 1_000);
+    quiet_tick(&reg, 1_000 + POSTCOMPACT_SETTLE_MS);
+    assert_eq!(audit_count(&reg, &gid, "compact-reinjection"), 1, "the settle window closed: loomux's own reinjection is queued");
+
+    // Claude's SessionStart(compact) lands 20s after PostCompact, past the window.
+    write_hook_marker(&sessionstart_marker(&reg, &gid, &oid), started_ms, 21_000);
+    quiet_tick(&reg, 1_000 + POSTCOMPACT_SETTLE_MS + 10_000);
+    let a = reg.agent(&oid).unwrap();
+    assert!(!a.compact_pending && a.compact_reinject_attempted_ms.is_none(), "the late SessionStart still closes the phase");
+    assert_eq!(audit_count(&reg, &gid, "compact-reinjection"), 1, "no retry of loomux's paste");
+    assert_eq!(
+        audit_count(&reg, &gid, "compact-reinjection-skipped-native"),
+        0,
+        "not a skip: loomux's reinjection already went, beside the native one — the duplicate"
+    );
+}

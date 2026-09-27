@@ -327,7 +327,7 @@ pub const MAX_GLOB_CHARS: usize = 200;
 /// static list ends up refusing a manager while a routing rule quietly accepts
 /// one. `ctx` names which list is being read so the message points at the line
 /// the author has to fix.
-fn gate_reviewer_error(gate: &str, ctx: &str, rname: &str, blocks: &[Block]) -> Option<String> {
+pub(super) fn gate_reviewer_error(gate: &str, ctx: &str, rname: &str, blocks: &[Block]) -> Option<String> {
     match blocks.iter().find(|b| b.id == rname) {
         None => Some(format!("gates.{gate}: {ctx} {rname:?} names no block")),
         // The manager (#1161) is structurally caught by the arm below — it is
@@ -1002,7 +1002,7 @@ pub fn usable_intake_label(raw: &str) -> Option<String> {
 /// That refusal lives in [`usable_intake_label`] rather than here, because this
 /// arm is no longer the only place it has to hold: a hand-edited `group.json`
 /// never met this parser, and #2663 routes its `intake.hold` to the same argv.
-fn sanitize_intake_label(field: &str, raw_val: &str, fallback: &str, errs: &mut Vec<String>) -> String {
+pub(super) fn sanitize_intake_label(field: &str, raw_val: &str, fallback: &str, errs: &mut Vec<String>) -> String {
     let v = raw_val.trim();
     if v.is_empty() {
         return fallback.to_string();

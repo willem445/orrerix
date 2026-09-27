@@ -258,7 +258,7 @@ const STREAMS: StreamRow[] = [
     event: "orch-fork-solo-request",
     rate: "lifecycle",
     bound: "argued-none",
-    cite: "src-tauri/src/orchestration/mod.rs",
+    cite: "src-tauri/src/orchestration/registry/solo.rs",
     reason:
       "One per lead `fork_session` on its own pane (#3318 F2), and each one is admitted through " +
       "the group's spawn-rate backstop (`request_solo_fork` → `check_and_record_spawn`) before it " +
@@ -326,7 +326,7 @@ const STREAMS: StreamRow[] = [
     event: "orch-queue-depth",
     rate: "cadenced",
     bound: "argued-none",
-    cite: "src-tauri/src/orchestration/mod.rs",
+    cite: "src-tauri/src/orchestration/registry/idle.rs",
     reason:
       "The delivery-queue depth badge (#814), pushed from the same 3 s attention tick as " +
       "orch-attention because the age it shows must keep growing and the frontend has no clock " +
@@ -348,7 +348,7 @@ const STREAMS: StreamRow[] = [
     event: "orch-mailbox-changed",
     rate: "producer",
     bound: "argued-none",
-    cite: "src-tauri/src/orchestration/mod.rs",
+    cite: "src-tauri/src/orchestration/registry/managermail.rs",
     reason:
       "The manager pane's unread-mail chip (#1161 M5). Emitted from write_mailbox — the single " +
       "mutation point — so its rate is set by an agent, not by a clock: the orchestrator's " +

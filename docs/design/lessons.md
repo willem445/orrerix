@@ -205,7 +205,7 @@ resolves to `None` — the same as a repo with no lessons file at all. There is
 nothing a lessons file can contain that fails to inject; garbage prose still
 gets capped and wrapped exactly like well-formed prose, because there's no
 parser to reject it with. This mirrors `workflow::load_workflow`'s existing
-policy of "a broken file is skipped, never fatal" (`mod.rs`'s
+policy of "a broken file is skipped, never fatal" (`registry/persist.rs`'s
 `audit_workflow_drift`, `workflow.rs` doc comment on `load_workflow`) — the
 one difference being workflow.yml has a *schema* it can fail, so its failure
 mode is "parse error, audited, fall back to the default roster," while

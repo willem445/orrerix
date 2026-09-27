@@ -28,6 +28,19 @@ Rust modules use three tiers:
   visibility a private field had in `orchestration/mod.rs`.
 - Bare `<noun>.rs` files contain logic that does not use registry `self`.
 
+A `registry/` file's name must not be a name `use super::*` already brings
+into scope there. `mod <noun>;` in `registry/mod.rs` shadows the glob import
+for every file under `registry/`, so a `registry/workflow.rs` would turn each
+`workflow::` path in those files into a path into itself. The engine
+re-exports `workflow`, `queue`, `mailbox` and `locks`, which is why #3498 P3d
+named its files `roster`/`instructions`, `deliveryqueue`, `managermail` and
+`resourcelocks`. The same rule keeps a bare `orchestration/<noun>.rs` and a
+`registry/<noun>.rs` from sharing a name, which is why the knobs file is
+`registry/autonomy.rs`: #3498 P4 plans a bare `guardrails.rs`. A
+`commands/<noun>.rs` and a `registry/<noun>.rs` MAY share a name, since
+`commands/`'s children are private to it, and they should do so only when they
+are the two tiers of one concern (`tasks`, `channels`, `autonomy`).
+
 Persistence modules are named for the whole-file store they own (`queuestate`,
 `uistate`); atomic writes go through `fsatomic`. Engine versus `src-tauri` is
 decided by outbound dependency edges, as described in

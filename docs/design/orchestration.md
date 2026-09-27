@@ -153,7 +153,7 @@ command re-run, a test red-to-green, a reverted edit) plus three anchors
 (initial prompt, final diff/PR ref, task outcome). It never returns the raw
 transcript. The target session need not still be alive: it is meant to be
 read cold, after the worker that produced it is gone — see
-`OrchRegistry::session_digest` in `orchestration/mod.rs` and
+`OrchRegistry::session_digest` in `orchestration/registry/persist.rs` and
 `orchestration/digest.rs`. Gated to `role_hint == process` worker blocks — the
 process-pro's own tool, not a general worker one; slice B shipped this
 worker-kind-wide as an interim, deliberately coarser exposure while
@@ -4270,8 +4270,8 @@ Code system prompt entirely" — when `<name>` resolves against `.claude/agents/
 `~/.claude/agents/` (user), both scanned automatically, no `--agents` JSON required at all. This
 is the EXACT "native custom-agent flag, file-backed" shape Copilot's `~/.copilot/agents`
 precedent already used — round 6 makes it true for Claude too, closing the gap the ORIGINAL
-`--agents '<json>'` choice opened (see `write_claude_agent_file`, `claude_agents_dir`,
-`PersonaInject::claude_agent`'s docs in `mod.rs`):
+`--agents '<json>'` choice opened (see `write_claude_agent_file` and `claude_agents_dir` in
+`registry/agentfiles.rs`, and `PersonaInject::claude_agent`'s doc in `mod.rs`):
 
 - **Primary path**: `write_claude_agent_file` writes a loomux-generated, uniquely-handled
   (`loomux-<group>-<block>`, same convention as Copilot's) `~/.claude/agents/<handle>.md` file
@@ -11559,7 +11559,7 @@ Two related additions: a **planner** role, and **per-role** agent CLI + model.
     a group can even launch (`workflow.rs:891`); and — belt-and-braces, for a pattern
     that reaches loomux any other way (a `.github/agents/*.md` persona's own `allow:`
     frontmatter, a hand-edited `group.json`) — `persona_inject` unconditionally empties
-    `extra_allow` for a read-only block regardless of source (`mod.rs:18383-18392`,
+    `extra_allow` for a read-only block regardless of source (`registry/agentfiles.rs`,
     audited via `audit_allow_denied`, never silent). `PersonaInject::extra_allow` really
     is ordered before `--disallowedTools` in the command builder — but for a planner it
     is always the empty list by the time it gets there, so the loop never has anything

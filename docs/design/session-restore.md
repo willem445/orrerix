@@ -1084,8 +1084,8 @@ red-before-green verified against the pre-fix literal-comparison logic.
 design-intake reply that scoped this PR:**
 
 - **The Rust orchestration builder's latent copilot-resume space-form arms**
-  (`build_agent_command`/`build_agent_argv`, `orchestration/mod.rs`
-  ~18499/~18700) are a different architecture entirely — group agents
+  (`build_agent_command`/`build_agent_argv`, `orchestration/registry/agentlaunch.rs`)
+  are a different architecture entirely — group agents
   already re-derive their launch command from structured group state
   (persona, session, resume, auto_ops) every time, never a replayed string,
   so they are not an instance of THIS issue's pattern, just a separately
@@ -1131,7 +1131,7 @@ actually being resumed. The dormant-group Resume button always already knows
 which group it's resuming (`hint: (group_id, role)`, threaded through since
 #412) — that hint went unused for this lookup, so a resume click's latency
 scaled with the total history on the machine, not with the one group being
-restored. `session_role_in_group` (new, `orchestration/mod.rs`) reads and
+restored. `session_role_in_group` (new, now in `orchestration/registry/persist.rs`) reads and
 merges only the hinted group; a miss (a stale/wrong hint) falls through to
 the unchanged full scan.
 

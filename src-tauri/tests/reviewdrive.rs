@@ -366,7 +366,7 @@ const PERMITTED_ENQUEUE: (&str, &str, usize, &str) = (
 /// is a capability rather than a licence: the rows above still deny every kill
 /// primitive inside the driver's files, and this permits exactly one call to the
 /// one barrier, which lives outside them (`OrchRegistry::release_driven_pane`,
-/// in `mod.rs`, beside `kill_agent_as` and `mark_dead`).
+/// in `registry/agents.rs`, beside `kill_agent_as` and `mark_dead`).
 ///
 /// **The COUNT is the pin, not the presence.** A second call site is a second
 /// place the release rule can be broken, and a scan that only asked "is it

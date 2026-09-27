@@ -9,7 +9,7 @@
 //! and without any LLM, into "friction windows": the wall, the attempts, the
 //! fix. Only those windows (plus three cheap anchors) are meant to reach an
 //! agent — see `session_digest` in `mcp.rs` / `OrchRegistry::session_digest`
-//! in `mod.rs` for the registry-facing side that resolves a task/agent/pr
+//! in `registry/persist.rs` for the registry-facing side that resolves a task/agent/pr
 //! into a transcript and calls into here.
 //!
 //! Everything in this file is pure: it takes text/events in and returns data

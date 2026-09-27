@@ -1002,7 +1002,7 @@ from a unit test of product code, agents are banned from running cargo locally
     caller's seat, not a remaining problem (batch 9's correction, restated
     because it is the sentence that keeps being written wrong).
     `queuestate::QueueSnapshotWriter` is implemented for `OrchRegistry` in
-    `mod.rs` and for the module's own `SpyWriter` in the engine, and the
+    `orchestration/registry/deliveryqueue.rs` and for the module's own `SpyWriter` in the engine, and the
     `src-tauri` half staying behind is fine — the trait *is* the seam, the impl
     is a local type impling a foreign trait so the orphan rule is satisfied, and
     an inbound edge never blocks a move. What is genuinely still same-tier is

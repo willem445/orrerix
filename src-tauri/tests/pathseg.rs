@@ -373,8 +373,8 @@ fn no_raw_identifier_is_interpolated_into_a_file_name() {
     ///
     /// **The proof is file-scoped, not function-scoped**, and that limit is
     /// stated rather than glossed: it asserts the text is somewhere in the same
-    /// file, so where two sites share a proof string (the four `agent_id:
-    /// &PathSegment` parameters all live in `mod.rs`) reverting *one* of them
+    /// file, so where two sites share a proof string (the two `agent_id:
+    /// &PathSegment,` parameters in `registry/agentlaunch.rs`) reverting *one* of them
     /// would not trip it. It raises the cost of a silent revert; it does not
     /// make one impossible. Binding a proof to its enclosing function would mean
     /// parsing Rust, which is the line this scan deliberately does not cross —
@@ -655,7 +655,7 @@ fn no_raw_identifier_is_interpolated_into_a_file_name() {
     /// The one exception to "the proof is in the site's own file": a proof
     /// that is cross-file by nature, keyed by its exact text and naming the file
     /// (under `src-tauri/src`) it must still be in. The two hook-marker reads
-    /// above interpolate `a.id` in `orchestration/mod.rs`, and the line that
+    /// above interpolate `a.id` in `orchestration/registry/compact.rs` (#3498 P3d), and the line that
     /// makes `a.id` a minted id is in `spawn_agent_full`, which #3498 P3b moved
     /// to `orchestration/registry/spawn.rs`. The proof text and its strength are
     /// unchanged; only the file it is checked in moved. Every other row stays

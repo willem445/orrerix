@@ -438,6 +438,10 @@ pub struct CompactionSignal {
     pub window_rounded: bool,
     /// #993 S1: the live reasoning effort (status-line `effort.level`).
     pub effort: Option<String>,
+    /// True only when `effort` is the pi launch knob fallback, not a value its
+    /// session artifact reported. Display and sampling must not treat that
+    /// configuration default as an observed live effort.
+    pub effort_is_launch_fallback: bool,
     /// #993 S1: whether a status-line snapshot contributed to this reading.
     pub source: crate::modelstate::ContextSource,
 }
@@ -1672,6 +1676,7 @@ pub fn compaction_signal_in(root: &Path, session_id: &str) -> Option<CompactionS
         window_tokens: None,
         window_rounded: false,
         effort: None,
+        effort_is_launch_fallback: false,
         source: crate::modelstate::ContextSource::Transcript,
     })
 }

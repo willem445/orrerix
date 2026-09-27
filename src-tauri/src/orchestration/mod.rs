@@ -43171,7 +43171,9 @@ impl OrchRegistry {
                     // "unknown model" and back; on every CLI but claude the two
                     // fields are equal anyway.
                     model: s.current_model.clone().or_else(|| s.model.clone()),
-                    effort: context_signals.get(&s.agent_id).and_then(|signal| signal.effort.clone()),
+                    effort: context_signals.get(&s.agent_id).and_then(|signal| {
+                        if signal.effort_is_launch_fallback { None } else { signal.effort.clone() }
+                    }),
                 };
                 if usageseries::should_sample(state.last.get(&s.key), &sample, bucket) {
                     to_write.push(usageseries::SeriesRow::Sample(sample));

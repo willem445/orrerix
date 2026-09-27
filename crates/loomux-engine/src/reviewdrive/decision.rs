@@ -729,17 +729,17 @@ fn decide_gate_check(entry: &DriveEntry, facts: &DriveFacts, limits: &DriveLimit
     }
 }
 
-fn minutes_ms(minutes: u64) -> u64 {
+pub(super) fn minutes_ms(minutes: u64) -> u64 {
     minutes.saturating_mul(60_000)
 }
 
 #[cfg(test)]
-mod tests {
+pub(super) mod tests {
     use super::*;
 
     // ── §2.4 the decision ───────────────────────────────────────────────────
 
-    fn facts_at(head: &str) -> DriveFacts {
+    pub(in crate::reviewdrive) fn facts_at(head: &str) -> DriveFacts {
         DriveFacts {
             now_ms: 2_000,
             pr_open: Some(true),
@@ -756,7 +756,7 @@ mod tests {
         }
     }
 
-    fn lane_fact(block: &str, v: Option<Verdict>, at_head: &str, digest: &str) -> LaneFact {
+    pub(in crate::reviewdrive) fn lane_fact(block: &str, v: Option<Verdict>, at_head: &str, digest: &str) -> LaneFact {
         LaneFact {
             block: block.to_string(),
             verdict: v.map(|verdict| ReviewVerdict {
@@ -780,7 +780,7 @@ mod tests {
     /// [`lane_fact`] whose `pass` is the driver's body-VERIFICATION delta
     /// (#2168 E2) — the mark `review_verdict` writes for a lane the driver
     /// briefed because only the body had moved.
-    fn verified_lane_fact(block: &str, at_head: &str, digest: &str) -> LaneFact {
+    pub(in crate::reviewdrive) fn verified_lane_fact(block: &str, at_head: &str, digest: &str) -> LaneFact {
         let mut l = lane_fact(block, Some(Verdict::Pass), at_head, digest);
         if let Some(v) = l.verdict.as_mut() {
             v.verified_body = true;

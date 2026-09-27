@@ -1505,7 +1505,7 @@ impl DriveEntry {
 }
 
 #[cfg(test)]
-mod tests {
+pub(super) mod tests {
     use super::*;
 
     /// **The once-per-revision stop mark, pinned where it is decidable** (#3176).
@@ -1579,7 +1579,7 @@ mod tests {
 
     // ── the entry's own guards ──────────────────────────────────────────────
 
-    fn entry_at(state: DriveState) -> DriveEntry {
+    pub(in crate::reviewdrive) fn entry_at(state: DriveState) -> DriveEntry {
         let mut e = DriveEntry::new(1758, "sess-full", "orch-1", Counters::default(), 1_000);
         // Walk there through legal arcs, so a fixture cannot encode a state the
         // machine refuses to reach.

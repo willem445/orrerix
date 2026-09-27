@@ -416,7 +416,7 @@ pub struct DrivenPane {
 /// list is read by [`DriveEntry::driven_role`] — where a duplicate changes
 /// nothing — and printed in the exit notices, where naming `w-1715` twice reads
 /// as two panes a human then goes looking for.
-fn retain_panes(prior: Vec<String>, current: &str) -> Vec<String> {
+pub(super) fn retain_panes(prior: Vec<String>, current: &str) -> Vec<String> {
     let mut out: Vec<String> = Vec::new();
     for a in prior {
         if a.is_empty() || a == current || out.iter().any(|s| *s == a) {
@@ -664,7 +664,7 @@ pub struct Pruned {
 }
 
 #[cfg(test)]
-mod tests {
+pub(super) mod tests {
     use super::*;
 
     // ── §5.2 the state file ─────────────────────────────────────────────────
@@ -674,7 +674,7 @@ mod tests {
     /// contract rather than an illustration, and the three fields this module
     /// adds are absent from it on purpose: each is `serde(default)`, so a file
     /// written against the published shape still reads.
-    const NOTE_EXAMPLE: &str = r#"{
+    pub(in crate::reviewdrive) const NOTE_EXAMPLE: &str = r#"{
       "version": 1,
       "entries": [
         { "pr": 1758,

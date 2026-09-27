@@ -39,7 +39,20 @@ named its files `roster`/`instructions`, `deliveryqueue`, `managermail` and
 `registry/autonomy.rs`: #3498 P4 plans a bare `guardrails.rs`. A
 `commands/<noun>.rs` and a `registry/<noun>.rs` MAY share a name, since
 `commands/`'s children are private to it, and they should do so only when they
-are the two tiers of one concern (`tasks`, `channels`, `autonomy`).
+are the two tiers of one concern (`tasks`, `channels`, `autonomy`). The same
+holds for a `commands/<noun>.rs` and a bare `<noun>.rs`: `commands/guardrails.rs`
+is the Tauri boundary for the knobs whose type is in `guardrails.rs` (#3498 P4).
+
+Bare files are the tier #3498 P4 filled. It moved every free function, type
+and constant `orchestration/mod.rs` still held into one file per concern, so
+`mod.rs` is the map: module declarations, the engine re-exports and a few lines
+more. The per-CLI adapters are a directory, `clis/`, one file per CLI, because
+six files that share a prefix read better as a folder than as six siblings. A
+tuning constant sits beside its one free-code user. One with several users, or
+read only by registry methods, is in `tuning.rs`. Each bare file's `//!` header
+lists its outbound edges (`tauri`, `PtyManager`, `OrchRegistry`, other
+`src-tauri` modules) and the sibling files it calls, which is what an
+engine-extraction batch needs to know to take the file whole.
 
 Persistence modules are named for the whole-file store they own (`queuestate`,
 `uistate`); atomic writes go through `fsatomic`. Engine versus `src-tauri` is
@@ -176,7 +189,7 @@ plus five percent headroom; they remain grandfathered only while larger than
 85 percent of that ceiling, so splits tighten the table. A row whose file is
 back at or under its class ceiling is refused as redundant: the class default
 governs it again and the row is removed, not tightened. An oversized legacy
-module such as `src-tauri/src/orchestration/mod.rs` remains governed by its own
+module such as `src-tauri/src/orchestration/rdtick.rs` remains governed by its own
 cited row rather than the class default.
 
 For moved code, use `git blame --ignore-revs-file .git-blame-ignore-revs -C -C -C`

@@ -3138,9 +3138,13 @@ point:
   tool-matcher strings `allow:` speaks, so an opencode block also runs with
   its class's baseline and can't be widened — same decision, same reason, as
   gemini's arm.
-- **No compact nudge.** opencode isn't on the short list of CLIs orrerix will
-  paste `/compact` into (claude and copilot only), so an opencode agent's
-  context management is left to the CLI itself, same as gemini's.
+- **The compact nudge works; context escalation needs a window override.**
+  orrerix pastes opencode's own `/compact` exactly as it does claude's, and
+  `request_compact` works from an opencode pane. But opencode records how many
+  tokens a session holds and not how large its window is, so the lifecycle
+  panel shows an opencode pane's tokens without a percent, and the context
+  threshold never escalates it — unless the group sets a context-window
+  override. opencode also compacts on its own when it runs out of room.
 - **Session history *does* work.** opencode has no `--session-id` to hand a
   pane up front, so orrerix learns which session is the reviewer's after it
   starts rather than minting one — but once bound, that session resumes and
@@ -3167,9 +3171,12 @@ and two of its omissions change what an orrerix block on it means:
   than gemini's or opencode's: pi has no permission engine to pre-approve
   anything in. A `pi` block runs with its class's baseline and can't be
   widened.
-- **No compact nudge.** pi isn't on the short list of CLIs orrerix pastes
-  `/compact` into, so its context management is left to the CLI, which
-  auto-compacts by default.
+- **Compaction works as it does for claude.** orrerix pastes pi's own
+  `/compact`, and the context threshold escalates a pi pane against the window
+  pi's `--list-models` reports for the model the pane is running. For a model
+  pi does not list, the lifecycle panel shows tokens without a percent and the
+  threshold does not escalate it until the group sets a context-window
+  override. pi also auto-compacts on its own by default.
 - **Session history works, the claude way.** pi takes `--session-id` and
   creates the session if it is missing, so orrerix mints the id up front
   rather than learning it after boot — no watcher, and a resume is the same
@@ -3210,6 +3217,12 @@ two things worth knowing before your first run:
   pane gets orrerix's rather than yours. Every spawn that finds any records
   what it saw in the audit log (`codex-user-mcp-merged`) so a pane whose tools
   look wrong is diagnosable rather than mysterious.
+- **Compaction works as it does for claude.** orrerix pastes codex's own
+  `/compact`, and the context threshold escalates a codex pane against the
+  window codex records in its session log. A session log that records no window
+  shows tokens without a percent and is not escalated until the group sets a
+  context-window override. codex also compacts on its own when it nears its
+  limit.
 - **A `reviewer`, a `planner` and a `manager` block cannot run on codex**, and
   orrerix refuses the file rather than launching one — see *Why not codex for a
   reviewer?* below. All three are classes orrerix denies the editing tools to,
@@ -3993,8 +4006,8 @@ belongs with a merge, and it already sits behind the merge gate.
 ### Compact-nudge
 
 The orchestrator pane lives for the whole session and every turn re-reads its entire
-history — it's typically the biggest token consumer in a group. Orrerix can drive Claude
-Code's own `/compact` for it at a natural lull: once an eligible pane has been idle at its
+history — it's typically the biggest token consumer in a group. Orrerix can drive the
+CLI's own `/compact` for it at a natural lull: once an eligible pane has been idle at its
 input prompt (the same output-quiet signal the watchdog and idle-tick already read — never
 mid-turn) past a configured window, orrerix pastes `/compact` for it exactly like any other
 prompt delivery — no PTY resize, no new agent capability — and it never overwrites text
@@ -4004,8 +4017,10 @@ next natural lull).
 Configure these live in the group's lifecycle panel (`Alt+O`), alongside its other
 guardrails. The quiet-window (minutes) is off at 0; optionally choose eligible roles —
 the orchestrator only by default, since workers are short-lived and rarely worth
-compacting. `/compact` is a Claude Code built-in, so the nudge only ever fires for
-Claude Code panes.
+compacting. The nudge fires for every CLI that has a compact command orrerix can
+paste — claude, copilot, codex, pi and opencode, each getting its own. Gemini has none
+(its equivalent is `/compress`), so a gemini pane is skipped, and `request_compact` from
+one says why.
 
 **The timed nudge also checks context is actually full before it fires — a smart default, no
 setup needed.** Quiet is not the same signal as full: on its own, a quiet-window nudge fires
@@ -4067,6 +4082,11 @@ file, one entry per line, that a human can open directly.
 **Lifecycle panel.** The group lifecycle panel (`Alt+O`) shows each agent's detected model,
 effort and context-window usage beside its uptime and cost. It uses the CLI-reported window
 when available; usage percentages are shown only when both tokens and a window are known.
+The model-name fallback below is Claude's, so it only ever fills in for a Claude pane: a
+codex, pi or opencode pane whose CLI has not reported a window shows its tokens without a
+percent, and the context threshold does not escalate it — the panel and the escalation read
+one rule, so the panel never shows a percent that could not escalate, or the reverse. A
+context-window override on the group supplies the window for any CLI.
 Before a reading exists, the declared model and effort are labelled as declared.
 The effort shown is always one the CLI reported: a pi pane whose session no longer names its
 thinking level shows no effort rather than passing its configured level off as the live one.

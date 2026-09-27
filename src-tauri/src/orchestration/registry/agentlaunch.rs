@@ -645,7 +645,6 @@ impl OrchRegistry {
         Some(ClaudeHookSettings {
             hooks: json!({
                 "PreCompact": [{ "hooks": [{ "type": "command", "command": cmd("precompact") }] }],
-                "PostCompact": [{ "hooks": [{ "type": "command", "command": cmd("postcompact") }] }],
                 "SessionStart": [{ "matcher": "compact", "hooks": [{ "type": "command", "command": cmd("sessionstart-compact") }] }],
                 "UserPromptSubmit": [{ "hooks": [{ "type": "command", "command": cmd("promptsubmit") }] }],
             }),

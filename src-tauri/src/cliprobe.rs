@@ -31,7 +31,7 @@ const HELP_TIMEOUT: Duration = Duration::from_secs(8);
 /// where loomux decides something from the version: claude, whose per-pane
 /// `--settings` file may carry a hook event only if the CLI knows it
 /// (`claude_supports_postcompact`). Every other CLI keeps its one or two runs.
-const VERSION_PROBES: &[&str] = &["claude"];
+const VERSION_PROBES: &[&str] = &[];
 
 /// The version a `--version` run printed: the first whitespace-separated token
 /// shaped like `N.N[.N…]` (a leading `v` dropped). `claude --version` prints

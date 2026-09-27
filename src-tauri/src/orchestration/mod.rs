@@ -9698,42 +9698,62 @@ fn canonicalize_compact_nudge_roles(roles: Vec<String>) -> Vec<String> {
     out
 }
 
-/// Compact-nudge (#287; widened #417 correction round): whether `cli` has a
-/// `/compact` equivalent loomux can drive the same way (a bare pane write +
-/// CR) AND gets a seat in `compact_nudge_tick`'s per-agent loop at all.
+/// Compact-nudge (#287, #413 S4): the command loomux pastes to compact a `cli`
+/// pane — `None` when it has none it may drive. Read off the CLI's
+/// [`CliCaps::compact_command`](loomux_engine::model::CliCaps) row, the one
+/// table that answers per-CLI questions (CLAUDE.md constraint 8), so admitting
+/// a CLI is a row edit and a CLI's own spelling is pasted verbatim rather than
+/// assumed to be `/compact`.
 ///
-/// An earlier round of this feature asserted Copilot has no `/compact`
-/// command and kept this claude-only, admitting Copilot to the loop through
-/// a separate, broader `compact_hook_cli_supported` gate instead (for its
-/// `PreCompact` hook alone). That claim was wrong: GitHub's own CLI command
-/// reference (docs.github.com/en/copilot/reference/copilot-cli-reference/cli-command-reference)
-/// documents `/compact [FOCUS-INSTRUCTIONS]` as a real Copilot CLI command,
-/// identical in spirit to Claude's. Claude and Copilot agreeing made the
-/// separate broader gate pure duplication, so it was folded back into this one
-/// function — see `git log` for the prior two-gate shape if a future CLI ever
-/// needs hook-admission without `/compact`-paste (or vice versa), which would
-/// be the reason to split them again. Pure so the gate is testable without a
-/// registry; `cli` comes from `Guardrails::cli_for_block` — the agent's OWN
-/// block, not its class's default block (#2167). Both feeders pass it: the loop
-/// admission gate reads `g.cli_for_block(&a.block, a.role)` directly, and
-/// `request_compact` reaches it through `OrchRegistry::cli_for_agent`. Feeding
-/// this `cli_for(role)` instead is what silently excluded every claude delegate
-/// in a two-block class from compact nudges, since this list does not admit
-/// `opencode`.
+/// `Some` is also the whole admission test for `compact_nudge_tick`'s
+/// per-agent loop, `request_compact`, the human's "Compact now" and the
+/// orchestrator's idle-compact backstop: a pane with no command gets no paste
+/// from any of them, and nothing else the loop does is worth running for a
+/// pane it can never compact. An unknown CLI has no row and so no command.
 ///
-/// **This is no longer "every supported CLI" (#267).** Gemini is spawnable
-/// since #267 stage 2 and is deliberately NOT in this list: its equivalent
-/// command is spelled `/compress` ("Replace the entire chat context with a
-/// summary"), per its own
-/// [commands reference](https://github.com/google-gemini/gemini-cli/blob/main/docs/reference/commands.md)
-/// — there is no `/compact` for the nudge to paste. Admitting gemini here
-/// would type a command that does not exist into a live pane. Teaching the
-/// nudge a per-CLI command *spelling* is a real follow-up on #287/#328's
-/// machinery, not a line to smuggle into a reviewer-adapter PR; until then a
-/// gemini agent simply gets no compact nudge, which is the pre-#287 behavior
-/// and costs nothing structurally.
-pub fn compact_nudge_cli_supported(cli: &str) -> bool {
-    matches!(cli, "claude" | "copilot")
+/// `cli` comes from `Guardrails::cli_for_block` — the agent's OWN block, not
+/// its class's default block (#2167). The loop reads
+/// `g.cli_for_block(&a.block, a.role)` directly, and `request_compact` reaches
+/// it through `OrchRegistry::cli_for_agent`. Feeding this `cli_for(role)`
+/// instead is what once silently excluded every claude delegate in a
+/// two-block class from compact nudges.
+///
+/// Before #413 S4 this was a `matches!(cli, "claude" | "copilot")` predicate:
+/// every other CLI was outside the loop whatever its row said, so pi, codex
+/// and opencode panes were never escalated even once their readers (#993
+/// S2a–S2c) reported tokens. Gemini stays out because its row has no command:
+/// its equivalent is spelled `/compress`, which S0 did not establish, and
+/// pasting `/compact` there would type a command that does not exist into a
+/// live pane.
+pub fn compact_command_for(cli: &str) -> Option<&'static str> {
+    loomux_engine::model::cli_caps(cli).and_then(|caps| caps.compact_command)
+}
+
+/// The refusal `request_compact` and the human's "Compact now" give for a
+/// pane [`compact_command_for`] has no command for (#413 S4): the CLI's
+/// `compact_note` — why its row is `None` — so the caller learns the reason
+/// rather than only the fact. An unknown CLI, or a row with no note, still
+/// says which CLI refused.
+pub fn compact_unsupported_reason(cli: &str) -> String {
+    let note = loomux_engine::model::cli_caps(cli)
+        .map(|caps| caps.compact_note.trim())
+        .filter(|note| !note.is_empty());
+    match note {
+        Some(note) => format!("orrerix has no compact command it may paste into a {cli} pane: {note}"),
+        None => format!("orrerix has no compact command it may paste into a {cli} pane"),
+    }
+}
+
+/// A context reading with tokens and no window a percent may be computed
+/// against (`modelstate::published_window` said `None`), in a group whose
+/// escalation threshold is on — the reading `compact_nudge_tick` can never
+/// escalate, carried from `agent_context_percents` to
+/// `note_unwindowed_escalations` so the audit says why (#413 S4).
+struct UnwindowedReading {
+    agent: String,
+    group: GroupId,
+    tokens: u64,
+    source: crate::modelstate::ContextSource,
 }
 
 /// Compact-nudge (#328): whether an agent-requested compact should fire NOW.
@@ -10140,8 +10160,8 @@ pub fn human_typed_compact_detected(tail: &str) -> bool {
 
 /// Directive ledger (#329 expansion): per-CLI stable substrings that appear in
 /// a pane's own rendered output while IT (not a human, not loomux) is
-/// actively auto-compacting. Keyed the same way `compact_nudge_cli_supported`
-/// gates the rest of this feature to `SUPPORTED_CLIS`, so adding a CLI's
+/// actively auto-compacting. Keyed per CLI the way `compact_command_for`
+/// gates the rest of this feature, so adding a CLI's
 /// banner is a one-line addition here, never a change to the generic
 /// detection/pipeline code that calls `auto_compact_banner_detected` — this
 /// repo is never allowed to bake one CLI's quirks into product code (see
@@ -34509,8 +34529,8 @@ impl OrchRegistry {
     // ---------- compact-nudge (#287): periodic `/compact` at natural lulls ----------
 
     /// One compact-nudge pass. For each **non-paused** group's running agent
-    /// whose role is in that group's `compact_nudge_roles` and whose CLI
-    /// supports `/compact` (`compact_nudge_cli_supported`), fold in the latest
+    /// whose role is in that group's `compact_nudge_roles` and whose CLI has a
+    /// compact command (`compact_command_for`), fold in the latest
     /// pty output counter using the group's `idle_activity_floor_bytes` —
     /// meaningful growth (a real turn, not idle repaint noise) resets the
     /// quiet clock and this tick's own one-shot latch.
@@ -34626,7 +34646,9 @@ impl OrchRegistry {
             .collect();
         let tick_times = self.compact_nudge_times.lock_safe().clone();
 
-        let mut to_fire: Vec<(String, GroupId)> = Vec::new();
+        // The `&'static str` is the CLI's own compact command (`compact_command_for`),
+        // read at the admission gate below and pasted verbatim (#413 S4).
+        let mut to_fire: Vec<(String, GroupId, &'static str)> = Vec::new();
         // `u32` is the 1-indexed attempt number (see `AgentEntry::
         // compact_reinject_attempts`) — carried through so the audit line
         // distinguishes a first fire from a retry.
@@ -34686,16 +34708,15 @@ impl OrchRegistry {
             let mut agents = self.agents.lock_safe();
             for a in agents.values_mut() {
                 let Some(g) = groups.get(&a.group) else { continue };
-                // #417 (Copilot correction, round 2): Copilot has its own
-                // `/compact` command after all (see `compact_nudge_cli_
-                // supported`'s doc) — the loop admission gate and the
-                // `/compact`-paste gate are the same check now for both
-                // currently-supported CLIs, so there's a single gate here.
-                if a.status != AgentStatus::Running
-                    || !compact_nudge_cli_supported(g.cli_for_block(&a.block, a.role))
-                {
+                // One gate for loop admission and the paste (#417, #413 S4):
+                // a pane whose CLI row carries no compact command is never
+                // compacted, so nothing else in this loop applies to it.
+                if a.status != AgentStatus::Running {
                     continue;
                 }
+                let Some(compact_command) = compact_command_for(g.cli_for_block(&a.block, a.role)) else {
+                    continue;
+                };
 
                 // Lifecycle-panel surfacing (PR #329 round 6): cache this
                 // tick's context-token reading (if any) so `group_summary`
@@ -35397,10 +35418,10 @@ impl OrchRegistry {
                 // gives a queued request first refusal, before any inference
                 // arm gets a chance to re-claim the pane this same tick.
                 let times = tick_times.get(&a.group).map(Vec::as_slice).unwrap_or(&[]);
-                // The loop's own admission gate above (`compact_nudge_cli_
-                // supported`) already guarantees this CLI has `/compact` to
-                // paste, so the fire conditions below don't re-check it — see
-                // that gate's doc for the correction-round history.
+                // The loop's own admission gate above (`compact_command_for`)
+                // already guarantees this CLI has a compact command to paste,
+                // so the fire conditions below don't re-check it — see that
+                // gate's doc.
                 // Heuristic (role-gated, minutes-threshold, min-context-floor)
                 // fallback fire. The floor is loomux's OWN judgment call
                 // (never applied to `requested_fires` below — an agent that
@@ -35452,7 +35473,7 @@ impl OrchRegistry {
                     // primary path).
                     a.compact_pending_trusted = true;
                     a.compact_pending_armed_ms = Some(now);
-                    to_fire.push((a.id.clone(), a.group.clone()));
+                    to_fire.push((a.id.clone(), a.group.clone(), compact_command));
                 }
 
                 // Manual `/compact` detection (only while nothing is already
@@ -35599,15 +35620,15 @@ impl OrchRegistry {
         }
 
         let mut nudged = Vec::new();
-        for (id, group) in to_fire {
+        for (id, group, command) in to_fire {
             {
                 let mut tt = self.compact_nudge_times.lock_safe();
                 let v = tt.entry(group.clone()).or_default();
                 v.push(now);
                 v.retain(|&t| now.saturating_sub(t) < SPAWN_RATE_WINDOW_MS);
             }
-            self.audit(&group, brand::AUDIT_ACTOR, "compact-nudge", json!({ "agent": id }));
-            let _ = self.deliver_prompt(&id, "/compact", brand::AUDIT_ACTOR, Delivery::MidSession);
+            self.audit(&group, brand::AUDIT_ACTOR, "compact-nudge", json!({ "agent": id, "command": command }));
+            let _ = self.deliver_prompt(&id, command, brand::AUDIT_ACTOR, Delivery::MidSession);
             nudged.push(id);
         }
         for (id, group, baseline_tokens, current_tokens) in to_discard {
@@ -35842,12 +35863,20 @@ impl OrchRegistry {
     /// (as effort) from the session row, tokens from the newest counted
     /// assistant message, and no window — the store records none. See
     /// `modelstate::opencode_compaction_signal_in`.
+    ///
+    /// #413 S4: the codex rollout is found through `codex_rollout_path`'s
+    /// per-session memo, not a store walk per tick.
     #[doc(hidden)] // pub for the codex, pi and opencode context-reader integration tests
     pub fn agent_context_signals(&self) -> HashMap<String, crate::usage::CompactionSignal> {
         self.agent_context_signals_for_group(None)
     }
 
-    fn agent_context_signals_for_group(
+    /// [`Self::agent_context_signals`], restricted to `only_group`'s running
+    /// agents when one is named — the usage sampler's read (#993 S6), which
+    /// wants one group's readings and would otherwise read every group's tails
+    /// on each group's compute. `None` is every group (the compact-nudge tick).
+    #[doc(hidden)] // pub so `tests/piusage.rs` can pin that the filter holds (#3571)
+    pub fn agent_context_signals_for_group(
         &self,
         only_group: Option<&GroupId>,
     ) -> HashMap<String, crate::usage::CompactionSignal> {
@@ -35918,7 +35947,8 @@ impl OrchRegistry {
                 "codex" => {
                     let root = codex_root.as_ref()?;
                     let session = PathSegment::parse(&sid).ok()?;
-                    Some((id, crate::modelstate::codex_compaction_signal_in(root, &session)?))
+                    let path = self.codex_rollout_path(root, &session, std::time::Instant::now())?;
+                    Some((id, crate::modelstate::codex_compaction_signal_at(&path)?))
                 }
                 // #993 S2c: the group's own store, where every group opencode
                 // pane's `OPENCODE_DB` points. The session id is a SQL
@@ -35945,17 +35975,60 @@ impl OrchRegistry {
             .collect()
     }
 
-    /// Compact-nudge (#328): current context-window usage percent per Claude
-    /// agent whose group has escalation enabled
-    /// (`compact_context_threshold_percent > 0`). Derived from `signals`
-    /// (already read once for every Running Claude agent by `agent_context_
-    /// signals`, rev-42 Q4) — no transcript read of its own. Split from the
-    /// decision so `compact_escalation_should_fire` stays synthetic-input
-    /// testable.
+    /// The rollout `session` resolves to under the codex store `root`: the
+    /// remembered path while `modelstate::reuse_remembered_rollout` allows it
+    /// (one stat), else a fresh `find_codex_session_file` walk whose answer is
+    /// remembered at `now` (#3531, #413 S4). The walk and the stat both run
+    /// outside `codex_rollout_paths`, so no file I/O happens under the lock.
+    ///
+    /// A walk that finds nothing is NOT remembered: a pane whose first rollout
+    /// line has not been written yet is the ordinary case at launch, and
+    /// caching its absence would hide the first reading for a whole interval.
+    /// The residual is that such a session is walked on every tick until its
+    /// rollout appears — the pre-memo cost, for exactly the panes that have no
+    /// reading to lose.
+    fn codex_rollout_path(&self, root: &Path, session: &PathSegment, now: std::time::Instant) -> Option<PathBuf> {
+        use crate::modelstate::{reuse_remembered_rollout, RememberedRollout, CODEX_ROLLOUT_REVALIDATE_AFTER};
+        let key = (root.to_path_buf(), session.as_str().to_string());
+        let remembered = self.codex_rollout_paths.lock_safe().get(&key).cloned();
+        if let Some(r) = remembered {
+            if reuse_remembered_rollout(&r, now, CODEX_ROLLOUT_REVALIDATE_AFTER, r.path.is_file()) {
+                return Some(r.path);
+            }
+        }
+        let found = loomux_engine::sessions::find_codex_session_file(root, session);
+        let mut memo = self.codex_rollout_paths.lock_safe();
+        memo.retain(|_, r| now.saturating_duration_since(r.resolved) < CODEX_ROLLOUT_REVALIDATE_AFTER);
+        match &found {
+            Some(path) => {
+                memo.insert(key, RememberedRollout { path: path.clone(), resolved: now });
+            }
+            None => {
+                memo.remove(&key);
+            }
+        }
+        found
+    }
+
+    /// Compact-nudge (#328): current context-window usage percent per agent
+    /// whose group has escalation enabled (`compact_context_threshold_percent
+    /// > 0`). Derived from `signals` (already read once for every running
+    /// agent by `agent_context_signals`, rev-42 Q4) — no transcript read of its
+    /// own. Split from the decision so `compact_escalation_should_fire` stays
+    /// synthetic-input testable.
+    ///
+    /// #413 S4: a percent needs a window `modelstate::published_window`
+    /// accepts — the ONE rule the lifecycle panel publishes by, so the panel
+    /// never shows a percent the escalation refuses, or the reverse. A reading
+    /// with tokens and no such window (opencode always; codex or pi before
+    /// their CLI reports one, and with no group override) gets no percent, so
+    /// it never escalates, never passes the lull floor on a guess, and reads as
+    /// "unknown" to the idle-compact backstop. Those readings come back as the
+    /// second half, for `note_unwindowed_escalations` to audit.
     fn agent_context_percents(
         &self,
         signals: &HashMap<String, crate::usage::CompactionSignal>,
-    ) -> HashMap<String, u32> {
+    ) -> (HashMap<String, u32>, Vec<UnwindowedReading>) {
         // Production bug fix (PR #329 round 7): threshold AND the override
         // both come from the same per-group guardrails snapshot, so the
         // escalation percent below is computed against the SAME window the
@@ -35975,25 +36048,87 @@ impl OrchRegistry {
             .iter()
             .map(|(id, a)| (id.clone(), a.group.clone()))
             .collect();
-        signals
-            .iter()
-            .filter_map(|(id, sig)| {
-                let group = agent_groups.get(id)?;
-                if thresholds.get(group).copied().unwrap_or(0) == 0 {
-                    return None;
-                }
-                let tokens = sig.tokens?;
-                let override_tokens = overrides.get(group).copied().flatten();
-                let (window, _) = effective_context_window_tokens(
+        let mut percents = HashMap::new();
+        let mut unwindowed = Vec::new();
+        for (id, sig) in signals {
+            let Some(group) = agent_groups.get(id) else { continue };
+            if thresholds.get(group).copied().unwrap_or(0) == 0 {
+                continue;
+            }
+            let Some(tokens) = sig.tokens else { continue };
+            let override_tokens = overrides.get(group).copied().flatten();
+            let window = crate::modelstate::published_window(
+                effective_context_window_tokens(
                     override_tokens,
                     sig.window_tokens,
                     sig.window_rounded,
                     sig.model.as_deref(),
                     Some(tokens),
-                );
-                Some((id.clone(), context_percent_used(tokens, window)))
+                ),
+                Some(sig.source),
+                sig.window_tokens,
+            );
+            match window {
+                Some((window, _)) => {
+                    percents.insert(id.clone(), context_percent_used(tokens, window));
+                }
+                None => unwindowed.push(UnwindowedReading {
+                    agent: id.clone(),
+                    group: group.clone(),
+                    tokens,
+                    source: sig.source,
+                }),
+            }
+        }
+        (percents, unwindowed)
+    }
+
+    /// Audit, once per episode, each escalation-eligible agent whose reading
+    /// has tokens but no window a percent may be computed against (#413 S4):
+    /// the threshold is on for its group, its role is one the nudge serves and
+    /// its CLI has a compact command, so a human reading the timeline would
+    /// otherwise expect an escalation that can never come. `unwindowed` is this
+    /// tick's list (`agent_context_percents`); the latch is
+    /// `compact_unwindowed_noted`, rebuilt from it, so a reading that gains a
+    /// window leaves the set and a later tokens-only stretch is audited anew.
+    fn note_unwindowed_escalations(&self, unwindowed: &[UnwindowedReading]) {
+        // Two sequential snapshots, never one lock held across the other.
+        let rails: HashMap<GroupId, Guardrails> = {
+            let groups = self.groups.lock_safe();
+            unwindowed
+                .iter()
+                .filter_map(|r| Some((r.group.clone(), groups.get(&r.group)?.guardrails.clone())))
+                .collect()
+        };
+        let seats: HashMap<String, (Role, workflow::BlockId)> = {
+            let agents = self.agents.lock_safe();
+            unwindowed
+                .iter()
+                .filter_map(|r| agents.get(&r.agent).map(|a| (r.agent.clone(), (a.role, a.block.clone()))))
+                .collect()
+        };
+        let eligible: Vec<&UnwindowedReading> = unwindowed
+            .iter()
+            .filter(|r| {
+                let (Some(rails), Some((role, block))) = (rails.get(&r.group), seats.get(&r.agent)) else { return false };
+                compact_nudge_role_allowed(*role, &rails.compact_nudge_roles)
+                    && compact_command_for(rails.cli_for_block(block, *role)).is_some()
             })
-            .collect()
+            .collect();
+        let fresh: Vec<&UnwindowedReading> = {
+            let mut noted = self.compact_unwindowed_noted.lock_safe();
+            let fresh = eligible.iter().copied().filter(|r| !noted.contains(&r.agent)).collect();
+            *noted = eligible.iter().map(|r| r.agent.clone()).collect();
+            fresh
+        };
+        for r in fresh {
+            self.audit(&r.group, brand::AUDIT_ACTOR, "compact-escalation-skipped", json!({
+                "agent": r.agent,
+                "reason": "context window unknown: the reading has tokens but no reported window and no group override, so no percent exists to escalate on",
+                "tokens": r.tokens,
+                "source": r.source.as_str(),
+            }));
+        }
     }
 
     /// rev-42 delta (round 2): per-agent snapshot of the most recent delivery
@@ -36076,7 +36211,8 @@ impl OrchRegistry {
         let outputs = self.agent_output_totals();
         let manual_signals = self.agent_compact_signals();
         let signals = self.agent_context_signals();
-        let context_percents = self.agent_context_percents(&signals);
+        let (context_percents, unwindowed) = self.agent_context_percents(&signals);
+        self.note_unwindowed_escalations(&unwindowed);
         let context_tokens: HashMap<String, u64> = signals
             .iter()
             .filter_map(|(id, s)| s.tokens.map(|t| (id.clone(), t)))
@@ -36232,7 +36368,7 @@ impl OrchRegistry {
         for c in snap.candidates {
             let Some(g) = snap.groups.get(&c.group) else { continue };
             let cli = g.cli_for_block(&c.block, Role::Orchestrator);
-            if !compact_nudge_cli_supported(cli) {
+            if compact_command_for(cli).is_none() {
                 continue;
             }
             let ttl = cacheage::effective_ttl_minutes(
@@ -36332,8 +36468,10 @@ impl OrchRegistry {
     /// resolves to `agent_id` is the entire trust surface, so there is no
     /// `group_id`-style path segment and no cross-pane power (mirrors
     /// `report`/`message_orchestrator`'s self-scoping). Returns a clear
-    /// not-supported error for a non-Claude CLI rather than silently flagging
-    /// a request that can never fire. For an orchestrator caller, appends
+    /// not-supported error — the CLI's `compact_note`, via
+    /// `compact_unsupported_reason` — for a CLI with no compact command
+    /// (`compact_command_for`) rather than silently flagging a request that
+    /// can never fire. For an orchestrator caller, appends
     /// `compact_checklist_warning`'s soft nudge (never a block — the call
     /// always succeeds) if `set_state` hasn't landed recently.
     ///
@@ -36350,10 +36488,8 @@ impl OrchRegistry {
     pub fn request_compact(&self, agent_id: &str) -> Result<String, String> {
         let a = self.agent(agent_id).ok_or("unknown agent")?;
         let cli = self.cli_for_agent(&a);
-        if !compact_nudge_cli_supported(&cli) {
-            return Err(format!(
-                "/compact has no equivalent on {cli} — request_compact is not supported for this CLI"
-            ));
+        if compact_command_for(&cli).is_none() {
+            return Err(format!("request_compact is not supported here — {}", compact_unsupported_reason(&cli)));
         }
         if let Some(e) = self.agents.lock_safe().get_mut(agent_id) {
             e.compact_requested = true;
@@ -36394,8 +36530,8 @@ impl OrchRegistry {
             return Err("that agent is no longer running".into());
         }
         let cli = self.cli_for_agent(&a);
-        if !compact_nudge_cli_supported(&cli) {
-            return Err(format!("/compact has no equivalent on {cli} — orrerix cannot compact this pane"));
+        if compact_command_for(&cli).is_none() {
+            return Err(compact_unsupported_reason(&cli));
         }
         if let Some(e) = self.agents.lock_safe().get_mut(agent_id) {
             e.compact_requested = true;
@@ -40491,7 +40627,7 @@ impl OrchRegistry {
                 "last_wake": s.activity.last_wake,
                 "cache_ttl_minutes": ttl,
                 "cache_cooling_after_ms": ttl.map(loomux_engine::cacheage::cooling_after_ms),
-                "compact_supported": compact_nudge_cli_supported(&s.cli),
+                "compact_supported": compact_command_for(&s.cli).is_some(),
                 "tokens": {
                     "input": s.input_tokens,
                     "output": s.output_tokens,

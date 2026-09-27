@@ -1085,6 +1085,23 @@ pub struct OrchRegistry {
     /// recently-dead ones for a few minutes; each entry costs its message-id
     /// dedupe set, which is ids only.
     pub(super) usage_cursors: crate::usage::TranscriptCursors,
+    /// The Codex rollout each `(sessions root, session id)` resolved to, so
+    /// `agent_context_signals` stats one file per codex pane per tick instead
+    /// of walking the whole store (#3531, #413 S4). Re-walked when the file
+    /// has gone or `modelstate::CODEX_ROLLOUT_REVALIDATE_AFTER` has passed.
+    ///
+    /// **Bound**: every entry older than that interval is dropped on each
+    /// resolution, so it holds at most the codex sessions resolved in the last
+    /// five minutes — the live codex panes plus any that died inside that
+    /// window. Never held across the walk or the stat.
+    pub(super) codex_rollout_paths: TrackedMutex<HashMap<(PathBuf, String), crate::modelstate::RememberedRollout>>,
+    /// Agents whose context reading has tokens but no window a percent may be
+    /// computed against, and whose "never escalates" audit row has already
+    /// been written for that episode (#413 S4). Rebuilt from each tick's
+    /// readings, so an agent that gains a window — or dies — leaves it, and a
+    /// later tokens-only stretch is audited again. Bounded by the running
+    /// agents.
+    pub(super) compact_unwindowed_noted: TrackedMutex<HashSet<String>>,
     /// Test-only override of the Claude transcript root (`~/.claude/projects`).
     /// `None` in production. Set via `set_claude_projects_dir` so the usage
     /// reader can be pointed at a fixture tree without touching global env —
@@ -1367,6 +1384,8 @@ impl OrchRegistry {
             pending_max_notice: TrackedMutex::new("pending_max_notice", HashMap::new()),
             opencode_db_degraded: TrackedMutex::new("opencode_db_degraded", HashMap::new()),
             usage_cursors: Default::default(),
+            codex_rollout_paths: TrackedMutex::new("codex_rollout_paths", HashMap::new()),
+            compact_unwindowed_noted: TrackedMutex::new("compact_unwindowed_noted", HashSet::new()),
             claude_projects_dir: TrackedMutex::new("claude_projects_dir", None),
             claude_agents_dir_override: TrackedMutex::new("claude_agents_dir_override", None),
             copilot_agents_dir_override: TrackedMutex::new("copilot_agents_dir_override", None),

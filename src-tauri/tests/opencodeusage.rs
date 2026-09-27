@@ -1050,6 +1050,73 @@ fn group_summary_publishes_an_opencode_reading_under_its_own_source_key() {
     assert_eq!(ctx["effort"], "high", "the session's variant is an observed effort, not a fallback");
     // The store records no window, so nothing may be published as one: not by
     // the table rung (`modelstate::published_window` refuses it for this
-    // source) and so never as a percent.
+    // source) and so never as a percent. The tokens ARE published (#413 S4 —
+    // before it, an opencode pane never entered the tick that caches them, so
+    // the three nulls below held for want of any reading at all).
+    assert_eq!(ctx["tokens"], 20_000, "positive control: the reading reached the panel: {ctx}");
     assert!(ctx["window_tokens"].is_null() && ctx["window_source"].is_null() && ctx["percent"].is_null(), "{ctx}");
+}
+
+fn summary_context(reg: &OrchRegistry, group: &loomux_lib::orchestration::GroupId, agent: &str) -> serde_json::Value {
+    let s = reg.group_summary(group);
+    s["agents"].as_array().unwrap().iter().find(|a| a["id"] == agent).unwrap()["context"].clone()
+}
+
+/// The actions `run_compact_nudge` audited for `agent`.
+fn audited(reg: &OrchRegistry, group: &loomux_lib::orchestration::GroupId, agent: &str, action: &str) -> Vec<serde_json::Value> {
+    reg.audit_log(group)
+        .into_iter()
+        .filter(|e| e.action == action && e.detail["agent"] == agent)
+        .map(|e| e.detail)
+        .collect()
+}
+
+/// An opencode orchestrator with 150,000 tokens in context in a group that
+/// escalates at 50%. `over` is the group's window override.
+fn opencode_orchestrator_at_150k(over: Option<u64>) -> (OrchRegistry, tempfile::TempDir, loomux_lib::orchestration::GroupId, String) {
+    let (reg, d) = test_registry();
+    let rails = Guardrails {
+        compact_context_threshold_percent: 50,
+        compact_nudge_roles: vec!["orchestrator".into()],
+        context_window_tokens_override: over,
+        ..rails("opencode")
+    };
+    let g = reg.create_group("C:/tmp/opencode-escalate", rails).unwrap();
+    let o = reg.spawn_agent(&g.id, Role::Orchestrator, "orch", "", false, None).unwrap();
+    assert!(reg.associate_session(&g.id, &o.id, SES));
+    let db = reg.opencode_db_path(&g.id);
+    store(&db, &[Row { model: Some(JSON_MODEL), ..Row::new(SES) }]);
+    add_messages(&db, SES, &[msg("msg_0001", 1_000, assistant(Usage { input: 150_000, ..Usage::default() }))]);
+    (reg, d, g.id, o.id)
+}
+
+#[test]
+fn escalation_a_tokens_only_opencode_reading_never_escalates_and_says_why() {
+    // #413 S4 and the #3573 deferral: the store records no window, so the only
+    // rung left is Claude's model TABLE (200K for any id it does not know).
+    // 150K of that guess is 75% — over the threshold — and must not escalate.
+    let (reg, _d, gid, oid) = opencode_orchestrator_at_150k(None);
+    let _ = reg.run_compact_nudge(1);
+    let _ = reg.run_compact_nudge(2);
+
+    assert!(audited(&reg, &gid, &oid, "compact-escalation").is_empty(), "a table-guessed window never escalates");
+    let skipped = audited(&reg, &gid, &oid, "compact-escalation-skipped");
+    assert_eq!(skipped.len(), 1, "positive control: the pane WAS weighed for escalation, and audited once: {skipped:?}");
+    assert_eq!(skipped[0]["source"], "opencode-db");
+    assert_eq!(skipped[0]["tokens"], 150_000);
+    let ctx = summary_context(&reg, &gid, &oid);
+    assert_eq!(ctx["tokens"], 150_000, "{ctx}");
+    assert!(ctx["percent"].is_null(), "{ctx}");
+}
+
+#[test]
+fn escalation_an_opencode_orchestrator_under_a_group_override_escalates() {
+    // The converse that keeps the refusal above from passing by refusing
+    // opencode outright: the same reading under a human-set window escalates.
+    let (reg, _d, gid, oid) = opencode_orchestrator_at_150k(Some(200_000));
+    let _ = reg.run_compact_nudge(1);
+    let fired = audited(&reg, &gid, &oid, "compact-escalation");
+    assert_eq!(fired.len(), 1);
+    assert_eq!(fired[0]["percent"], 75);
+    assert!(audited(&reg, &gid, &oid, "compact-escalation-skipped").is_empty());
 }

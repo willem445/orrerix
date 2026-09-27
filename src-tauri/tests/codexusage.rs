@@ -1209,3 +1209,118 @@ fn a_codex_pane_in_a_second_block_of_its_class_is_read_as_codex_not_as_the_class
     assert_eq!(snap.source, "codex-transcript");
     assert_eq!(snap.input_tokens, 3_000);
 }
+
+// ---------------------------------------------------------------------------
+// #413 S4: the remembered rollout path, and escalation for a codex pane
+// ---------------------------------------------------------------------------
+
+#[test]
+fn the_codex_context_read_does_not_walk_the_store_again_on_the_next_tick() {
+    // #3531: the arm used to call `find_codex_session_file` — a walk of the
+    // whole `YYYY/MM/DD` store — on every tick. A NEWER rollout for the same
+    // thread appearing between two ticks is what a walk would pick up at once
+    // (`thread/revert`), so reading the OLD one on the second tick is the
+    // observable proof that no walk ran.
+    let (reg, _dir, seam) = codex_registry();
+    let group = reg.create_group("C:/tmp/codex-repo", rails("codex")).unwrap();
+    let agent = reg.spawn_agent(&group.id, Role::Worker, "w", "task", false, None).unwrap();
+    assert!(reg.associate_session(&group.id, &agent.id, THREAD));
+    let first = write_rollout(&seam.codex, &token_count_event(Usage { input: 123, ..Usage::default() }));
+    let tokens = |reg: &OrchRegistry| reg.agent_context_signals().remove(&agent.id).and_then(|s| s.tokens);
+    assert_eq!(tokens(&reg), Some(123), "the first tick walks and reads the only rollout");
+
+    let newer = write_raw(
+        &seam.codex,
+        &format!("rollout-2026-09-03T15-00-00-{THREAD}.jsonl"),
+        &format!(
+            "{}{}",
+            header(THREAD, "C:/tmp/codex-repo"),
+            token_count_event(Usage { input: 456, ..Usage::default() })
+        ),
+    );
+    let session = PathSegment::parse(THREAD).unwrap();
+    assert_eq!(
+        find_codex_session_file(&seam.codex, &session).as_deref(),
+        Some(newer.as_path()),
+        "positive control: a walk now would choose the newer rollout"
+    );
+    assert_eq!(tokens(&reg), Some(123), "the second tick read the remembered rollout: no walk");
+
+    // The one stat per tick is still taken: a remembered file that has gone
+    // (codex compressed it, or it was removed) is walked for at once.
+    fs::remove_file(&first).unwrap();
+    assert_eq!(tokens(&reg), Some(456), "a vanished rollout is re-resolved on the very next tick");
+}
+
+/// A `token_count` event whose `info` carries no `model_context_window` — the
+/// field is `Option<i64>` in `TokenUsageInfo`, so a rollout may lack it.
+fn token_count_without_window(input: u64) -> String {
+    let u = Usage { input, ..Usage::default() };
+    format!(
+        "{{\"timestamp\":\"2026-09-03T14:00:06.000Z\",\"type\":\"event_msg\",\
+         \"payload\":{{\"type\":\"token_count\",\"info\":{{\"total_token_usage\":{},\
+         \"last_token_usage\":{}}}}}}}\n",
+        u.json(),
+        u.json()
+    )
+}
+
+/// A codex orchestrator in a group escalating at 50%, whose rollout's last
+/// `token_count` is `event`. Returns the registry, the group and its id.
+fn codex_orchestrator(
+    over: Option<u64>,
+    event: &str,
+) -> (OrchRegistry, tempfile::TempDir, Seam, loomux_lib::orchestration::GroupId, String) {
+    let (reg, dir, seam) = codex_registry();
+    let rails = Guardrails {
+        compact_context_threshold_percent: 50,
+        compact_nudge_roles: vec!["orchestrator".into()],
+        context_window_tokens_override: over,
+        ..rails("codex")
+    };
+    let g = reg.create_group("C:/tmp/codex-repo", rails).unwrap();
+    let o = reg.spawn_agent(&g.id, Role::Orchestrator, "orch", "", false, None).unwrap();
+    assert!(reg.associate_session(&g.id, &o.id, THREAD));
+    write_rollout(&seam.codex, event);
+    (reg, dir, seam, g.id, o.id)
+}
+
+fn audited(reg: &OrchRegistry, group: &loomux_lib::orchestration::GroupId, agent: &str, action: &str) -> usize {
+    reg.audit_log(group).iter().filter(|e| e.action == action && e.detail["agent"] == agent).count()
+}
+
+fn context_of(reg: &OrchRegistry, group: &loomux_lib::orchestration::GroupId, agent: &str) -> serde_json::Value {
+    let s = reg.group_summary(group);
+    s["agents"].as_array().unwrap().iter().find(|a| a["id"] == agent).unwrap()["context"].clone()
+}
+
+#[test]
+fn escalation_a_codex_orchestrator_with_a_reported_window_escalates() {
+    // 150,000 of the reported 272,000 is 55%: over the 50% threshold.
+    let (reg, _d, _seam, gid, oid) = codex_orchestrator(None, &token_count_event(Usage { input: 150_000, ..Usage::default() }));
+    let _ = reg.run_compact_nudge(1);
+    assert_eq!(audited(&reg, &gid, &oid, "compact-escalation"), 1);
+    let ctx = context_of(&reg, &gid, &oid);
+    assert_eq!((ctx["percent"].clone(), ctx["window_source"].clone()), (serde_json::json!(55), serde_json::json!("reported")), "{ctx}");
+}
+
+#[test]
+fn escalation_a_codex_orchestrator_with_no_reported_window_never_escalates_and_shows_no_percent() {
+    let (reg, _d, _seam, gid, oid) = codex_orchestrator(None, &token_count_without_window(150_000));
+    let _ = reg.run_compact_nudge(1);
+    assert_eq!(audited(&reg, &gid, &oid, "compact-escalation"), 0, "150K of Claude's GUESSED 200K must not escalate a codex pane");
+    let ctx = context_of(&reg, &gid, &oid);
+    assert_eq!(ctx["tokens"], 150_000, "positive control: the reading reached the panel: {ctx}");
+    assert_eq!(ctx["source"], "codex-rollout");
+    assert!(ctx["percent"].is_null() && ctx["window_tokens"].is_null(), "{ctx}");
+    assert_eq!(audited(&reg, &gid, &oid, "compact-escalation-skipped"), 1, "and the timeline says why");
+}
+
+#[test]
+fn escalation_a_codex_orchestrator_under_a_group_override_escalates() {
+    let (reg, _d, _seam, gid, oid) = codex_orchestrator(Some(200_000), &token_count_without_window(150_000));
+    let _ = reg.run_compact_nudge(1);
+    assert_eq!(audited(&reg, &gid, &oid, "compact-escalation"), 1, "a human-set window is not a guess");
+    assert_eq!(context_of(&reg, &gid, &oid)["window_source"], "override");
+    assert_eq!(audited(&reg, &gid, &oid, "compact-escalation-skipped"), 0);
+}

@@ -638,15 +638,17 @@ impl OrchRegistry {
 
     // ---------- lifecycle: group summary & end-orchestration ----------
 
-    /// #993 S3 publishes each agent's detected model, effort and context-window
-    /// reading additively in its `context` object; roster picks remain available
-    /// when no live reading exists.
-    ///
     /// A one-glance summary of a group's live agents for the lifecycle panel:
     /// how many are up, the role breakdown, and uptime (per agent and for the
     /// group as a whole, measured from the earliest-started live agent — the
     /// orchestrator in practice). Also reports the paused flag so the panel can
     /// compose pause and end-orchestration sanely.
+    ///
+    /// #993 S3 publishes each agent's detected model, effort and context-window
+    /// reading additively in its `context` object; roster picks remain available
+    /// when no live reading exists. A percent is published only against a window
+    /// `modelstate::published_window` accepts — the same rule the escalation
+    /// uses (#413 S4).
     pub fn group_summary(&self, group: &GroupId) -> Value {
         let now = now_ms();
         let live: Vec<AgentEntry> = self
@@ -687,8 +689,9 @@ impl OrchRegistry {
                 earliest = Some(earliest.map_or(a.started_ms, |e| e.min(a.started_ms)));
                 let declared = g.as_ref().and_then(|g| g.guardrails.blocks.iter().find(|b| b.id == a.block));
                 // #993 S3: `None` when only the Claude table could have
-                // answered for a source it does not describe (opencode) — the
-                // panel then shows tokens without a percent.
+                // answered for a source it does not describe (codex, pi or
+                // opencode, #413 S4) — the panel then shows tokens without a
+                // percent, and the escalation skips it on the same rule.
                 let window = crate::modelstate::published_window(
                     effective_context_window_tokens(
                         context_window_override,

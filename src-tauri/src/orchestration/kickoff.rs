@@ -513,15 +513,15 @@ pub(in crate::orchestration) fn render_template(tpl: &str, vars: &[(&str, &str)]
 /// long as this value does, alongside the borrows `pairs` takes straight off
 /// `GroupInfo`.
 pub(in crate::orchestration) struct InstructionVars {
-    pub(in crate::orchestration) max: String,
-    pub(in crate::orchestration) workflow_section: String,
-    pub(in crate::orchestration) advisor_consult_note: String,
-    pub(in crate::orchestration) post_merge_workflow_hook: String,
-    pub(in crate::orchestration) merge_queue_note: String,
-    pub(in crate::orchestration) review_driver_note: String,
-    pub(in crate::orchestration) plan_driver_note: String,
-    pub(in crate::orchestration) locks_note: &'static str,
-    pub(in crate::orchestration) locks_orch_note: &'static str,
+    max: String,
+    workflow_section: String,
+    advisor_consult_note: String,
+    post_merge_workflow_hook: String,
+    merge_queue_note: String,
+    review_driver_note: String,
+    plan_driver_note: String,
+    locks_note: &'static str,
+    locks_orch_note: &'static str,
 }
 
 impl InstructionVars {

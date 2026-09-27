@@ -204,16 +204,16 @@ impl Drop for DrainerGuard {
 /// `false, false` rather than misapplying kickoff behavior to a different
 /// delivery.
 pub(in crate::orchestration) struct FreshFirstAttempt {
-    pub(in crate::orchestration) id: u64,
+    id: u64,
     pub(in crate::orchestration) wait_ready: bool,
-    pub(in crate::orchestration) confirm_autopilot: bool,
+    confirm_autopilot: bool,
     /// #517: this attempt is a FRESH spawn's kickoff brief specifically
     /// (`Delivery::FreshKickoff`), the one payload with no other route to
     /// the agent if it never lands. Deliberately NOT the same fact as
     /// `wait_ready`, which is also true for a resume re-sync: the boot wait
     /// is about "hold the paste", this is about "the payload is
     /// unrecoverable". See `kickoff_recovery_action`.
-    pub(in crate::orchestration) fresh_kickoff: bool,
+    fresh_kickoff: bool,
 }
 
 /// The ONE place a decided `KickoffTreatment` is copied onto the attempt it

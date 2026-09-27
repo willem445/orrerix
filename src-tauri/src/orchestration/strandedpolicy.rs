@@ -247,7 +247,7 @@ pub const STRANDED_SELFHEAL_MAX_HEALS: u32 = 1;
 /// in particular that the human-content guard is checked FIRST — is directly
 /// pinnable rather than an inline `if` chain a future edit could reorder
 /// (the argument `final_window_outcome` and `late_monitor_tick` already make
-/// in `unconfirmed.rs`).
+/// in this file).
 ///
 /// Inputs, in the order they are consulted:
 /// - `ledger_outstanding` — the DURABLE artifact, not a pane heuristic: this
@@ -431,7 +431,7 @@ pub enum KickoffRecovery {
 /// The one decision point for #517. Pure, so the precedence is directly
 /// pinnable rather than an inline `if` chain a future edit could reorder —
 /// the argument `stranded_selfheal_action` and `late_monitor_tick` already
-/// make (the second in `unconfirmed.rs`).
+/// make in this file.
 ///
 /// Consulted ONLY after `stranded_selfheal_action` has returned
 /// `Attention(StrandedBlocker::NotHolding)`: that is the eaten-paste

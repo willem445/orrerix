@@ -93,7 +93,7 @@ fn parse_dollar_amount(after_dollar: &str) -> Option<f64> {
 
 /// #993 S1: where `COMPACT_HOOK_SCRIPT`'s `statusline` arm leaves the latest
 /// Claude Code status-line payload for one agent — a sibling of the
-/// `promptsubmit` marker (`submit.rs`), in the same group `hooks/` dir, and typed the
+/// `promptsubmit` marker above, in the same group `hooks/` dir, and typed the
 /// same way for the same reason: the id becomes part of a file name, so the
 /// caller must hold a [`PathSegment`] before it can ask. One whole file,
 /// replaced on every write (the script writes `.tmp` and renames), because

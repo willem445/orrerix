@@ -615,7 +615,7 @@ impl QuestionMatch {
         QuestionMatch { signal, needle, line: line.chars().take(Self::MAX_LINE).collect() }
     }
 
-    pub(in crate::orchestration) fn token(signal: &'static str, token: &'static str, line: &str) -> Self {
+    fn token(signal: &'static str, token: &'static str, line: &str) -> Self {
         Self::new(signal, QuestionNeedle::Token(token), line)
     }
 }

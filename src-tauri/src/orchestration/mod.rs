@@ -463,7 +463,7 @@ pub use loomux_engine::{rddrive, reviewdrive};
 
 // The review driver's registry wiring (#1778 S3), in a file of its own.
 //
-// Not for size alone, though `mod.rs` was then tens of thousands of lines,
+// Not for size alone, though `mod.rs` being tens of thousands of lines is
 // reason enough. It is what gives §3.1 item 1's source scan a scope that a
 // RENAME cannot step over: CLAUDE.md's source-scanning-guard convention
 // forbids deciding from a binding's name, and the design note names an

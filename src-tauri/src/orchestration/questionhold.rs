@@ -11,8 +11,7 @@ use super::*;
 
 // Interactive-question paste guard (#420): Copilot (and other CLIs) surface
 // numbered/radio-select questions and y/n permission prompts as an interactive
-// TUI, not as text sitting in the input box — so the box-occupied guard
-// (`humaninput.rs`) doesn't see
+// TUI, not as text sitting in the input box — so the guard above doesn't see
 // them. A programmatic paste+Enter landing there is worse than the box-occupied
 // case: Enter doesn't merge text, it SELECTS the highlighted option (usually
 // the first), silently steering the agent's turn in an answer nobody chose. So
@@ -56,7 +55,7 @@ const QUESTION_RELEASE_CONSECUTIVE_CLEAR_POLLS: u32 = 2;
 /// - `pasted_text` — `None` for a checkpoint that runs BEFORE this delivery
 ///   has written anything (nothing of ours is on screen yet to mask);
 ///   `Some(the exact text this delivery pasted)` for a checkpoint that runs
-///   after it (pre-Enter, each retry) — `mask_own_paste` (`noticemask.rs`) strips our
+///   after it (pre-Enter, each retry) — `mask_own_paste` (above) strips our
 ///   own lines out of the tail before the detector ever sees it (rev-15 N1 /
 ///   rev-19 B-A).
 ///

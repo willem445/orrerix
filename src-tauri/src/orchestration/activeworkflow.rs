@@ -238,7 +238,7 @@ pub(in crate::orchestration) struct SwitchPlan {
     pub(in crate::orchestration) gate: Option<workflow::Gate>,
     /// The target file's own `name:` field — human prose for the modal's title,
     /// never an identifier.
-    pub(in crate::orchestration) display_name: String,
+    display_name: String,
     /// The repo-relative path the name resolved to.
     pub(in crate::orchestration) path: String,
     /// A digest of the file this plan was resolved FROM, so an apply can refuse
@@ -254,7 +254,7 @@ pub(in crate::orchestration) struct SwitchPlan {
     /// Keys on the orchestrator block that the apply writes to `group.json` but
     /// that the RUNNING pane will not pick up until it is resumed (`model`,
     /// `effort`, `context`). Empty is the common case.
-    pub(in crate::orchestration) next_resume: Vec<String>,
+    next_resume: Vec<String>,
 }
 
 impl SwitchPlan {

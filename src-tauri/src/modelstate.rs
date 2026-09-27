@@ -172,7 +172,7 @@ impl ContextSource {
     /// has to decide this rather than inherit the table.
     pub fn table_rung_applies(self) -> bool {
         match self {
-            ContextSource::Transcript | ContextSource::Statusline => true,
+            ContextSource::Transcript | ContextSource::Statusline => false,
             ContextSource::CodexRollout | ContextSource::PiSession | ContextSource::OpencodeDb => false,
         }
     }

@@ -11,6 +11,8 @@
 
 use super::*;
 
+mod copilot;
+pub use copilot::*;
 
 // Copilot session tracking: unlike Claude, copilot can't be handed a session
 // id up front — it mints one and writes `~/.copilot/session-state/<id>/` a

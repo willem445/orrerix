@@ -24,6 +24,7 @@ mod questions;
 mod tasks;
 mod agentfiles;
 mod agentlaunch;
+mod agents;
 mod audit;
 mod autonomy;
 mod compact;

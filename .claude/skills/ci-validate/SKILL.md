@@ -76,13 +76,16 @@ that follow this procedure.
 
 **Never run rustfmt on a `.rs` file over 5,000 lines (`wc -l`), nor on any
 file whose out-of-line modules (`mod x;`) include one** — rustfmt recurses
-into those. Why: rustfmt needs 16–23 GB of RAM on
-`src-tauri/src/orchestration/mod.rs`, enough to exhaust the machine's memory.
+into those. Why: rustfmt needs 16–23 GB of RAM on a file that size (#3469),
+enough to exhaust the machine's memory.
 Those files get their syntax check from CI, like everything else.
 
-The known cases are `src-tauri/src/orchestration/mod.rs` (~29k lines) and
-`src-tauri/tests/orchestration/main.rs` (~70k with its modules); the recursion rule also puts
-`src-tauri/src/lib.rs` and `crates/loomux-engine/src/lib.rs` off limits. The
+The known cases are the files over 5,000 lines themselves (`orchestration/rdtick.rs`,
+`orchestration/mcp.rs`, the engine's `reviewdrive.rs` and `workflow.rs`, and
+`src-tauri/tests/reviewdrive.rs` and `workflow.rs`) and, by the recursion rule,
+`src-tauri/src/orchestration/mod.rs` (its `mod rdtick;` and `mod mcp;`),
+`src-tauri/tests/orchestration/main.rs` (~70k with its modules), `src-tauri/src/lib.rs`
+and `crates/loomux-engine/src/lib.rs`. The
 list moves as files grow, so measure rather than trust it:
 
 ```sh
@@ -134,7 +137,7 @@ what `>/dev/null` is for). So:
 
 ### rustfmt parses the *Rust* — not the shell or jq inside it
 
-`src-tauri/src/orchestration/mod.rs` holds **three** generated shell scripts, each
+`src-tauri/src/orchestration/ghshim.rs` holds **three** generated shell scripts, each
 in a `const TPL: &str = r#"…"#`: `gh_shim_sh` (1007 lines, the merge gate),
 `git_shim_sh` (106, the release/tag-push gate) and `loomux_shim_sh` (25, the
 self-launch refusal). `workflow.rs`'s `BASE_*_JQ` consts hold jq programs the gh
@@ -148,7 +151,7 @@ mutation round taken on that push is unattributable and has to be discarded
 Extract the literal and run the parser the language has, before pushing:
 
 ```sh
-node .scratch/xtpl.cjs src-tauri/src/orchestration/mod.rs 'pub fn gh_shim_sh' \
+node .scratch/xtpl.cjs src-tauri/src/orchestration/ghshim.rs 'pub fn gh_shim_sh' \
   > .scratch/gh-shim.sh && sh -n .scratch/gh-shim.sh
 ```
 

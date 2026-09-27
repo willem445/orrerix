@@ -26,7 +26,7 @@ invisible to agents and auditors.
    security*; the dispatch check is the real gate. Never leak other groups'
    agent ids in errors (mimic the "unknown agent" wording).
 
-3. **Registry logic — a method on `OrchRegistry`, in `mod.rs` or in the
+3. **Registry logic — a method on `OrchRegistry`, in the
    `registry/<concern>.rs` file that owns its concern.** Keep mcp.rs a
    thin JSON shim; state changes live in the registry. If the action matters
    to a human reconstructing a run, write an audit line via

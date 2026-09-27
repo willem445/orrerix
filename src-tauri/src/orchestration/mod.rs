@@ -3626,6 +3626,12 @@ const INFERENCE_ARM_COOLDOWN_MS: u64 = 3 * 60_000;
 /// compaction terminally and the `PostCompact` marker is then absorbed. Shorter
 /// than `COMPACT_NUDGE_FAST_POLL_INTERVAL` on purpose: while an arm is open the
 /// marker resolves on the tick after the one that first saw it, never later.
+///
+/// **The window is the whole guarantee.** A `SessionStart(compact)` that lands
+/// after the marker resolved finds loomux's reinjection already queued; that
+/// pane is re-grounded twice (disclosed in `docs/design/orchestration.md`,
+/// "#413 S5", and pinned by
+/// `postcompact_a_sessionstart_after_the_settle_window_is_the_disclosed_duplicate`).
 pub const POSTCOMPACT_SETTLE_MS: u64 = 5_000;
 /// #413 S5: how close a `PostCompact` marker's mtime must sit to the last
 /// consumed `SessionStart(compact)` marker's for the two to be read as ONE

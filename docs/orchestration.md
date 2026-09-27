@@ -4089,7 +4089,9 @@ orrerix takes its word over any guess:
   `PreCompact`, `SessionStart` and `UserPromptSubmit` ones. When it fires, the re-grounding
   follows without waiting for the pane to go quiet or for context to shrink. Claude's own
   `SessionStart` hook re-grounds a compacted session natively; orrerix waits a few seconds
-  for that one first, and never sends a second copy on top of it.
+  for that one first, and does not send a second copy when it arrives within that wait. If
+  it arrives later — a slow hook on a busy machine — orrerix has already sent its own, and
+  the pane gets both.
 - **pi and codex** — the session file records the compaction: pi writes a `compaction`
   entry, codex a `compacted` record. orrerix reads those; it installs no hook. codex runs a
   hook only after you trust its exact definition in its `/hooks` browser, and orrerix never

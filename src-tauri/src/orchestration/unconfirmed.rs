@@ -166,8 +166,8 @@ pub fn failed_arm_route(disposition: UnconfirmedDisposition) -> FailedArmRoute {
 /// monitor only looks after `PENDING_IDLE_QUIET` of total silence, so a turn
 /// that happened has long since finished painting). An eaten paste leaves a
 /// stray Enter on an empty box: a repaint, nothing more. That is exactly
-/// `KICKOFF_TURN_EVIDENCE_BYTES`, and `kickoff_recovery_action` — 90 lines
-/// below — already trusts it to gate the far more dangerous decision of
+/// `KICKOFF_TURN_EVIDENCE_BYTES`, and `kickoff_recovery_action` — in
+/// `strandedpolicy.rs` — already trusts it to gate the far more dangerous decision of
 /// re-sending text into a live pane. **If the bar is good enough to authorise
 /// a re-delivery, it is more than good enough to authorise a notice.** This is
 /// not a weakening of #526's evidence bar and not a second mechanism beside

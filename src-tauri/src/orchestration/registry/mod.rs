@@ -32,6 +32,7 @@ mod managermail;
 mod persist;
 mod resourcelocks;
 mod solo;
+mod usage;
 mod watches;
 
 pub struct OrchRegistry {

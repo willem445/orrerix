@@ -572,7 +572,7 @@ only lets a human see and edit what will be injected.
 Backend (`src-tauri/src/orchestration/mod.rs` unless noted):
 `Task::sprint`, `Task::links`, `TaskLink`, `TASK_LINK_TYPES`, `MAX_TASK_LINKS`,
 `MAX_TASK_LINK_TARGET`, `MAX_TASK_LINK_LABEL`, `TaskPatch::sprint`, `TaskPatch::links`,
-`normalize_task_links`, `current_sprint`, `OrchRegistry::current_sprint_for`,
+`normalize_task_links`, `current_sprint`, `OrchRegistry::current_sprint_for` (`registry/tasks.rs`),
 `TaskSummary::sprint`, `TaskSummary::links`, `AgentTaskView::sprint`, `AgentTaskView::links`,
 `agent_task_view`, `orch_upsert_task`; `arg_sprint`, `arg_task_links` (`mcp.rs`).
 

@@ -408,7 +408,7 @@ against any **agent** pane (`pane.isAgentPane`, never a shell/content pane — t
 An adopted or non-seam-CLI member needs an `AgentEntry`+pty (to be a `deliver_prompt`
 target) but no token:
 
-- `channel_status`'s peers and `channel_members_json` (mod.rs) carry both `can_send`
+- `channel_status`'s peers and `channel_members_json` (`registry/channels.rs`) carry both `can_send`
   (momentary: has a token AND currently holds the reply credit/is the sender) and
   `delivery_only` (structural: has a token at all) — two different facts a receive-only
   chip needs told apart from a plain receiver simply out of credit right now.
@@ -477,7 +477,7 @@ this whole addendum exists to close.
 - **Receiver** — `channel_send` is **reply-only**: permitted only while `may_reply` is
   true (else `"you can only reply after the sender messages you"`), delivers **only to the
   sender**, and consumes the credit. A receiver never reaches another receiver — B4's star
-  topology, enforced structurally in `OrchRegistry::channel_send` (mod.rs), not left to
+  topology, enforced structurally in `OrchRegistry::channel_send` (`registry/channels.rs`), not left to
   prompt etiquette.
 
 *Rejected alternative:* "a receiver may always reply, no credit" — one field simpler, but a

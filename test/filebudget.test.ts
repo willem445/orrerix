@@ -14,7 +14,7 @@ export const BUDGETS = [
   { path: "crates/loomux-engine/src/reviewdrive.rs", ceiling: 10935, blob: "f243bda1ea691d4cfd87ad2f97209aa3fe4ea064" },
   { path: "crates/loomux-engine/src/workflow.rs", ceiling: 7538, blob: "9b95e14b299a880c597dd92ed0eb88be1db986fb" },
   { path: "src-tauri/src/orchestration/mcp.rs", ceiling: 5815, blob: "1669f55d925c7336b5280f303f0acec90048abbe" },
-  { path: "src-tauri/src/orchestration/mod.rs", ceiling: 58059, blob: "de4a07bf3a56f79d7c98400155bdcb7a28e5ba3d" },
+  { path: "src-tauri/src/orchestration/mod.rs", ceiling: 52855, blob: "695bac17e92ff99fd92626a9418089c34ff0e418" },
   { path: "src-tauri/src/orchestration/rdtick.rs", ceiling: 6381, blob: "f3aa72c058b97d6816d726e0cfa3c69ba91fe6af" },
   { path: "src-tauri/tests/reviewdrive.rs", ceiling: 16901, blob: "ff2fbca628885f89d6b417fea4d60ec24caed747" },
   { path: "src-tauri/tests/workflow.rs", ceiling: 12150, blob: "72f2cb41fc681e88aecc83a51dd6f1d2aa8e7004" },

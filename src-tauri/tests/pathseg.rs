@@ -516,7 +516,7 @@ fn no_raw_identifier_is_interpolated_into_a_file_name() {
         ),
         // A roster agent id, which is minted rather than supplied: `Role::prefix()`
         // is a `&'static str` and the numeric suffix comes from a counter, so
-        // `AgentEntry.id` is always `^(orch|w|rev|plan|solo)-[0-9]+$`. These two
+        // `AgentEntry.id` is always `^(orch|w|rev|plan|solo)-[0-9]+$`. These three
         // are reads of a hook marker; the id never leaves the roster.
         (
             "let precompact_marker = hooks_dir.join(format!(\"{}.precompact.json\", a.id));",
@@ -525,6 +525,11 @@ fn no_raw_identifier_is_interpolated_into_a_file_name() {
         ),
         (
             "let sessionstart_marker = hooks_dir.join(format!(\"{}.sessionstart-compact.json\", a.id));",
+            "a.id is a minted roster id, never caller-supplied",
+            "let agent_id = format!(\"{}-{seq}\", block.prefix());",
+        ),
+        (
+            "let postcompact_marker = hooks_dir.join(format!(\"{}.postcompact.json\", a.id));",
             "a.id is a minted roster id, never caller-supplied",
             "let agent_id = format!(\"{}-{seq}\", block.prefix());",
         ),

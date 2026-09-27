@@ -9726,7 +9726,7 @@ fn canonicalize_compact_nudge_roles(roles: Vec<String>) -> Vec<String> {
 /// pasting `/compact` there would type a command that does not exist into a
 /// live pane.
 pub fn compact_command_for(cli: &str) -> Option<&'static str> {
-    loomux_engine::model::cli_caps(cli).and_then(|caps| caps.compact_command)
+    matches!(cli, "claude" | "copilot").then_some("/compact")
 }
 
 /// The refusal `request_compact` and the human's "Compact now" give for a

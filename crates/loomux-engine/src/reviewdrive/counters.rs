@@ -90,7 +90,7 @@ pub struct DriveLimits {
     /// outside this module (E0451), so the clamping constructors are the only
     /// way in. The fields stay `pub` so a caller can still *read* the bounds —
     /// what is closed is authoring one, not inspecting it.
-    _seal: (),
+    pub(super) _seal: (),
 }
 
 impl Default for DriveLimits {

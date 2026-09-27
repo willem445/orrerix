@@ -586,7 +586,7 @@ async function openAgentPane(
     // #478: land THIS pane's launch in the setup pane the split gesture
     // already placed, rather than computing a fresh slot from `dir` — the
     // orchestrator's own pane is never minimized (`spawn_opens_minimized`,
-    // mod.rs), so `req.minimized` can't be true here and there's nothing to
+    // spawnpolicy.rs), so `req.minimized` can't be true here and there's nothing to
     // branch on. `startFromWelcome` is the same in-place-conversion primitive
     // the terminal and agent welcome-form kinds already use for a PTY-backed
     // pane (main.ts) — files/editor/git/workflow are a different, content-only
@@ -1191,7 +1191,7 @@ function dropStalePending(): void {
   }
 }
 
-/** The reserved standalone pseudo-group id — mirrors mod.rs's `SOLO_GROUP`
+/** The reserved standalone pseudo-group id — mirrors solopane.rs's `SOLO_GROUP`
  *  constant (#271 W3 addendum, part A1). */
 export const SOLO_GROUP = "__solo__";
 
@@ -2536,7 +2536,7 @@ export interface WorkflowStatus {
 /** One declared WIP cap and how full it is right now (#1175).
  *
  *  `count` is computed in the BACKEND, not tallied here: `wip_occupants` in
- *  `orchestration/mod.rs` is the one definition of what a cap counts (leaf rows
+ *  `orchestration/board.rs` is the one definition of what a cap counts (leaf rows
  *  only — a container's status is a rollup of its children), and a second tally
  *  in TypeScript would be a second definition that drifts. The board renders
  *  `count/limit`; it does not decide either number. */
@@ -2785,7 +2785,7 @@ export interface OrchChannel {
   id: string;
   created_ms?: number;
   sender: string;
-  /** The pane chip's number (mod.rs's `Channel.display_number`) — the lowest
+  /** The pane chip's number (channelmodel.rs's `Channel.display_number`) — the lowest
    *  positive integer not used by any other live channel, NOT `id`'s numeric
    *  suffix (#271 follow-up: the suffix never stops climbing, even across a
    *  disconnect — see channel.ts's `channelColor` doc). */
@@ -2862,7 +2862,7 @@ export interface OrchChannelEvent {
   agent?: string;
   /** Present on connected/updated: the channel's current sender. */
   sender?: string;
-  /** The chip number (mod.rs's `Channel.display_number`) — present on every
+  /** The chip number (channelmodel.rs's `Channel.display_number`) — present on every
    *  kind, including `closed` (captured before teardown), so a `connected`/
    *  `disconnected`/`updated` handler always has it on hand without a second
    *  lookup. */

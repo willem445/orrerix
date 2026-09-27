@@ -674,7 +674,7 @@ export const POLICY_BOUNDS: Readonly<Record<string, FieldBounds>> = {
 
 /** A legal block id: lowercase-ish, human-meaningful, safe as a filename fragment and as
  *  a shell-adjacent token. Deliberately strict — the id ends up in agent ids, pane names
- *  and (via the backend) command lines, and `sanitize_model` (mod.rs) is the precedent
+ *  and (via the backend) command lines, and `sanitize_model` (guardrails.rs) is the precedent
  *  for keeping repo-authored strings out of a shell line. */
 const BLOCK_ID_RE = /^[a-z][a-z0-9]*(?:[-_][a-z0-9]+)*$/;
 

@@ -248,7 +248,7 @@ opened.
 
 **The invariant is that narrow one, and it is not "no `Drop` takes a tracked
 lock".** A `Drop` that takes one already exists, and it exists specifically to
-run during an unwind: `DrainerGuard::drop` (`orchestration/mod.rs`) calls
+run during an unwind: `DrainerGuard::drop` (`orchestration/drainer.rs`) calls
 `queuestate::DrainerRegistry::release`, which takes the `queue_draining`
 `TrackedMutex`, and its own doc says *"The guard's `Drop` runs on unwind exactly
 like it does on a normal `return`."* It is safe, and not because it is old — it

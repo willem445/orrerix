@@ -34,7 +34,7 @@ argument, and one review of what the board now stores.
 
 ## 2. Schema — additive, and there is no migration pass
 
-`Task` (`src-tauri/src/orchestration/mod.rs`) gains exactly two fields:
+`Task` (`src-tauri/src/orchestration/board.rs`) gains exactly two fields:
 
 - `sprint: Option<u32>`, `serde(default, skip_serializing_if = "Option::is_none")` — always
   `>= 1` when present; `None` is the backlog.
@@ -569,7 +569,7 @@ only lets a human see and edit what will be injected.
 
 ## 15. Symbols
 
-Backend (`src-tauri/src/orchestration/mod.rs` unless noted):
+Backend (`src-tauri/src/orchestration/board.rs` unless noted):
 `Task::sprint`, `Task::links`, `TaskLink`, `TASK_LINK_TYPES`, `MAX_TASK_LINKS`,
 `MAX_TASK_LINK_TARGET`, `MAX_TASK_LINK_LABEL`, `TaskPatch::sprint`, `TaskPatch::links`,
 `normalize_task_links`, `current_sprint`, `OrchRegistry::current_sprint_for` (`registry/tasks.rs`),
@@ -770,7 +770,7 @@ human's own edit being wrong, and §14's "the editor re-spells none of the backe
 still holds: the errors that teach are the ones the human keeps seeing.
 
 `STALE_LINK_ETAG_PREFIX` is the one string both sides spell, so it is pinned the way the status
-and link-type vocabularies are — a test reads the Rust const out of `mod.rs` and compares. Drift
+and link-type vocabularies are — a test reads the Rust const out of `board.rs` and compares. Drift
 there is invisible otherwise: every other refusal keeps behaving exactly as before, and the
 board simply stops recovering from the one error it was built to recover from.
 
@@ -797,7 +797,7 @@ board simply stops recovering from the one error it was built to recover from.
   already takes for every other refusal.
 ### 16.8 Symbols
 
-Backend (`src-tauri/src/orchestration/mod.rs`): `link_etag`, `STALE_LINK_ETAG_PREFIX`,
+Backend (`src-tauri/src/orchestration/board.rs`): `link_etag`, `STALE_LINK_ETAG_PREFIX`,
 `BoardTask`, `board_task`, `TaskPatch::expect_link_etag`, `TaskSummary::link_etag`,
 `AgentTaskView::link_etag`; the `expect_link_etag` argument on `upsert_task` (`mcp.rs`) and on
 `orch_upsert_task`.

@@ -28,8 +28,7 @@ CLAUDE.md constraint 7's carve-out (#469) lets an orchestrator merge approved su
 five. Today that path is sequential and unguarded *at the batch level*:
 
 - Sub-PRs merge one at a time, by hand, as each one's own gate clears.
-- The gate is **per-PR**. The `gh` shim (`orchestration/mod.rs::gh_shim_sh:361`, gate body
-  ~705–960) mechanically refuses `gh pr merge` until every reviewer the workflow gate names
+- The gate is **per-PR**. The `gh` shim (`orchestration/ghshim.rs::gh_shim_sh`) mechanically refuses `gh pr merge` until every reviewer the workflow gate names
   has recorded a `pass` against the PR's *current head*. That is real enforcement, and it
   says nothing whatsoever about the **combination**.
 - N individually-green sub-PRs can therefore produce a **red integration branch** — a

@@ -79,7 +79,7 @@ test("no armed source (already null) stays null regardless of liveness", () => {
 // ---------- per-channel color/number (distinguishing concurrent channels) ----------
 //
 // #271 follow-up (PR #285 live-testing feedback): the chip's number/color derive
-// from the backend-assigned `displayNumber` (mod.rs's `Channel.display_number`),
+// from the backend-assigned `displayNumber` (channelmodel.rs's `Channel.display_number`),
 // NOT the channel id's `chan-N` suffix — that suffix is a monotonic counter that
 // never stops climbing, even across a disconnect, so it kept showing "⇄2" for the
 // only active channel right after chan-1 (the actual "⇄1") closed.

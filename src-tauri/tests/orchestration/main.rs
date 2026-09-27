@@ -193,7 +193,7 @@ use loomux_lib::orchestration::{
     // #1156: the strict Agile ladder, pinned against Rust literals here
     // (`the_ladder_table_is_pinned_on_the_rust_side`) and against the board's
     // copy from the OTHER side, by a guard that reads `ladder_rule`'s arms out
-    // of mod.rs (`test/taskboard.test.ts`).
+    // of board.rs (`test/taskboard.test.ts`).
     ladder_rule, LadderRule, TASK_KINDS,
     // #865: done-row cap on list_tasks — the pure keep/drop rule and its default.
     filter_done_rows, LIST_TASKS_DONE_CAP,

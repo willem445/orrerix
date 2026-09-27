@@ -682,7 +682,7 @@ gate") so the orchestrator can revise its spawn/review strategy mid-session
 instead of discovering the change on a bounced merge.
 
 The notice is `workflow_mode_notice`'s literal text
-(`src-tauri/src/orchestration/mod.rs`): off reads `"[orrerix] workflow mode
+(`src-tauri/src/orchestration/activeworkflow.rs`): off reads `"[orrerix] workflow mode
 changed: built-in roster, no merge gate — re-plan your spawn/review
 strategy."`; on reads `"[orrerix] workflow mode changed: '<name>' active,
 <gate clause> — re-plan your spawn/review strategy."`, where `<gate clause>`
@@ -1894,7 +1894,7 @@ task board's Approve control, the groupview workflow row):
    push-to-merge paths, not GitHub's own merge button.
 
 The shipped text: the shim and the Rust-side status line share
-`GATE_REFUSAL_EXITS` (`src-tauri/src/orchestration/mod.rs`) verbatim — with
+`GATE_REFUSAL_EXITS` (`src-tauri/src/orchestration/activeworkflow.rs`) verbatim — with
 one #1889 exception in the status line only, below —
 `"Three ways forward: (1) get the named reviewer(s) to run and record a
 verdict, (2) have the human turn workflow mode off for this session (clears

@@ -14,7 +14,7 @@ Delivery already runs on the backend:
 
 | Step | Where it runs |
 | --- | --- |
-| Queue drain and its cadence | `run_queue_drainer` (`src-tauri/src/orchestration/mod.rs`), a Rust thread per pane that sleeps `queue::QUEUE_DRAIN_POLL` (2 s) between polls |
+| Queue drain and its cadence | `run_queue_drainer` (`src-tauri/src/orchestration/drainer.rs`), a Rust thread per pane that sleeps `queue::QUEUE_DRAIN_POLL` (2 s) between polls |
 | Paste, echo verification, Enter, submit confirmation | `deliver_now`, on that same thread, writing through the pane's own writer thread (`pty.rs`, `spawn_pane_writer`) |
 | Hold re-checks (the question gate, box occupancy) | the drainer's polls, reading the backend's own terminal grid (`loomux_engine::termgrid`) built from the output ring |
 | The output ring every one of those reads | teed on the PTY reader thread in `pty.rs`, *before* the coalescing pump emits anything to the webview |

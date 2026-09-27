@@ -664,7 +664,7 @@ swapped the group's roster to whatever the repo currently declares and could
 delete its merge-gate spec file if the repo no longer declares one. Neither
 the roster swap nor the gate deletion goes through anything a human sees; a
 two-button "Start fresh?" confirm is not the launcher's roster preview, and
-`Launch`'s own contract (`orchestration/mod.rs`) is explicit that a resume's
+`Launch`'s own contract (`orchestration/agentmodel.rs`) is explicit that a resume's
 consent moment is the ORIGINAL launch, not this one.
 `create_orchestration_group` now takes `launch: Launch` as its own explicit
 argument instead of inferring it — `resume_recorded_session`'s orchestrator

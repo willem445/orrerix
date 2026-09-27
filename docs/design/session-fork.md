@@ -345,8 +345,8 @@ toast.
 | piece | where | what |
 | --- | --- | --- |
 | the table | `crates/loomux-engine/src/model.rs` | `ForkSeam` (`Flag`/`Subcommand`/`ParentFlag`/`None`), `CliCaps.fork`, `fork_refusal`, `CLAUDE_FORK_PREMINTS_CHILD_ID` |
-| the backend line | `src-tauri/src/orchestration/registry/agentlaunch.rs` + `src-tauri/src/orchestration/mod.rs` | `build_agent_command_ex` / `build_agent_argv_ex` (`Result`) and each CLI arm reading its row (in `registry/agentlaunch.rs`); `fork_line` (in `mod.rs`) |
-| the delegate fork | `src-tauri/src/orchestration/mod.rs` + `src-tauri/src/orchestration/registry/solo.rs` + `src-tauri/src/orchestration/registry/spawn.rs` | `ForkSpawn`, `fork_kickoff_prompt` (in `mod.rs`); `fork_agent`, `request_solo_fork` (in `registry/solo.rs`); `spawn_agent_full` (in `registry/spawn.rs`) |
+| the backend line | `src-tauri/src/orchestration/registry/agentlaunch.rs` + `src-tauri/src/orchestration/fork.rs` | `build_agent_command_ex` / `build_agent_argv_ex` (`Result`) and each CLI arm reading its row (in `registry/agentlaunch.rs`); `fork_line` (in `fork.rs`) |
+| the delegate fork | `src-tauri/src/orchestration/fork.rs` + `src-tauri/src/orchestration/registry/solo.rs` + `src-tauri/src/orchestration/registry/spawn.rs` | `ForkSpawn`, `fork_kickoff_prompt` (in `fork.rs`); `fork_agent`, `request_solo_fork` (in `registry/solo.rs`); `spawn_agent_full` (in `registry/spawn.rs`) |
 | the MCP tool | `src-tauri/src/orchestration/mcp.rs` | `fork_session_tool`, the `fork_session` arm, the lead's listing and gate rows |
 | the commands | `src-tauri/src/orchestration/commands/panes.rs` + `src/orchestration.ts` | `orch_fork_agent` / `orchForkAgent`; `orch_fork_solo_result` / `orchForkSoloResult` (the lead self-fork's ack) |
 | the frontend line | `src/panerestore.ts` | `FORK_SEAMS`, `forkGrammarOf`, `agentForkCommand`, `canForkCli`, `forkPremintsChild`, `forkPaneName` |
@@ -358,7 +358,7 @@ toast.
 | the name prompt (F5) | `src/forkname.ts` + `src/forkprompt.ts` | `forkNameDecision` (tested), `promptForkName` (DOM) |
 | the lineage (F5) | `src/forklineage.ts` | `gatherForkPointers`, `buildForkIndex`, `lineageOf`, `parentLink`, `forkTreeRows`, `sessionDisplayName` |
 | the durable Solo pointer (F5) | `src/sessionlog.ts` | `SessionRecord.fork_of`, set once in `record` |
-| the roster pointer on the wire (F5) | `src-tauri/src/orchestration/mod.rs` | `SessionRole.forked_from` |
+| the roster pointer on the wire (F5) | `src-tauri/src/orchestration/agentmodel.rs` | `SessionRole.forked_from` |
 | the tree and the crumb (F5) | `src/sessions.ts` + `src/pane.ts` + `src/main.ts` | `SessionForkHost`, `forkIndex`; `Pane.setForkCrumb`; `refreshForkCrumbs`, `returnToSession` |
 
 ## Public-contract changes

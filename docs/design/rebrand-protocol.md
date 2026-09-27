@@ -208,8 +208,7 @@ somebody else's filename does not.**
   what is left is read by a delegate on every spawn: `copilot_agent_body`'s system
   prompt (*"the worker for this loomux-orchestrated group"*), `queued_text`'s
   lock-queue MCP reply (*"loomux types an `[orrerix]` notice into this pane"* — both
-  brands in one sentence), and the delivery- and queue-notice text around
-  `mod.rs:13912`, `:14103`, `:17352-17416` and `:18502`. Nothing matches on any of
+  brands in one sentence), and the delivery- and queue-notice text. Nothing matches on any of
   it, which is why it is out of scope under the governing line at the top of this
   list — not because an agent never sees it.
 

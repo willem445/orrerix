@@ -26,7 +26,7 @@
 //!   short persona) could exceed Windows `CreateProcessW`'s 32,767-character
 //!   command-line limit. `--append-system-prompt-file` itself is back too,
 //!   as the write-failure fallback (see `PersonaInject::claude_append_
-//!   system_prompt_file`'s doc in `mod.rs`) — the #222 move away from it was
+//!   system_prompt_file`'s doc in `orchestration/persona.rs`) — the #222 move away from it was
 //!   about `--agents` being newer and native, never about the file-based
 //!   flag having a functional problem, so nothing disqualified it from
 //!   returning as a fallback. See `persona_inject` in `registry/agentfiles.rs`.

@@ -45,9 +45,9 @@ use super::{
 /// role templates byte-for-byte. These are pinned instead by the goldens and the
 /// key-set assertion §5.5 prescribes, over the *rendered* output rather than the
 /// source, because the rendered text is what a reviewer receives.
-pub const DRIVER_REVIEW_TPL: &str = include_str!("templates/driver-review.md");
-pub const DRIVER_DELTA_TPL: &str = include_str!("templates/driver-delta.md");
-pub const DRIVER_FIX_TPL: &str = include_str!("templates/driver-fix.md");
+pub const DRIVER_REVIEW_TPL: &str = include_str!("../templates/driver-review.md");
+pub const DRIVER_DELTA_TPL: &str = include_str!("../templates/driver-delta.md");
+pub const DRIVER_FIX_TPL: &str = include_str!("../templates/driver-fix.md");
 
 /// Every value the driver interpolates into a brief, scrubbed (§5.5).
 ///

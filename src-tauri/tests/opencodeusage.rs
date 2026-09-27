@@ -917,6 +917,9 @@ fn context_an_unknown_session_or_absent_store_is_no_signal() {
     // nothing.
     let s = Scratch::new("ctx-unknown");
     store(&s.db(), &[Row { model: Some(JSON_MODEL), ..Row::new(SES) }]);
+    // A real store always has the `message` table; without it the reader
+    // reports schema drift, which is also no signal but not the case here.
+    add_messages(&s.db(), SES, &[]);
     assert!(opencode_compaction_signal_in(&s.db(), SES).is_some(), "positive control: the known session reads");
     assert!(opencode_compaction_signal_in(&s.db(), SUB).is_none(), "an id with no session row is no signal");
     assert_eq!(opencodedb::session_model_state(&s.db(), SUB).unwrap(), None);

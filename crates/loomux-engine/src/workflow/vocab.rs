@@ -291,7 +291,7 @@ pub fn clis_with_a_structured_driver() -> Vec<&'static str> {
 /// Returns the normalized (trimmed, lowercased) value; empty for an absent key.
 /// One function for both keys so the two can never drift on case handling or on
 /// which check fires first.
-pub(super) fn validate_knob(
+fn validate_knob(
     field: &str,
     raw: &str,
     vocabulary: &[&str],

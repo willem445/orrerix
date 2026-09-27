@@ -37,6 +37,7 @@ mod persist;
 mod resourcelocks;
 mod roster;
 mod solo;
+mod stranded;
 mod usage;
 mod watches;
 

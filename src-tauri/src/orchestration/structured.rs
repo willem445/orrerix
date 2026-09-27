@@ -269,14 +269,18 @@ pub fn parks_on_dialog(role: super::Role) -> bool {
 
 /// The launch spec for a pi pane, from the same inputs the PTY arm reads.
 ///
-/// **One derivation, so the parity claim is checkable rather than asserted.**
+/// **One derivation, from the same containment question the PTY arm asks.**
 /// `harness-adapters.md` section 2.3 requires the containment argv to be
 /// byte-identical across drivers — a structured driver that dropped a deny flag
-/// would be a capability grant by transport. Building the spec here from the
-/// same values `build_agent_argv_ex` uses is what makes
+/// would be a capability grant by transport. Here, as in `build_agent_argv_ex`,
+/// the trust flag and the edit-deny list are both decided by
+/// `containment.denies_edits()`. What a test pins is narrower:
 /// `the_structured_launch_line_is_the_pty_arm_plus_mode_rpc`
-/// (`tests/structuredspawn.rs`) a comparison of two real
-/// derivations rather than of one derivation against a hand-copied list.
+/// (`tests/structuredspawn.rs`) checks this function's `NoEdits` output
+/// against literals (`--no-approve`, `"edit,write"`). Nothing derives the PTY
+/// arm's line and compares the two, so parity with `build_agent_argv_ex` is a
+/// stated residual rather than a covered one — the same gap the engine's
+/// `APPROVE_FLAG` doc states.
 #[allow(clippy::too_many_arguments)]
 pub fn pi_launch_spec(
     session_id: Option<&str>,

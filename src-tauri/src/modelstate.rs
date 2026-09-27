@@ -153,6 +153,25 @@ impl ContextSource {
             ContextSource::OpencodeDb => "opencode-db",
         }
     }
+
+    /// #993 S3: whether a window this source did NOT report may be filled from
+    /// the ladder's model-name table (rung 3) — and so from the clamp over it —
+    /// when `group_summary` publishes the reading. The table is Claude's
+    /// (`usage::claude_context_window_tokens`); the sources that fall to it
+    /// today keep the behaviour they shipped with. opencode's store records no
+    /// window and opencode documents no other source loomux may read, so a
+    /// table answer for it would be a guessed percent over a non-Claude id —
+    /// the thing the S2c section says must not happen. Exhaustive on purpose: a
+    /// new reader has to decide this rather than inherit the table.
+    pub fn table_rung_applies(self) -> bool {
+        match self {
+            ContextSource::Transcript
+            | ContextSource::Statusline
+            | ContextSource::CodexRollout
+            | ContextSource::PiSession => true,
+            ContextSource::OpencodeDb => false,
+        }
+    }
 }
 
 /// Which rung of the window ladder decided a context window.
@@ -234,6 +253,31 @@ pub fn label_rounded_report((window, source): (u64, WindowSource), reported_roun
     match source {
         WindowSource::Reported if reported_rounded => (window, WindowSource::ReportedRounded),
         _ => (window, source),
+    }
+}
+
+/// The window `group_summary` publishes for one reading (#993 S3): the ladder's
+/// answer, unless nothing but a guess decided it for a `source` whose table
+/// rung does not apply ([`ContextSource::table_rung_applies`]) — then `None`,
+/// and the panel shows tokens without a percent. A guess is the `table` rung,
+/// or a `clamped` one with no report under it (the clamp then widened the
+/// table's answer, not the CLI's). An override still stands: a human set it.
+/// An unknown source (no reading cached yet) keeps the ladder's answer, which
+/// is what every pane published before S3.
+pub fn published_window(
+    ladder: (u64, WindowSource),
+    source: Option<ContextSource>,
+    reported_tokens: Option<u64>,
+) -> Option<(u64, WindowSource)> {
+    let guessed = match ladder.1 {
+        WindowSource::Table => true,
+        WindowSource::Clamped => reported_tokens.filter(|&w| w > 0).is_none(),
+        WindowSource::Override | WindowSource::Reported | WindowSource::ReportedRounded => false,
+    };
+    if guessed && source.is_some_and(|s| !s.table_rung_applies()) {
+        None
+    } else {
+        Some(ladder)
     }
 }
 
@@ -858,6 +902,54 @@ mod tests {
             (500_000, WindowSource::Override)
         );
         assert_eq!(WindowSource::ReportedRounded.as_str(), "reported-rounded");
+    }
+
+    #[test]
+    fn an_opencode_reading_never_publishes_a_window_only_the_table_decided() {
+        let table = context_window_ladder(None, None, 200_000, Some(40_000));
+        assert_eq!(table, (200_000, WindowSource::Table), "precondition: only the table answered");
+        assert_eq!(published_window(table, Some(ContextSource::OpencodeDb), None), None);
+        // A clamp over the table is the table's guess widened — still no report.
+        let clamped = context_window_ladder(None, None, 200_000, Some(250_000));
+        assert_eq!(clamped, (250_000, WindowSource::Clamped));
+        assert_eq!(published_window(clamped, Some(ContextSource::OpencodeDb), None), None);
+        // A human override is not a guess, for opencode as for anyone.
+        let over = context_window_ladder(Some(128_000), None, 200_000, Some(40_000));
+        assert_eq!(published_window(over, Some(ContextSource::OpencodeDb), None), Some((128_000, WindowSource::Override)));
+        // A clamp over a REPORT widened the CLI's own figure, not the table's.
+        let over_report = context_window_ladder(None, Some(100_000), 200_000, Some(150_000));
+        assert_eq!(over_report, (150_000, WindowSource::Clamped));
+        assert_eq!(published_window(over_report, Some(ContextSource::OpencodeDb), Some(100_000)), Some(over_report));
+    }
+
+    #[test]
+    fn every_other_source_and_the_pre_reading_state_keep_the_table_answer() {
+        // The converse that makes the opencode refusal discriminating: a
+        // `published_window` that refused every table answer would pass the
+        // test above and fail here.
+        let table = context_window_ladder(None, None, 200_000, Some(40_000));
+        let clamped = context_window_ladder(None, None, 200_000, Some(250_000));
+        for source in [
+            ContextSource::Transcript,
+            ContextSource::Statusline,
+            ContextSource::CodexRollout,
+            ContextSource::PiSession,
+        ] {
+            assert!(source.table_rung_applies(), "{source:?}");
+            assert_eq!(published_window(table, Some(source), None), Some(table), "{source:?}");
+            assert_eq!(published_window(clamped, Some(source), None), Some(clamped), "{source:?}");
+        }
+        assert!(!ContextSource::OpencodeDb.table_rung_applies());
+        assert_eq!(published_window(table, None, None), Some(table), "no reading yet: the pre-S3 answer");
+    }
+
+    #[test]
+    fn a_launch_fallback_effort_is_not_an_observed_one() {
+        let mut s = transcript(Some(1_000), "openrouter/z-ai/glm-5.3-flash");
+        s.effort = Some("high".into());
+        assert_eq!(s.observed_effort(), Some("high"), "a reported level is observed");
+        s.effort_is_launch_fallback = true;
+        assert_eq!(s.observed_effort(), None, "the launch knob is configuration, not a reading");
     }
 
     #[test]

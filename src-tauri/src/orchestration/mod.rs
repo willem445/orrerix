@@ -12906,8 +12906,11 @@ pub struct AgentEntry {
     pub last_context_window_rounded: bool,
     /// #993 S3: latest observed effort and context source, cached with the
     /// token reading so group-summary polling performs no artifact reads.
+    /// The effort is `CompactionSignal::observed_effort`, never a launch
+    /// fallback; the source is typed so the published window can ask it
+    /// whether the table rung applies (`modelstate::published_window`).
     pub last_context_effort: Option<String>,
-    pub last_context_source: Option<String>,
+    pub last_context_source: Option<crate::modelstate::ContextSource>,
     /// Production bug fix (PR #329 round 7): INFERENCE arms (banner, manual
     /// detection — never the loomux-initiated/trusted arm, which needs no
     /// inference at all) may only arm while `now >= this`. Live demo
@@ -36106,8 +36109,12 @@ impl OrchRegistry {
                 // read miss) leaves it alone, like the model.
                 a.last_context_window = sig.window_tokens;
                 a.last_context_window_rounded = sig.window_rounded;
-                a.last_context_effort = sig.effort.clone();
-                a.last_context_source = Some(sig.source.as_str().to_string());
+                // #993 S3: an observed effort only — a pi launch fallback is the
+                // block's knob, already published as `declared.effort`, and
+                // publishing it here too would pass configuration off as a
+                // reading (the rule S6's samples follow).
+                a.last_context_effort = sig.observed_effort().map(str::to_owned);
+                a.last_context_source = Some(sig.source);
             }
         }
         let nudged = self.compact_nudge_tick(
@@ -40078,9 +40085,9 @@ impl OrchRegistry {
                     // "unknown model" and back; on every CLI but claude the two
                     // fields are equal anyway.
                     model: s.current_model.clone().or_else(|| s.model.clone()),
-                    effort: context_signals.get(&s.agent_id).and_then(|signal| {
-                        if signal.effort_is_launch_fallback { None } else { signal.effort.clone() }
-                    }),
+                    effort: context_signals
+                        .get(&s.agent_id)
+                        .and_then(|signal| signal.observed_effort().map(str::to_owned)),
                 };
                 if usageseries::should_sample(state.last.get(&s.key), &sample, bucket) {
                     to_write.push(usageseries::SeriesRow::Sample(sample));

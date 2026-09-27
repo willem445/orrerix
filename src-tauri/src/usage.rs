@@ -446,6 +446,21 @@ pub struct CompactionSignal {
     pub source: crate::modelstate::ContextSource,
 }
 
+impl CompactionSignal {
+    /// The effort this reading OBSERVED: `effort` unless it is the pi launch
+    /// fallback, which is the block's configured knob rather than anything the
+    /// session reported. The one rule both the usage-series sample (#993 S6)
+    /// and `group_summary`'s `context.effort` (S3) publish by — the knob
+    /// itself is already published as `context.declared.effort`.
+    pub fn observed_effort(&self) -> Option<&str> {
+        if self.effort_is_launch_fallback {
+            None
+        } else {
+            self.effort.as_deref()
+        }
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Transcript location
 // ---------------------------------------------------------------------------

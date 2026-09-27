@@ -686,12 +686,19 @@ impl OrchRegistry {
                 }
                 earliest = Some(earliest.map_or(a.started_ms, |e| e.min(a.started_ms)));
                 let declared = g.as_ref().and_then(|g| g.guardrails.blocks.iter().find(|b| b.id == a.block));
-                let (window_tokens, window_source) = effective_context_window_tokens(
-                    context_window_override,
+                // #993 S3: `None` when only the Claude table could have
+                // answered for a source it does not describe (opencode) — the
+                // panel then shows tokens without a percent.
+                let window = crate::modelstate::published_window(
+                    effective_context_window_tokens(
+                        context_window_override,
+                        a.last_context_window,
+                        a.last_context_window_rounded,
+                        a.last_context_model.as_deref(),
+                        a.last_context_tokens,
+                    ),
+                    a.last_context_source,
                     a.last_context_window,
-                    a.last_context_window_rounded,
-                    a.last_context_model.as_deref(),
-                    a.last_context_tokens,
                 );
                 json!({
                     "id": a.id, "name": a.name, "role": a.role,
@@ -726,12 +733,12 @@ impl OrchRegistry {
                         // Production bug fix (PR #329 round 7): model-aware
                         // window (`effective_context_window_tokens`) instead
                         // of a flat 200K assumption — see its doc.
-                        "percent": a.last_context_tokens.map(|t| context_percent_used(t, window_tokens)),
-                        "window_tokens": a.last_context_tokens.map(|_| window_tokens),
-                        "window_source": a.last_context_tokens.map(|_| window_source.as_str()),
+                        "percent": a.last_context_tokens.zip(window).map(|(t, (w, _))| context_percent_used(t, w)),
+                        "window_tokens": a.last_context_tokens.and(window).map(|(w, _)| w),
+                        "window_source": a.last_context_tokens.and(window).map(|(_, s)| s.as_str()),
                         "model": a.last_context_model,
                         "effort": a.last_context_effort,
-                        "source": a.last_context_source,
+                        "source": a.last_context_source.map(|s| s.as_str()),
                         "declared": {
                             "model": declared.map(|b| b.model.as_str()).unwrap_or(""),
                             "effort": declared.map(|b| b.effort.as_str()).unwrap_or(""),

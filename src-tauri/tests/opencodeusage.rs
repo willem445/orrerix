@@ -1031,3 +1031,25 @@ fn context_the_opencode_arm_never_reads_another_clis_pane() {
         "a claude pane must never be read out of the opencode store because a row there carries its id"
     );
 }
+
+#[test]
+fn group_summary_publishes_an_opencode_reading_under_its_own_source_key() {
+    let (reg, _d) = test_registry();
+    let g = reg.create_group("C:/tmp/opencode-summary", rails("opencode")).unwrap();
+    let w = reg.spawn_agent(&g.id, Role::Worker, "w", "task", false, None).unwrap();
+    assert!(reg.associate_session(&g.id, &w.id, SES));
+    let db = reg.opencode_db_path(&g.id);
+    store(&db, &[Row { model: Some(JSON_MODEL), ..Row::new(SES) }]);
+    add_messages(&db, SES, &[msg("msg_0001", 1_000, assistant(Usage { input: 20_000, ..Usage::default() }))]);
+
+    let _ = reg.run_compact_nudge(1);
+    let summary = reg.group_summary(&g.id);
+    let ctx = summary["agents"].as_array().unwrap().iter().find(|a| a["id"] == w.id).unwrap()["context"].clone();
+    assert_eq!(ctx["source"], "opencode-db", "{ctx}");
+    assert_eq!(ctx["model"], "opencode/deepseek-v4-flash");
+    assert_eq!(ctx["effort"], "high", "the session's variant is an observed effort, not a fallback");
+    // The store records no window, so nothing may be published as one: not by
+    // the table rung (`modelstate::published_window` refuses it for this
+    // source) and so never as a percent.
+    assert!(ctx["window_tokens"].is_null() && ctx["window_source"].is_null() && ctx["percent"].is_null(), "{ctx}");
+}

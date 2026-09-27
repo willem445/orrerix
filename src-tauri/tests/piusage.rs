@@ -1274,3 +1274,40 @@ fn context_the_pi_arm_follows_each_panes_own_block_not_its_class_default() {
         "a claude pane must never be read out of the pi store because a file there carries its id"
     );
 }
+
+fn summary_context(reg: &OrchRegistry, group: &loomux_lib::orchestration::GroupId, agent: &str) -> Value {
+    let s = reg.group_summary(group);
+    s["agents"].as_array().unwrap().iter().find(|a| a["id"] == agent).unwrap()["context"].clone()
+}
+
+#[test]
+fn group_summary_publishes_a_pi_launch_fallback_as_declared_not_as_the_live_effort() {
+    // #993 S3 mirrors S6: the block's --thinking knob stands in for a level the
+    // tail does not name, and that is configuration, not a reading. It is
+    // published once, as `declared.effort`, and `effort` stays empty.
+    let (reg, _d) = test_registry();
+    let mut g = rails("pi");
+    for b in g.blocks.iter_mut().filter(|b| b.kind == Role::Worker) {
+        b.effort = "high".into();
+    }
+    let g = reg.create_group("C:/tmp/pi-summary", g).unwrap();
+    let w = reg.spawn_agent(&g.id, Role::Worker, "w", "task", false, None).unwrap();
+    let sid = w.session_id.clone().expect("a pi pane carries a preminted session id");
+    let dir = reg.pi_sessions_dir(&g.id);
+    let turn = assistant("e1", "openrouter", "z-ai/glm-5.3-flash", Turn { input: 20_000, ..Turn::default() });
+
+    write_session(&dir, &sid, &file(&[header(&sid, "C:/tmp/pi-summary"), turn.clone()]));
+    let _ = reg.run_compact_nudge(1);
+    let ctx = summary_context(&reg, &g.id, &w.id);
+    assert_eq!(ctx["source"], "pi-session", "positive control: the tick cached this pane's reading");
+    assert_eq!(ctx["model"], "openrouter/z-ai/glm-5.3-flash");
+    assert!(ctx["effort"].is_null(), "a launch fallback must not publish as the live effort: {ctx}");
+    assert_eq!(ctx["declared"]["effort"], "high", "the knob is still published, as the declared pick");
+
+    // The discriminating converse: a level the file names IS the live effort.
+    write_session(&dir, &sid, &file(&[header(&sid, "C:/tmp/pi-summary"), thinking_level_change("e0", "low"), turn]));
+    let _ = reg.run_compact_nudge(2);
+    let ctx = summary_context(&reg, &g.id, &w.id);
+    assert_eq!(ctx["effort"], "low", "a reported level publishes as effort: {ctx}");
+    assert_eq!(ctx["declared"]["effort"], "high");
+}

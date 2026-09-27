@@ -4068,6 +4068,8 @@ file, one entry per line, that a human can open directly.
 effort and context-window usage beside its uptime and cost. It uses the CLI-reported window
 when available; usage percentages are shown only when both tokens and a window are known.
 Before a reading exists, the declared model and effort are labelled as declared.
+The effort shown is always one the CLI reported: a pi pane whose session no longer names its
+thinking level shows no effort rather than passing its configured level off as the live one.
 The panel shows the compact-nudge phase only when there is something worth a
 look: armed (waiting to observe the pane go busy), awaiting evidence (busy
 observed, waiting on quiet to resolve), re-grounding (a reinjection is in

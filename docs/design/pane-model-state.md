@@ -268,8 +268,10 @@ rather than a guess. An id in `model_context_windows_rounded` sets
 window and rounded flag on the agent. The compact-nudge loop still admits only
 the CLIs `compact_nudge_cli_supported` names (claude and copilot), so a pi
 reading does not yet reach the lifecycle panel's token count or the threshold
-escalation. S4 replaces that gate. This slice changes nothing a user sees, which
-is why `docs/orchestration.md` is untouched.
+escalation. S4 replaces that gate. S2b itself changed nothing a user sees. Since
+S3, `group_summary` publishes the cached model and observed effort, so a pi
+pane's lifecycle-panel label names its model; the token count and percent still
+wait on S4.
 
 **The effort fallback, and a correction to the plan's premise.** The plan
 said the file records no initial thinking level, so the initial effort would be
@@ -375,8 +377,9 @@ Once S4 opens the compact-nudge gate to opencode, that table would give an
 opencode reading a guessed percent. The plan's rule, which S4 implements, is
 that a tokens-only reading never escalates.
 
-**What reads it today.** Nothing a user sees. `run_compact_nudge` caches the
-signal's model, window and rounded flag on the agent. The compact-nudge and
+**What reads it today.** `run_compact_nudge` caches the signal's model, window
+and rounded flag on the agent, and since S3 its effort and source too, which
+`group_summary` publishes under `source: "opencode-db"`. The compact-nudge and
 idle-compact loops still admit only the CLIs `compact_nudge_cli_supported`
 names (claude and copilot), so an opencode reading reaches neither the
 lifecycle panel's token count nor the escalation. That is the same position the
@@ -437,17 +440,39 @@ The integration test `statusline_window_reverts_to_the_table_when_its_snapshot_d
 pins that a reported window is discarded when its snapshot disappears, and the
 model-table rung supplies the fallback window.
 
+**A launch fallback is not a reading.** When pi's tail names no thinking level,
+the signal's effort is the block's `--thinking` knob
+(`CompactionSignal::effort_is_launch_fallback`). S3 publishes it once, as
+`declared.effort`, and leaves `effort` empty. That is the rule S6's samples
+follow, and both read it from one place, `CompactionSignal::observed_effort`.
+Publishing the knob as `effort` would show configuration as the pane's live
+level, and the S2b residuals say how the two can differ (pi clamps the level,
+and the knob does not follow a later edit).
+
+**A window only the table decided is not published for opencode.** The window
+ladder's table rung is Claude's model-name table. For a source that reports no
+window and that the table does not describe, a table answer is a guess, and so
+is a clamp over it. `ContextSource::table_rung_applies` says which sources may
+use the table; it is `false` only for `OpencodeDb`, and the match is
+exhaustive so a new reader has to decide. `modelstate::published_window` then
+publishes `window_tokens`, `window_source` and `percent` as null for such a
+reading, and the panel shows the token count alone. An override still
+publishes. The other sources keep the table answer they had before S3. This is
+the S2c rule that a tokens-only opencode reading gets no guessed percent,
+applied to the panel. It is latent until S4 caches opencode's tokens, since
+`window_tokens` is published only beside tokens.
+
 ## Contract changes
 
-S0, S1, S3 and S8 have shipped; S6 remains planned. These rows record each
-contract's owning slice:
+S0, S1, S3, S6 and S8 have shipped. These rows record each contract's owning
+slice:
 
 1. **S3 added** `window_tokens`, `window_source`, `model`, `effort`, `source`,
    and `declared: {model, effort}` to `group_summary.agents[].context`.
 2. **S1 added** the raw Claude status-line payload at
    `<group>/hooks/<agent>.statusline.json`, written through a temporary file
    and a rename.
-3. **S6 will** add optional `effort` to usage-series samples with a serde default.
+3. **S6 added** optional `effort` to usage-series samples with a serde default.
 4. **S1 added** a `statusLine` entry to Claude's `--settings` configuration,
    chaining to the human's own status-line command (above).
 5. **S0 added** `compact_command`, `self_compacts`, `compact_note`, and

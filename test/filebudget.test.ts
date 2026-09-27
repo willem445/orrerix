@@ -11,7 +11,6 @@ export const BUDGETS = [
   { path: "crates/loomux-engine/src/lockwatch.rs", ceiling: 3595, blob: "110e802c989f6b4ccbc108367661881290c3466b" },
   { path: "crates/loomux-engine/src/obs.rs", ceiling: 3272, blob: "4ffc0c73306554ee49cf2d00704b000c701944c5" },
   { path: "crates/loomux-engine/src/queue.rs", ceiling: 4683, blob: "8b1ce3ffdad2234c4d528c4f04fc2db093a73cb6" },
-  { path: "crates/loomux-engine/src/workflow.rs", ceiling: 7538, blob: "9b95e14b299a880c597dd92ed0eb88be1db986fb" },
   { path: "src-tauri/src/orchestration/mcp.rs", ceiling: 5815, blob: "1669f55d925c7336b5280f303f0acec90048abbe" },
   { path: "src/fileedit.ts", ceiling: 1627, blob: "bc91319afb041316da5c8830b4f4f5a005eaec37" },
   { path: "src/fileexplorer.ts", ceiling: 1672, blob: "001857b329959245e4b918873c5d9920f32a6282" },

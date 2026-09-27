@@ -29,7 +29,7 @@ test("each known reason maps to its label", () => {
 });
 
 /** Every reason the backend attention scan emits — the mirror of
- *  `attention_tick`'s reason chain (src-tauri/src/orchestration/mod.rs), in
+ *  `attention_tick`'s reason chain (src-tauri/src/orchestration/registry/idle.rs), in
  *  chain order. Shared by the two completeness tests below. */
 const BACKEND_REASONS = [
   "held-dialog",
@@ -88,12 +88,12 @@ test("the test's backend list is read off attention_tick's own chain", () => {
   // shrinking the population. Either way this test fails naming the reason,
   // and the fix is the table row, not the assertion.
   const MOD = fileURLToPath(
-    new URL("../src-tauri/src/orchestration/mod.rs", import.meta.url),
+    new URL("../src-tauri/src/orchestration/registry/idle.rs", import.meta.url),
   );
   const source = readFileSync(MOD, "utf8");
   const start = source.indexOf("pub fn attention_tick(");
   const end = source.indexOf("pub fn plain_pane_attention(", start);
-  assert.ok(start >= 0, "attention_tick not found in orchestration/mod.rs");
+  assert.ok(start >= 0, "attention_tick not found in orchestration/registry/idle.rs");
   assert.ok(end > start, "the function bound after attention_tick vanished");
   const region = source.slice(start, end);
   // The bounds are two symbol names, and the one shape the limits above do not

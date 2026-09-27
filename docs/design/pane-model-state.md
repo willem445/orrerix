@@ -39,7 +39,8 @@ unclassified here.
 
 `effective_context_window_tokens` selects, in order: (1) group override,
 (2) a CLI-reported window, (3) the existing conservative Claude model table
-while no status-line report is available, and (4) an empirical clamp that
+while no status-line report is available — for a Claude reading only, since S4
+(see below) — and (4) an empirical clamp that
 widens a window when observed usage exceeds it, tagged `clamped`. A reported
 window is not replaced by a model-name guess. S1 ships the ladder
 (`modelstate::context_window_ladder`) and the Claude status line as rung 2's
@@ -264,14 +265,13 @@ rather than a guess. An id in `model_context_windows_rounded` sets
 `CompactionSignal::window_rounded`, and the ladder then labels the window
 `reported-rounded`.
 
-**What reads it today.** `run_compact_nudge` caches every signal's model,
-window and rounded flag on the agent. The compact-nudge loop still admits only
-the CLIs `compact_nudge_cli_supported` names (claude and copilot), so a pi
-reading does not yet reach the lifecycle panel's token count or the threshold
-escalation. S4 replaces that gate. S2b itself changed nothing a user sees. Since
-S3, `group_summary` publishes the cached model and observed effort, so a pi
-pane's lifecycle-panel label names its model; the token count and percent still
-wait on S4.
+**What reads it.** `run_compact_nudge` caches every signal's model, window and
+rounded flag on the agent, and since S3 `group_summary` publishes the model and
+observed effort. Since S4 the compact-nudge loop admits pi (its `CliCaps` row
+carries `/compact`), so a pi reading's tokens reach the lifecycle panel and the
+threshold escalation — against the `--list-models` window, or a group override.
+A pi model the listing does not carry has no window and so no percent and no
+escalation (see S4).
 
 **The effort fallback, and a correction to the plan's premise.** The plan
 said the file records no initial thinking level, so the initial effort would be
@@ -371,19 +371,18 @@ configuration docs say nothing about `limit.context`, `opencode models` prints
 ids only, and `/config/providers` needs an `opencode serve` loomux does not
 run. The signal's `window_tokens` is therefore always `None`, and opencode is
 tokens-visible without a percent (Tier 1 for tokens only, per the tiers above).
-**S4 has to hold that line.** `effective_context_window_tokens` falls to the
+**S4 holds that line.** `effective_context_window_tokens` falls to the
 model-name table on a `None` window: 200K, or 1M for an id containing `opus`.
-Once S4 opens the compact-nudge gate to opencode, that table would give an
-opencode reading a guessed percent. The plan's rule, which S4 implements, is
-that a tokens-only reading never escalates.
+S4 opens the compact-nudge gate to opencode, and the table would then give an
+opencode reading a guessed percent; `agent_context_percents` refuses it
+through `modelstate::published_window`, so a tokens-only reading never
+escalates (S4 below).
 
-**What reads it today.** `run_compact_nudge` caches the signal's model, window
-and rounded flag on the agent, and since S3 its effort and source too, which
-`group_summary` publishes under `source: "opencode-db"`. The compact-nudge and
-idle-compact loops still admit only the CLIs `compact_nudge_cli_supported`
-names (claude and copilot), so an opencode reading reaches neither the
-lifecycle panel's token count nor the escalation. That is the same position the
-S2a and S2b readers are in until S4.
+**What reads it.** `run_compact_nudge` caches the signal's model, window and
+rounded flag on the agent, and since S3 its effort and source too, which
+`group_summary` publishes under `source: "opencode-db"`. Since S4 the
+compact-nudge and idle-compact loops admit opencode, so its token count reaches
+the lifecycle panel — without a percent unless the group sets an override.
 
 **One visible change: the usage model label.** `opencodedb::session_usage_on`
 now decodes the column the same way, so an opencode pane's usage `model` reads
@@ -453,18 +452,88 @@ and the knob does not follow a later edit).
 ladder's table rung is Claude's model-name table. For a source that reports no
 window and that the table does not describe, a table answer is a guess, and so
 is a clamp over it. `ContextSource::table_rung_applies` says which sources may
-use the table; it is `false` only for `OpencodeDb`, and the match is
-exhaustive so a new reader has to decide. `modelstate::published_window` then
-publishes `window_tokens`, `window_source` and `percent` as null for such a
-reading, and the panel shows the token count alone. An override still
-publishes. The other sources keep the table answer they had before S3. This is
-the S2c rule that a tokens-only opencode reading gets no guessed percent,
-applied to the panel. It is latent until S4 caches opencode's tokens, since
-`window_tokens` is published only beside tokens.
+use the table, and the match is exhaustive so a new reader has to decide. S3
+made it `false` for `OpencodeDb` alone; S4 narrowed it to Claude's own readers
+(below). `modelstate::published_window` then publishes `window_tokens`,
+`window_source` and `percent` as null for such a reading, and the panel shows
+the token count alone. An override still publishes.
+
+## S4 — compaction across every CLI (#413)
+
+**The gate is the row.** `compact_command_for(cli)` returns the CLI's
+`CliCaps.compact_command`, and that is the whole admission test for the
+compact-nudge loop, `request_compact`, the human's "Compact now" and the
+orchestrator's idle-compact backstop. The paste sends that string through
+`deliver_prompt`, so a CLI whose command is spelled differently gets its own
+spelling. A CLI with no command (gemini today) is skipped, and
+`request_compact` refuses with the row's `compact_note`. It replaced
+`compact_nudge_cli_supported`, a `claude | copilot` match that kept codex, pi
+and opencode out of the loop even after S2a–S2c gave them readings.
+
+**One rule decides whether a reading has a percent, for the panel and the
+escalation alike.** Opening the loop to three more CLIs also opened the
+escalation to them, and the escalation computed its percent against the
+ladder's answer — including the table rung, which for a non-Claude model is
+Claude's default 200K. So `agent_context_percents` now computes a percent only
+against a window `modelstate::published_window` accepts, the function
+`group_summary` already published by, and `ContextSource::table_rung_applies`
+is `true` only for Claude's two readers (transcript and status line). The
+effect, per reader:
+
+| Reading | Window | Percent and escalation |
+| --- | --- | --- |
+| Claude, no status-line report yet | model table | yes — unchanged |
+| codex or pi with a CLI-reported window | reported | yes |
+| codex or pi with no reported window | none | no, unless the group sets an override |
+| opencode | none, ever | no, unless the group sets an override |
+| any CLI under a group override | override | yes |
+
+This is a visible change from S3 for codex and pi: a pane whose CLI has not
+reported a window used to show a percent of the table's 200K and now shows its
+token count alone. The table describes Claude ids; a percent over a guessed
+window would escalate — type a request into a live pane — on a number nobody
+measured, and the panel showing a percent the escalation refused would be the
+two readers disagreeing about one pane. No percent also means the lull floor
+treats the pane as unknown (it fires on the lull alone) and the idle-compact
+backstop fails closed, both as for a pane with no reading.
+
+**The timeline says why.** A reading with tokens and no accepted window, in a
+seat that would otherwise escalate — threshold on, role in
+`compact_nudge_roles`, a compact command — is audited as
+`compact-escalation-skipped` once per episode (`note_unwindowed_escalations`).
+The latch, `compact_unwindowed_noted`, is rebuilt from each tick's readings, so
+a pane that gains a window leaves it and a later tokens-only stretch is audited
+again.
+
+**The codex rollout is remembered.** The codex arm used to call
+`find_codex_session_file` on every tick, and that walks every rollout under the
+store's date tree — it must, for "newest" to mean anything — on a store codex
+never prunes (#3531). `codex_rollout_path` keeps the resolved path per
+`(root, session)` and stats it once per tick. It walks again when the file has
+gone, and every `CODEX_ROLLOUT_REVALIDATE_AFTER` (five minutes) regardless,
+because a stat cannot tell "the file still exists" from "this is still the
+session's file": `thread/revert` starts a new rollout and leaves the old one
+readable. Five minutes is the usage cursor's interval for the same
+re-resolution, so the two readers of one rollout drift apart for no longer than
+each other.
+
+### S4 residuals
+
+- **A revert is seen up to five minutes late.** Between a `thread/revert` and
+  the next re-walk, the context reading comes from the superseded rollout —
+  bounded by the timer above, and pinned as the observable proof the memo
+  works (`the_codex_context_read_does_not_walk_the_store_again_on_the_next_tick`).
+- **A session with no rollout yet is walked every tick.** Absence is not
+  remembered, so the first reading of a new pane is not delayed by an interval;
+  the cost is the pre-S4 walk, for exactly the panes with no reading to lose.
+- **Manual-compact detection still matches `/compact`.** The detector that
+  notices a human typing the command reads the literal `/compact`. Every row
+  that carries a command spells it that way today; a row that ever spells it
+  differently needs the detector to read the row too.
 
 ## Contract changes
 
-S0, S1, S3, S6 and S8 have shipped. These rows record each contract's owning
+S0, S1, S3, S4, S6 and S8 have shipped. These rows record each contract's owning
 slice:
 
 1. **S3 added** `window_tokens`, `window_source`, `model`, `effort`, `source`,
@@ -476,7 +545,11 @@ slice:
 4. **S1 added** a `statusLine` entry to Claude's `--settings` configuration,
    chaining to the human's own status-line command (above).
 5. **S0 added** `compact_command`, `self_compacts`, `compact_note`, and
-   `context_reader` to `CliCaps`; no code reads these fields until later slices.
+   `context_reader` to `CliCaps`. S4 reads `compact_command` and
+   `compact_note`; `self_compacts` and `context_reader` are still unread.
+6. **S4 added** the `compact-escalation-skipped` audit action (`agent`,
+   `reason`, `tokens`, `source`) and a `command` key on `compact-nudge`
+   audit rows. Both are additive.
 
 ## Sources and pins
 

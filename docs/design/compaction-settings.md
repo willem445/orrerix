@@ -19,6 +19,20 @@ setter but is not exposed in the lifecycle panel. The nudge floor remains
 tri-state in storage: an unset floor displays the backend's 50% smart default,
 while a user edit persists an explicit value.
 
+The three settings apply to every CLI whose `CliCaps` row carries a compact
+command — claude, copilot, codex, pi and opencode (#413 S4) — and to no other.
+The threshold is a percentage, so it can only act on a pane whose context
+window is known: reported by its CLI, or set by the group's
+`context_window_tokens_override`. The model-name table that fills a missing
+window is Claude's and applies only to a Claude pane. A codex or pi pane whose
+CLI has reported no window, and every opencode pane, therefore never crosses
+the threshold unless the group sets the override; the lifecycle panel shows
+their tokens without a percent, and the audit log records one
+`compact-escalation-skipped` per episode so the missing escalation has a
+stated reason. The override is the lever that switches the threshold on for
+those panes. The floor reads the same missing percent as unknown and does not
+hold the lull nudge back. See `docs/design/pane-model-state.md`, S4.
+
 The three fields are additive to the existing group-summary wire object, so
 older clients may ignore them and the existing group-view contract remains
 usable. Input parsing is DOM-free and rejects non-integers and values outside

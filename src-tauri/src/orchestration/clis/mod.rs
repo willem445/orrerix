@@ -23,6 +23,8 @@ mod opencode;
 pub use opencode::*;
 mod pi;
 pub use pi::*;
+mod resume;
+pub use resume::*;
 
 // Copilot session tracking: unlike Claude, copilot can't be handed a session
 // id up front — it mints one and writes `~/.copilot/session-state/<id>/` a

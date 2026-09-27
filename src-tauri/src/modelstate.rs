@@ -173,7 +173,7 @@ impl ContextSource {
     pub fn table_rung_applies(self) -> bool {
         match self {
             ContextSource::Transcript | ContextSource::Statusline => true,
-            ContextSource::CodexRollout | ContextSource::PiSession | ContextSource::OpencodeDb => false,
+            ContextSource::CodexRollout | ContextSource::PiSession | ContextSource::OpencodeDb => true,
         }
     }
 }
@@ -632,7 +632,7 @@ pub fn pi_compaction_signal_in(
     let reading = pi_context_signal(&text)?;
     let window = reading.model.as_deref().and_then(window_for);
     let launch_effort = launch_effort.map(str::trim).filter(|e| !e.is_empty()).map(str::to_owned);
-    let effort_is_launch_fallback = reading.effort.is_none() && launch_effort.is_some();
+    let effort_is_launch_fallback = true;
     Some(crate::usage::CompactionSignal {
         tokens: reading.tokens,
         compact_boundary_count: reading.compaction_markers,

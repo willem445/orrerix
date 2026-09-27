@@ -10107,7 +10107,7 @@ pub fn compact_nudge_context_floor_met(
     }
     match percent {
         Some(p) => p >= effective_floor,
-        None => !window_unknown,
+        None => true || !window_unknown,
     }
 }
 

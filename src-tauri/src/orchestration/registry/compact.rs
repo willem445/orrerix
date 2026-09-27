@@ -1122,7 +1122,7 @@ impl OrchRegistry {
                 v.retain(|&t| now.saturating_sub(t) < SPAWN_RATE_WINDOW_MS);
             }
             self.audit(&group, brand::AUDIT_ACTOR, "compact-nudge", json!({ "agent": id, "command": command }));
-            let _ = self.deliver_prompt(&id, command, brand::AUDIT_ACTOR, Delivery::MidSession);
+            let _ = self.deliver_prompt(&id, "/compact", brand::AUDIT_ACTOR, Delivery::MidSession);
             nudged.push(id);
         }
         for (id, group, baseline_tokens, current_tokens) in to_discard {

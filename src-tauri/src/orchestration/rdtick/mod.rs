@@ -1,6 +1,6 @@
 //! The review-loop driver's registry wiring (#1778 S3).
 //!
-//! Design note: `docs/design/review-driver.md`. Every decision this file makes
+//! Design note: `docs/design/review-driver.md`. Every decision this module makes
 //! is made somewhere else: the state machine is [`reviewdrive::decide`], the
 //! gate is [`mergeq::recheck_gate`], the `gh` reads and the notice text are
 //! [`rddrive`]. What lives here is what only the registry can do — resolve the
@@ -8,7 +8,7 @@
 //! read-modify-write, perform the spawns and resumes, emit the audit events,
 //! and deliver the notices.
 //!
-//! # Why its own file rather than more of `mod.rs`
+//! # Why its own module rather than more of `orchestration/mod.rs`
 //!
 //! Size is the smaller reason. The larger one is that §3.1 item 1's source
 //! scan needs a scope, and CLAUDE.md's source-scanning-guard convention
@@ -25,6 +25,23 @@
 //! helper it does not own. [`rddrive::RdRunner`] closes the `git` half of that
 //! structurally — it has no `git` method — and nothing closes the `gh` half but
 //! the scan.
+//!
+//! # The files (#3498 P5)
+//!
+//! Split by tick phase, one `impl OrchRegistry` block per file; this file keeps
+//! the types they share. `tests/reviewdrive.rs` reads the whole directory as one
+//! scope, so the argument above is about `rdtick/`, and a file added here is
+//! scanned with no edit to the test.
+//!
+//! - `policy.rs` — the `driver:` policy, the runner override, the defer.
+//! - `events.rs` — delegate events, pane ownership, the driver's audit line.
+//! - `tick.rs` — the tick, the notice flush and retention, the gate facts.
+//! - `step.rs` — `rd_step_entry`, one advance per entry per tick.
+//! - `lanes.rs` — opening a reviewer lane.
+//! - `handback.rs` — the worker hand-back and the one spawn or resume.
+//! - `briefs.rs` — the brief and notice text.
+//! - `reconcile.rs` — restart marks, lost panes, the restart reconcile.
+//! - `tools.rs` — §5.1's MCP tools and `rd_auto_start`.
 
 use std::sync::Arc;
 

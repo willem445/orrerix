@@ -181,7 +181,7 @@ impl OrchRegistry {
     ///
     /// **The hazard that actually fired is RE-ENTRANCY, not that inversion**,
     /// and it is why [`Self::rd_driven_panes_now`] exists. `rd_drive_group_with`
-    /// holds `rd_state_lock` across its whole read-modify-write (`rdtick.rs`'s
+    /// holds `rd_state_lock` across its whole read-modify-write (`rdtick/tick.rs`'s
     /// `let _state_guard` before `load_state`) and performs its spawns INSIDE
     /// it — §2.4's ordering, deliberate — so the driver's own lane spawn and
     /// hand-back reach `spawn_agent_bound`, and any cap refusal formatted there

@@ -11,7 +11,7 @@
 //!
 //! # Why its own file rather than more of `mod.rs`
 //!
-//! The same reason `rdtick.rs` gives, narrowed to this feature: a gate that can
+//! The same reason `rdtick/mod.rs` gives, narrowed to this feature: a gate that can
 //! SUPPRESS a delivery to the one pane a human supervises is a thing a reader
 //! must be able to find the whole of. Every path that can hold a notice back is
 //! in this file, and `src-tauri/tests/triage.rs` reads it as one scope.

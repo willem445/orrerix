@@ -1,10 +1,10 @@
-//! The plan driver's registry wiring (#3040 P3a) — `rdtick.rs`'s twin, in a
-//! file of its own for that file's reason.
+//! The plan driver's registry wiring (#3040 P3a) — `rdtick`'s twin, in a
+//! file of its own for `rdtick`'s reason.
 //!
 //! Not for size alone. A FILE is a scope a RENAME cannot step over, which is
 //! what CLAUDE.md's source-scanning-guard convention asks for: the review
 //! driver's "never builds a landing verb" scan default-denies the whole of
-//! `rdtick.rs`, and `tests/plandrive.rs` does the same to this one. The plan
+//! `rdtick/`, and `tests/plandrive.rs` does the same to this one. The plan
 //! driver reaches GitHub through the same `RdRunner` — a `gh`-only view with no
 //! `git` method at all — so the structural "never merges, never pushes"
 //! guarantee is inherited rather than re-argued.

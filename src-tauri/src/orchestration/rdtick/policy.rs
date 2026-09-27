@@ -105,11 +105,11 @@ impl OrchRegistry {
 
     /// Whether this group runs a review driver at all.
     ///
-    /// `pub(super)` because `instruction_vars` in the parent module gates
-    /// `{{REVIEW_DRIVER}}` on it: a private item is visible to its own module
-    /// and that module's DESCENDANTS, and `orchestration` is this file's
-    /// parent, not its child. Widened to exactly the parent and no further, so
-    /// the one reader outside this file is the template gate — which has to
+    /// `pub(in crate::orchestration)` because `instruction_vars` in `registry/`
+    /// gates `{{REVIEW_DRIVER}}` on it: a private item is visible to its own
+    /// module and that module's DESCENDANTS, and `orchestration` is `rdtick`'s
+    /// parent, not its child. Widened to exactly that parent and no further, so
+    /// the one reader outside `rdtick/` is the template gate — which has to
     /// read the same policy the tick does, or a group whose tools all refuse
     /// `driver-disabled` could be told in its instructions that it has a driver.
     pub(in crate::orchestration) fn driver_enabled(&self, group: &GroupId) -> bool {

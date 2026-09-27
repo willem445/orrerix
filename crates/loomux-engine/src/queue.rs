@@ -26,7 +26,7 @@
 //! live state or drift to different definitions of "this pane is already
 //! spoken for." #470 removes the exception by removing the SECOND
 //! checkpoint's reason to exist: every delivery is now admitted into the
-//! queue at arrival, in `mod.rs`'s `enqueue_text` (impure, as admission
+//! queue at arrival, in `registry/deliveryqueue.rs`'s `enqueue_text` (impure, as admission
 //! necessarily is — it mutates the live queue), and nothing downstream ever
 //! needs to re-ask "is someone else already ahead of me," because the
 //! queue's own front/back discipline makes that structurally impossible to
@@ -43,7 +43,7 @@
 //! fsync, rename — a disk-full or a crash mid-write leaves the previous
 //! good snapshot, never a truncated file), and a restart reads it back:
 //! `parse_snapshot` → `split_recovered` here, `OrchRegistry::
-//! recover_persisted_queue`/`readmit_recovered` in `mod.rs`. What that buys,
+//! recover_persisted_queue`/`readmit_recovered` in `registry/deliveryqueue.rs`. What that buys,
 //! stated exactly, because the honest limits are the point (see this
 //! module's `PersistedEntry` doc and `docs/design/orchestration.md`'s
 //! "Durability (#468/#467)" subsection):
@@ -531,7 +531,7 @@ pub enum AdmitDecision {
     /// (`enqueue_text` returns before it mints one), so nothing in this module
     /// can report it: `orphaned_queue_entries` and `merge_orphans` both key on
     /// an id. #579 surfaces it from `audit.jsonl` instead, as
-    /// `queue_orphans`'s second list — see `mod.rs`'s `front_door_refusals`.
+    /// `queue_orphans`'s second list — see `registry/deliveryqueue.rs`'s `front_door_refusals`.
     RejectFull,
 }
 
@@ -3526,7 +3526,7 @@ mod unified_admission_property {
     /// #445/#451 exist to make structural, broken by the PR meant to
     /// strengthen it.
     ///
-    /// `OrchRegistry::commit_exit` (mod.rs) is round 1's fix: the "is the
+    /// `OrchRegistry::commit_exit` (registry/deliveryqueue.rs) is round 1's fix: the "is the
     /// queue empty" check and the `queue_draining` deregistration happen in
     /// ONE critical section on `queues`, so there is no window between them
     /// for an admission to land in. `atomic_exit` below models that fix

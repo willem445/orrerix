@@ -613,8 +613,8 @@ fn poll_intake_still_asks_gh_for_comment_and_review_activity() {
         );
     }
 
-    let src = fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/src/orchestration/mod.rs"))
-        .expect("read src/orchestration/mod.rs");
+    let src = fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/src/orchestration/registry/watches.rs"))
+        .expect("read src/orchestration/registry/watches.rs");
     assert!(
         src.contains("intake::pr_list_argv()"),
         "poll_intake must build its `gh pr list` argv through `intake::pr_list_argv` — an argv \
@@ -1223,7 +1223,7 @@ fn every_shim_name_ensure_shims_writes_is_one_the_prune_keeps() {
     // deleted by the prune on the very spawn that wrote it — silently, every
     // spawn. Read off the write calls' shape (the program argument is a literal
     // at every site; `tests/pathseg.rs` and `tests/rebrand.rs` rely on the same).
-    let src = fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/src/orchestration/mod.rs")).unwrap();
+    let src = fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/src/orchestration/registry/agentlaunch.rs")).unwrap();
     let mut written: Vec<String> = Vec::new();
     for call in ["self.write_shim(&dir, \"", "self.write_refusal_shim(&dir, \""] {
         for chunk in src.split(call).skip(1) {

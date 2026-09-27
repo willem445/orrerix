@@ -1673,7 +1673,7 @@ fn a_second_pending_question_bumps_the_count_on_the_same_item() {
 /// itself is the latch, so settling every pending row must clear the badge
 /// with no separate ack — unlike `stranded`. The predicate this guards is
 /// `!q.status.is_settled()` in `attention_tick`'s `question_of` build
-/// (mod.rs): drop it (or invert it) and this is the one assertion that
+/// (registry/idle.rs): drop it (or invert it) and this is the one assertion that
 /// reddens, because a withdrawn/answered row would keep counting.
 #[test]
 fn settling_every_pending_question_clears_the_badge_with_nothing_latched() {

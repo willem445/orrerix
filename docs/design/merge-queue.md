@@ -234,7 +234,7 @@ Multi-target queues are deliberately out of v1. When they arrive they are a map 
 target → queue, which is why the target lives in the state file rather than in config.
 
 **Restart reconcile — the #467/#468 pattern, copied deliberately.** The delivery queue learned
-this the hard way; `mod.rs::recover_persisted_queue:31842` is the shape to mirror:
+this the hard way; `registry/deliveryqueue.rs`'s `recover_persisted_queue` is the shape to mirror:
 
 - **Two phases.** Phase 1 runs under a once-only guard held across the whole phase (the
   `HashSet::insert` doubles as the check): read the file, parse, classify entries into

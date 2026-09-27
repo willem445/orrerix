@@ -1222,7 +1222,7 @@ this note first.
    **ENFORCED BY TEST.** The scan denies `kill_agent`, `kill_agent_as`,
    `mark_dead` and the reaper entry points inside the driver's three files, and
    permits exactly ONE call to `release_driven_pane` — the barrier, which lives
-   in `mod.rs` beside the primitives it wraps, never in a driver file. The COUNT
+   in `registry/agents.rs` beside the primitives it wraps, never in a driver file. The COUNT
    is the pin: a second call site is a second place the release rule can be
    broken, so it fails until it is argued onto the row. What a scan cannot see is
    *which* states, and the note says so rather than implying otherwise: that

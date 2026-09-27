@@ -22,6 +22,24 @@ mod channels;
 mod merge;
 mod questions;
 mod tasks;
+mod agentfiles;
+mod agentlaunch;
+mod agents;
+mod audit;
+mod autonomy;
+mod compact;
+mod deliveryqueue;
+mod idle;
+mod instructions;
+mod lockseams;
+mod managermail;
+mod persist;
+mod resourcelocks;
+mod roster;
+mod solo;
+mod stranded;
+mod usage;
+mod watches;
 
 pub struct OrchRegistry {
     /// Root of persistent state: `<root>/<group>/{group.json,state.json,audit.jsonl,configs/}`.

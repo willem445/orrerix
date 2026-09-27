@@ -501,7 +501,7 @@ fn opencode_store_path() -> Option<PathBuf> {
 //     a follow-up for this issue.
 //   - `IntentKey::Cwd` — copilot solo panes never get an id at launch (it
 //     mints its own, invisibly, and `spawn_session_watcher` in
-//     orchestration/mod.rs learns one after the fact only for GROUP
+//     orchestration/registry/persist.rs learns one after the fact only for GROUP
 //     agents), so this reuses #460's original cwd-keyed, conflict-tracked
 //     machinery verbatim, just moved under this wider key type. Precise
 //     per-session keying for copilot solo is still tracked as further

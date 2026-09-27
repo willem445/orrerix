@@ -1046,7 +1046,7 @@ fn no_registry_construction_bypasses_the_test_agent_dir_overrides() {
     let sanctioned: &[(&str, usize)] = &[
         ("groupid.rs", 1),       // registry_at
         ("orchestration/helpers.rs", 1), // relaunch_registry
-        ("workflow.rs", 1),      // relaunch_registry
+        ("workflow/helpers.rs", 1), // relaunch_registry
         ("lessonsfile.rs", 1),   // test_registry
         ("prompts.rs", 1),       // test_registry
         ("perf_leaflocks.rs", 1), // test_registry
@@ -1095,7 +1095,7 @@ fn no_registry_construction_bypasses_the_test_agent_dir_overrides() {
         // here: that opt-out means "this test's subject requires the unguarded
         // construction", which is false of this file. The construction here is
         // the helper itself, which is exactly what this allowlist is for.
-        ("reviewdrive.rs", 1),    // relaunch_registry (#1778 S3/S4) — see above
+        ("reviewdrive/helpers.rs", 1), // relaunch_registry (#1778 S3/S4) — see above
         // #2519 slice A. Its own binary for `manager_lifecycle.rs`'s two
         // reasons (one subject; off this file's end-of-file append-conflict
         // surface), and therefore its own helper: helpers do not cross

@@ -81,10 +81,11 @@ enough to exhaust the machine's memory.
 Those files get their syntax check from CI, like everything else.
 
 The known cases are the files over 5,000 lines themselves (`orchestration/mcp.rs`,
-the engine's `reviewdrive.rs` and `workflow.rs`, and
-`src-tauri/tests/reviewdrive.rs` and `workflow.rs`) and, by the recursion rule,
+and the engine's `reviewdrive.rs` and `workflow.rs`) and, by the recursion rule,
 `src-tauri/src/orchestration/mod.rs` (its `mod mcp;`),
-`src-tauri/tests/orchestration/main.rs` (~70k with its modules), `src-tauri/src/lib.rs`
+`src-tauri/tests/orchestration/main.rs` (~70k with its modules),
+`src-tauri/tests/reviewdrive/main.rs` (~16k) and `src-tauri/tests/workflow/main.rs`
+(~12k), `src-tauri/src/lib.rs`
 and `crates/loomux-engine/src/lib.rs`. The
 list moves as files grow, so measure rather than trust it:
 

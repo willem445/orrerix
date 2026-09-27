@@ -106,7 +106,7 @@ little. The user page (`docs/autonomous-mode.md`, *Leaving it running with the
 display off*) states this. No figure is claimed, because none was measured
 here: this repo cannot turn a monitor off in CI.
 
-The #813 sync-parse hint in `pane.ts` (`hintXtermSyncParse`) stays, as a
+The #813 sync-parse hint in `panelifecycle.ts` (`hintXtermSyncParse`) stays, as a
 fallback for any hidden state the switches may not reach. Whether a minimized
 window is one of them is **unverified**. Only `--disable-backgrounding-occluded-windows`
 depends on why the page is hidden. The timer switch and the disabled

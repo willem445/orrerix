@@ -1285,7 +1285,7 @@ combined with either no handler (finding 1) or a detached target (finding
 not a full substitute for the card — a toast carries no retry button, so a
 failure that reaches it doesn't hand the human an inline "try again" the way
 a still-visible error card does. Concretely, for the dormant-agent Start
-card: `pane.ts`'s ordering fix keeps the placeholder mounted through
+card: `panelifecycle.ts`'s ordering fix keeps the placeholder mounted through
 `this.start()` itself, but `main.ts`'s `onClick` still does `remint.bind` and
 `onGridChanged()` AFTER `await pane.startFromDormant(...)` returns — by
 which point `startFromDormant`'s own `finally` has already torn the

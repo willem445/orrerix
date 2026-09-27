@@ -10547,7 +10547,7 @@ An **IME commit** is sent from a `setTimeout(…, 0)` — a later task than the 
 that caused it. The **`insertText`** path (dead keys, accents, soft keyboards) sends
 synchronously with no key event at all. Both are still structural signals — they are DOM
 events on the terminal's own textarea, and xterm never routes a query auto-reply through the
-textarea; it calls `triggerDataEvent` directly — so `pane.ts` marks from them too, in the
+textarea; it calls `triggerDataEvent` directly — so `panelifecycle.ts` marks from them too, in the
 CAPTURE phase on `termEl`, an *ancestor* of the textarea, since ancestor-capture listeners run
 before any listener on the target itself.
 
@@ -11507,7 +11507,7 @@ harmless prose to either agent; the path — bare or `@`-prefixed — is what do
 save-to-file + reference approach degrades gracefully (worst case the human sees the path text).
 
 - *Save, don't decode.* `Ctrl+V` of a screenshot (or the paperclip → native file picker) hands
-  the frontend a browser `Blob`. `pane.ts` base64-encodes the raw bytes and calls the
+  the frontend a browser `Blob`. `panecompose.ts` base64-encodes the raw bytes and calls the
   `orch_save_attachment` command, which decodes and writes them **verbatim** to
   `<group state dir>/attachments/<ms>-<seq>.<ext>` via `OrchRegistry::save_attachment` —
   returning the absolute path. We never decode the image (no image crate, and deliberately no

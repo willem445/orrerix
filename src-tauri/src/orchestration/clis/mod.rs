@@ -13,6 +13,8 @@ use super::*;
 
 mod claude;
 pub use claude::*;
+mod codex;
+pub use codex::*;
 mod copilot;
 pub use copilot::*;
 mod gemini;

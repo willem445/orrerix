@@ -436,7 +436,13 @@ impl OrchRegistry {
         // Explicit worktree base (default: the repo's default branch, resolved
         // in git_worktree_add). Normalized once for both the worktree cut and
         // the audit record (#204).
-        let base = base.map(|b| b.trim().to_string()).filter(|b| !b.is_empty());
+        let base = base
+            .map(|b| b.trim().to_string())
+            .filter(|b| !b.is_empty())
+            // #3723: a described quick run's helpers default to the branch the
+            // human set on the form — its root is handed no first message to
+            // be told it in. `None` everywhere else.
+            .or_else(|| self.qd_helper_base(group_id));
         let cwd_override = cwd_override.map(|c| c.trim().to_string()).filter(|c| !c.is_empty());
         // The third element is the branch to PERSIST on the entry (#1, session
         // browser metadata): `Some` only where `branch_name` is an actual
@@ -979,8 +985,12 @@ impl OrchRegistry {
                 }
             } else {
                 let a = self.agent(&agent_id).ok_or("agent vanished during spawn")?;
-                let kickoff = self.kickoff_prompt(&a, &group, &branch_note, inject.kickoff.as_deref());
-                self.deliver_prompt(&agent_id, &kickoff, brand::AUDIT_ACTOR, Delivery::FreshKickoff)?;
+                // `None` is an idle quick root (#3723): nothing is typed.
+                if let Some(kickoff) =
+                    self.fresh_kickoff(&a, &group, &branch_note, inject.kickoff.as_deref())
+                {
+                    self.deliver_prompt(&agent_id, &kickoff, brand::AUDIT_ACTOR, Delivery::FreshKickoff)?;
+                }
             }
             return self
                 .agent(&agent_id)
@@ -1078,9 +1088,12 @@ impl OrchRegistry {
                     let a = self
                         .agent(&agent_id)
                         .ok_or("agent vanished during spawn")?;
-                    let kickoff =
-                        self.kickoff_prompt(&a, &group, &branch_note, inject.kickoff.as_deref());
-                    self.deliver_prompt(&agent_id, &kickoff, brand::AUDIT_ACTOR, Delivery::FreshKickoff)?;
+                    // `None` is an idle quick root (#3723): nothing is typed.
+                    if let Some(kickoff) =
+                        self.fresh_kickoff(&a, &group, &branch_note, inject.kickoff.as_deref())
+                    {
+                        self.deliver_prompt(&agent_id, &kickoff, brand::AUDIT_ACTOR, Delivery::FreshKickoff)?;
+                    }
                 }
                 // The CLI minted a session as it booted; watch for it and bind
                 // its id to this pane's roster record so the session becomes
@@ -1109,6 +1122,40 @@ impl OrchRegistry {
                 Err("frontend did not open the agent pane in time".into())
             }
         }
+    }
+
+    /// What a FRESH spawn types into its pane, or `None` when it types
+    /// nothing at all — the one decision both spawn arms (PTY and structured)
+    /// make about a first message, so they cannot make it differently.
+    ///
+    /// `None` is the idle start of a described quick run's root (#3723): the
+    /// human gives that agent its task in the pane, so nothing is typed for
+    /// it. Its role instructions are already there — `persona_inject` put the
+    /// contract on the CLI's system-prompt layer at launch — which is the
+    /// condition [`idle_start_types_nothing`] reads. Where they are NOT there
+    /// (a CLI with no such layer, or a contract file that could not be
+    /// written), the kickoff is still typed: a root with no instructions is
+    /// worse than a root that was typed one line, and that line is the
+    /// pointer to its instructions, never a task.
+    ///
+    /// Every other spawn is `Some`, exactly as before.
+    #[doc(hidden)] // pub for integration tests
+    pub fn fresh_kickoff(
+        &self,
+        a: &AgentEntry,
+        g: &GroupInfo,
+        branch_note: &str,
+        persona: Option<&str>,
+    ) -> Option<String> {
+        let cli = g
+            .guardrails
+            .block(&a.block)
+            .map(|b| workflow::cli_of(b, &g.guardrails.agent_cli).to_string())
+            .unwrap_or_else(|| g.guardrails.agent_cli.clone());
+        if idle_start_types_nothing(a.role, &a.task, &cli, a.contract_carrier) {
+            return None;
+        }
+        Some(self.kickoff_prompt(a, g, branch_note, persona))
     }
 
     /// The first prompt typed into a freshly-booted agent pane.
@@ -1441,25 +1488,44 @@ impl OrchRegistry {
                 ins = instructions.display(),
                 delivery = kickoff_delivery_note(&g.id, &a.id),
             ),
-            // #3679: the quick root. Its task IS its first message — the brief
-            // the quick drive rendered (`qd_brief`), carried in `a.task` like
-            // any delegate's — so unlike a lead it has something to start on
-            // and nobody to greet.
+            // #3679, #3723: the quick root. It has two first messages, and the
+            // common case is NEITHER: an idle root is typed nothing at all
+            // (`fresh_kickoff` answers `None` before this is reached), because
+            // its instructions are on its CLI's system-prompt layer and its
+            // task is the human's own first message.
+            //
+            // What reaches this arm is the exception on either side of that:
+            // a root spawned WITH text — the resume message of a task that was
+            // in progress, carried in `a.task` — or an idle root whose CLI
+            // could not be handed its instructions at launch, which is told
+            // where they are and to wait. Neither carries a task orrerix made
+            // up, and the idle one is told in so many words that none is
+            // coming from here.
             //
             // The wording is chosen against `sessions::detect_orch_signature`,
             // which classifies a transcript by its kickoff: this sentence must
             // not read as an orchestrator's or a worker's, or the session
             // browser would offer to resume a quick root as one of those.
-            Role::Quick => format!(
-                "You are \"{name}\" ({id}), the agent this quick task was given to — orrerix \
-                 group {gid}, repository {repo}. Nobody is above you: you open the helpers \
-                 the task needs, and you end the run with report.\n\
-                 First read your role instructions: {ins}\n{note}\n{delivery}\n{task}",
-                name = a.name, id = a.id, gid = g.id, repo = g.repo,
-                ins = instructions.display(), note = branch_note,
-                delivery = kickoff_delivery_note(&g.id, &a.id),
-                task = a.task,
-            ),
+            Role::Quick => {
+                let head = format!(
+                    "You are \"{name}\" ({id}), the agent this quick task was given to — orrerix \
+                     group {gid}, repository {repo}. Nobody is above you: you open the helpers \
+                     a task needs, and you end each task with report.\n\
+                     First read your role instructions: {ins}\n{note}\n{delivery}",
+                    name = a.name, id = a.id, gid = g.id, repo = g.repo,
+                    ins = instructions.display(), note = branch_note,
+                    delivery = kickoff_delivery_note(&g.id, &a.id),
+                );
+                if a.task.trim().is_empty() {
+                    format!(
+                        "{head}\nNo task is given here. After reading the instructions, say in \
+                         one line that you are ready, and wait: the human will tell you what \
+                         they want in this pane."
+                    )
+                } else {
+                    format!("{head}\n{}", a.task)
+                }
+            }
         }
     }
 

@@ -7,8 +7,10 @@
 //! What lives here is everything that needs the registry: the interception of
 //! `report` and `message_orchestrator`, the step that moves a run, the
 //! hand-over ladder, the briefs a pane is actually typed, the notice, and what
-//! a restart does — and, in `described.rs`, the second mode (one agent given
-//! the task) together with its capability class, `Role::Quick`.
+//! a restart does — and, in `described.rs`, the second mode (one agent the
+//! human gives tasks to) together with its capability class, `Role::Quick`,
+//! and in `idle.rs` that mode's lifecycle: an idle start, a clock that begins
+//! with the task, a second task, and a pane that leaves nothing behind.
 //!
 //! A directory target for `tests/reviewdrive/`'s reasons: CLAUDE.md constraint
 //! 4 makes the target KIND what matters (an integration test carries the
@@ -41,5 +43,6 @@ mod plan;
 mod controls;
 mod restart;
 mod described;
+mod idle;
 
 use helpers::*;

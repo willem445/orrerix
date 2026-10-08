@@ -375,7 +375,7 @@ impl Role {
     /// Pinned as a SET (`the_fixture_classes_are_exactly_these_four`) so a
     /// later class is a deliberate addition rather than a default.
     pub fn is_fixture(self) -> bool {
-        matches!(self, Role::Orchestrator | Role::Manager | Role::Lead | Role::Quick)
+        matches!(self, Role::Orchestrator | Role::Manager | Role::Lead)
     }
 
     /// **Whether this class is the ROOT of its group** — the one agent a
@@ -402,7 +402,7 @@ impl Role {
     /// has no orchestrator and no lead, and the delegates its root opens report
     /// to it.
     pub fn is_root(self) -> bool {
-        matches!(self, Role::Orchestrator | Role::Lead | Role::Quick)
+        matches!(self, Role::Orchestrator | Role::Lead)
     }
 
     /// Every capability class, for the set assertions that pin the predicates

@@ -122,3 +122,30 @@ fn a_run_without_a_plan_step_never_opens_a_planner() {
     assert!(!plan_path.exists(), "and no plan was written");
     assert!(!lf(&reg.agent(&worker).unwrap().task).contains("The planner wrote a plan"));
 }
+
+/// **A planner that went away is resumed in the repository itself** (#3681
+/// review W5): its own session, no worktree, no branch — a planner has no
+/// dedicated workspace for a resume to resolve.
+#[test]
+fn a_planner_that_went_away_is_resumed_on_its_session_in_the_repository() {
+    let dir = tempfile::tempdir().unwrap();
+    let reg = relaunch_registry(dir.path());
+    let repo = Repo::new();
+    let (group, planner) = planning(&reg, &repo);
+    let session = reg.agent(&planner).unwrap().session_id.expect("claude is handed a session id");
+
+    reg.mark_dead(&planner, Some(1));
+    step(&reg, &group, T0 + 2);
+    assert_eq!(held_reason(&reg, &group), "planner-gone");
+
+    let after = reg.quick_resume_at(&group, T0 + 3).expect("the run resumes");
+    assert_eq!(after["state"], json!("plan-wait"), "{after}");
+    let again = pane(&reg, &group, QuickSide::Planner);
+    assert_ne!(again, planner, "a new pane, since the old one is dead");
+    let a = reg.agent(&again).expect("the resumed planner is on the roster");
+    assert_eq!(a.role, Role::Planner);
+    assert_eq!(a.session_id.as_deref(), Some(session.as_str()), "running the planner's own session");
+    assert_eq!(a.cwd.replace('\\', "/"), repo.path(), "where it ran: the repository");
+    assert_eq!(a.branch, None, "and it cuts no branch");
+    assert_eq!(pane(&reg, &group, QuickSide::Worker), "", "no worker is opened by a planner's resume");
+}

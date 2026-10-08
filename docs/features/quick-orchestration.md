@@ -166,10 +166,16 @@ orrerix starts, the run is held with the reason `restart`, and nothing is
 re-opened until you say so. **Resume** re-opens the session that was working and
 gives it its instructions again.
 
+One case cannot be resumed: a pane that was closed before its CLI had reported a
+session to orrerix. There is no session to re-open, and the run says so when you
+press Resume.
+
 ## Limits
 
 - **One task per run.** A quick task has no queue. Start another for the next
   task.
+- **Resume and Stop are on a pane's menu.** If you close every pane of a run,
+  it is held and there is no pane left to resume or stop it from.
 - **No token budget.** A run is bounded by its review rounds and its time bound,
   not by spend.
 - **A pull request is found only if the worker names it.** orrerix does not

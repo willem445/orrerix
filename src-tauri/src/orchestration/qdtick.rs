@@ -79,6 +79,15 @@ const QD_FACT_CAP: usize = 2_000;
 /// which is the plan driver's own slice-brief figure.
 pub const QD_BODY_CAP: usize = 20_000;
 
+/// How large `messages.md` may grow before a message stops being saved.
+///
+/// The file is appended by every `message_orchestrator` call from any pane in
+/// the group — the run's own or not, working or ended — and an MCP body may be
+/// a megabyte. Nothing reads the file back into a pane, so the cost is disk
+/// alone, and this is the ceiling on it. Each message is cut to
+/// `QD_BODY_CAP` characters first (#3681 review N1).
+const QD_MESSAGES_FILE_CAP: u64 = 1024 * 1024;
+
 /// The `on_behalf_of` the review driver's delivery helpers audit their own
 /// rows under when the quick drive calls them. A quick group has no
 /// orchestrator, so there is no agent id to put there.
@@ -112,6 +121,50 @@ pub(super) fn qd_fact(s: &str) -> String {
 /// a line that reads as an `[orrerix]` notice.
 pub(super) fn qd_text(s: &str, cap: usize) -> String {
     qd_inert(notify::sanitize_pane_text(s.trim(), cap, notify::Lines::Keep))
+}
+
+/// Write onto the record what the report — or the registry fact — that caused
+/// an arc carried: why a hold is a hold, what the reviewer said, what the
+/// worker said and which PR it named.
+///
+/// Called AFTER `QuickDriveRecord::take`, which clears `held_note` on every arc
+/// that is not a hold.
+fn qd_carry_notes(
+    rec: &mut QuickDriveRecord,
+    from: QuickState,
+    step: &quickdrive::QuickStep,
+    signal: &QdSignal,
+    provider: Option<&str>,
+    exit_note: &str,
+) {
+    match step.held {
+        Some(QuickHeld::Messaged) => rec.held_note = signal.message.clone(),
+        Some(QuickHeld::ProviderLimit) => rec.held_note = qd_fact(provider.unwrap_or("")),
+        Some(
+            QuickHeld::PlannerGone
+            | QuickHeld::WorkerGone
+            | QuickHeld::ReviewerGone
+            | QuickHeld::RootGone,
+        ) => rec.held_note = qd_fact(exit_note),
+        Some(
+            QuickHeld::PlannerBlocked
+            | QuickHeld::WorkerBlocked
+            | QuickHeld::ReviewerBlocked
+            | QuickHeld::RootBlocked,
+        ) => rec.held_note = signal.note.clone(),
+        _ => {}
+    }
+    if step.reviewed {
+        rec.review_note = signal.note.clone();
+        if step.held == Some(QuickHeld::ReviewLimit) {
+            rec.held_note = signal.note.clone();
+        }
+    } else if matches!(from, QuickState::WorkWait | QuickState::FixWait) && step.held.is_none() {
+        rec.worker_note = signal.note.clone();
+        if let Some(pr) = pr_number(&signal.pr_ref).filter(|_| !signal.pr_ref.is_empty()) {
+            rec.pr = Some(pr);
+        }
+    }
 }
 
 /// The task, cut to one line for a notice.
@@ -164,6 +217,30 @@ pub struct QdSignal {
     pub message: String,
     /// The pane holding the turn reported `progress`.
     pub progress: bool,
+}
+
+impl QdSignal {
+    /// Make this entry `side`'s, dropping whatever another side left in it.
+    ///
+    /// Everything but the message is a statement BY a side — its verdict, its
+    /// note, its PR, its `progress` — so it is only meaningful beside the
+    /// `from` it was written with. Re-labelling an entry without clearing
+    /// those is how one side's `done` gets read as the next side's: a worker's
+    /// report landing a moment after the human's hand-off leaves
+    /// `{worker, Done}` behind, and a reviewer's `progress` that only set
+    /// `from` turned it into `{reviewer, Done}` — a request for changes
+    /// nobody made, and a round spent with no findings (#3681 review W3).
+    ///
+    /// A message is not cleared: it parks the run whichever pane sent it.
+    pub fn claim(&mut self, side: QuickSide) {
+        if self.from != Some(side) {
+            self.signal = QuickSignal::None;
+            self.note.clear();
+            self.pr_ref.clear();
+            self.progress = false;
+        }
+        self.from = Some(side);
+    }
 }
 
 /// Everything the quick drive keeps in memory, under one lock.
@@ -420,7 +497,7 @@ impl OrchRegistry {
         if status == "progress" {
             let mut mem = self.qd_mem.lock_safe();
             let sig = mem.signals.entry(group.clone()).or_default();
-            sig.from = Some(side);
+            sig.claim(side);
             sig.progress = true;
             return "recorded in the audit log. A report(progress) moves nothing in a quick run."
                 .to_string();
@@ -446,11 +523,8 @@ impl OrchRegistry {
             // `blocked` outranks a `done` seen in the same window: the two can
             // only both be present if the pane said one and then the other,
             // and `blocked` is the one that needs a human.
-            if sig.from != Some(side)
-                || sig.signal != QuickSignal::Blocked
-                || signal == QuickSignal::Blocked
-            {
-                sig.from = Some(side);
+            sig.claim(side);
+            if sig.signal != QuickSignal::Blocked || signal == QuickSignal::Blocked {
                 sig.signal = signal;
                 sig.note = qd_fact(note);
                 sig.pr_ref = qd_fact(pr_ref);
@@ -487,7 +561,7 @@ impl OrchRegistry {
         owner: QdOwner,
         text: &str,
     ) -> String {
-        let line = report::relay_payload(text);
+        let line = tail_free_snippet(&report::relay_payload(text), QD_BODY_CAP);
         let appended = self.qd_append_message(group, agent_id, &line);
         let (side, current) = match owner {
             QdOwner::Pane { side, current, .. } => (Some(side), current),
@@ -543,10 +617,16 @@ impl OrchRegistry {
         result.map(|()| path)
     }
 
-    /// Append one message to the run's `messages.md`.
+    /// Append one message to the run's `messages.md`, unless the file has
+    /// reached `QD_MESSAGES_FILE_CAP` — past it the message is refused, which
+    /// the caller audits as not saved.
     fn qd_append_message(&self, group: &GroupId, agent_id: &str, line: &str) -> Result<(), String> {
         use std::io::Write as _;
         fs::create_dir_all(self.qd_doc_dir(group)).map_err(|e| e.to_string())?;
+        let size = fs::metadata(self.qd_messages_path(group)).map(|m| m.len()).unwrap_or(0);
+        if size >= QD_MESSAGES_FILE_CAP {
+            return Err("the run's messages file is full".to_string());
+        }
         let mut f = fs::OpenOptions::new()
             .create(true)
             .append(true)
@@ -596,6 +676,53 @@ impl OrchRegistry {
         self.qd_drive_group(&group, now);
         self.qd_mem.lock_safe().serviced_ms.insert(group.clone(), now);
         Some(group)
+    }
+
+    /// The session the ROSTER holds for `agent_id`, for a side neither the
+    /// live registry nor the run's own record has one for.
+    ///
+    /// The run's record learns a pane's session at a hand-over, from the
+    /// spawn's own answer — which is empty for every CLI that mints its id
+    /// after boot (`premints_session_id` is false for four of the six). The
+    /// registry learns it later (`associate_session`) and writes it to the
+    /// roster, not to the run. So after a restart, when no agent is in memory,
+    /// the roster is the only place a first-pass worker's, a planner's or a
+    /// first reviewer's session is written down; without this read Resume
+    /// parked every such run as unresumable while the session sat on disk
+    /// (#3681 review W1).
+    ///
+    /// The LAST row naming the agent: ids stopped recycling in #524 and a
+    /// quick group is always newly minted, so an id names one agent here.
+    fn qd_roster_session(&self, group: &GroupId, agent_id: &str) -> Option<String> {
+        if agent_id.is_empty() {
+            return None;
+        }
+        self.merged_records(group)
+            .into_iter()
+            .rev()
+            .find(|r| r.id == agent_id && r.session.as_deref().is_some_and(|s| !s.is_empty()))
+            .and_then(|r| r.session)
+    }
+
+    /// Test seam: put `signal` in this group's signal slot, as a report that
+    /// lost a race with the human's hand-off leaves it.
+    #[doc(hidden)]
+    pub fn qd_put_signal_for_test(&self, group: &GroupId, signal: QdSignal) {
+        self.qd_mem.lock_safe().signals.insert(group.clone(), signal);
+    }
+
+    /// Test seam: what this group's signal slot holds now.
+    #[doc(hidden)]
+    pub fn qd_signal_for_test(&self, group: &GroupId) -> QdSignal {
+        self.qd_mem.lock_safe().signals.get(group).cloned().unwrap_or_default()
+    }
+
+    /// Test seam: [`quick_step`](Self::quick_step) while another step holds
+    /// the group's claim — the poll tick mid-spawn.
+    #[doc(hidden)]
+    pub fn quick_step_while_claimed_for_test(&self, group: &GroupId) -> Value {
+        let _claim = self.qd_claim(group);
+        self.quick_step(group)
     }
 
     /// Take the exclusive right to step `group`, or `None` if a step is
@@ -667,15 +794,27 @@ impl OrchRegistry {
         }
 
         // The registry facts, read before the state lock is taken.
-        let mut signal =
-            self.qd_mem.lock_safe().signals.get(group).cloned().unwrap_or_default();
         // A report from a side that no longer holds the turn says nothing
-        // about this one — see `QdSignal::from`. A message is not a report and
-        // is not subject to this: it parks the run whichever pane sent it.
-        if signal.from != before.state().turn() {
-            signal.signal = QuickSignal::None;
-            signal.progress = false;
-        }
+        // about this one — see `QdSignal::from`. It is dropped from the MAP,
+        // not from a local copy: left there, the next writer could adopt it
+        // (`QdSignal::claim`). A message is not a report and is not subject to
+        // this: it parks the run whichever pane sent it.
+        let signal = {
+            let mut mem = self.qd_mem.lock_safe();
+            let turn = before.state().turn();
+            match mem.signals.get_mut(group) {
+                Some(s) => {
+                    if s.from != turn {
+                        s.signal = QuickSignal::None;
+                        s.note.clear();
+                        s.pr_ref.clear();
+                        s.progress = false;
+                    }
+                    s.clone()
+                }
+                None => QdSignal::default(),
+            }
+        };
         let turn_agent = before
             .state()
             .turn()
@@ -714,38 +853,7 @@ impl OrchRegistry {
                     // What the report that caused the arc carried. Set AFTER
                     // `take`, which clears `held_note` on every arc that is
                     // not a hold.
-                    match step.held {
-                        Some(QuickHeld::Messaged) => rec.held_note = signal.message.clone(),
-                        Some(QuickHeld::ProviderLimit) => {
-                            rec.held_note = qd_fact(provider.as_deref().unwrap_or(""));
-                        }
-                        Some(
-                            QuickHeld::PlannerGone
-                            | QuickHeld::WorkerGone
-                            | QuickHeld::ReviewerGone
-                            | QuickHeld::RootGone,
-                        ) => rec.held_note = qd_fact(&exit_note),
-                        Some(
-                            QuickHeld::PlannerBlocked
-                            | QuickHeld::WorkerBlocked
-                            | QuickHeld::ReviewerBlocked
-                            | QuickHeld::RootBlocked,
-                        ) => rec.held_note = signal.note.clone(),
-                        _ => {}
-                    }
-                    if step.reviewed {
-                        rec.review_note = signal.note.clone();
-                        if step.held == Some(QuickHeld::ReviewLimit) {
-                            rec.held_note = signal.note.clone();
-                        }
-                    } else if matches!(from, QuickState::WorkWait | QuickState::FixWait)
-                        && step.held.is_none()
-                    {
-                        rec.worker_note = signal.note.clone();
-                        if let Some(pr) = pr_number(&signal.pr_ref).filter(|_| !signal.pr_ref.is_empty()) {
-                            rec.pr = Some(pr);
-                        }
-                    }
+                    qd_carry_notes(rec, from, &step, &signal, provider.as_deref(), &exit_note);
                     Ok((true, (rec.clone(), Some((from, step)), false)))
                 }
                 None if signal.progress && !rec.progress_answered && !rec.brief_pending => {
@@ -935,12 +1043,15 @@ impl OrchRegistry {
         let known = if pane.agent.is_empty() { None } else { self.agent(&pane.agent) };
         // What the registry knows NOW first: a CLI that mints its own session
         // id reports it some time after boot, later than the spawn that
-        // recorded this pane.
+        // recorded this pane. Then the run's own record, then the roster —
+        // see `qd_roster_session` for why the third is not optional.
         let session = known
             .as_ref()
             .and_then(|a| a.session_id.clone())
             .filter(|s| !s.is_empty())
-            .unwrap_or_else(|| pane.session.clone());
+            .or_else(|| Some(pane.session.clone()).filter(|s| !s.is_empty()))
+            .or_else(|| self.qd_roster_session(group, &pane.agent))
+            .unwrap_or_default();
         let plain = |agent: String, how: &'static str| QdHandOver {
             agent,
             session: session.clone(),
@@ -956,13 +1067,36 @@ impl OrchRegistry {
             {
                 return Ok(plain(agent, "taken-over"));
             }
-            let a = self.rd_spawn(
-                group,
-                role,
-                Some(block.to_string()),
-                Some(session.clone()),
-                text,
-            )?;
+            let a = match side {
+                // A planner has no dedicated workspace to resolve: it ran in
+                // the repository itself and resumes there, which is what a
+                // spawn with no worktree and no `cwd_override` gives it — the
+                // MCP arm's own rule for a planner. `rd_spawn` resolves a
+                // workspace through `resolve_worker_resume_cwd`, which is for
+                // the two roles that must never land in the main clone and
+                // says a planner resume must not call it (#3681 review W5).
+                QuickSide::Planner => self.spawn_agent_bound(
+                    group,
+                    role,
+                    Some(block.to_string()),
+                    "",
+                    text,
+                    false,
+                    None,
+                    None,
+                    Some(session.clone()),
+                    None,
+                    None,
+                    None,
+                )?,
+                _ => self.rd_spawn(
+                    group,
+                    role,
+                    Some(block.to_string()),
+                    Some(session.clone()),
+                    text,
+                )?,
+            };
             return Ok(QdHandOver {
                 session: a.session_id.clone().unwrap_or_else(|| session.clone()),
                 agent: a.id,
@@ -980,8 +1114,8 @@ impl OrchRegistry {
         }
         if !pane.agent.is_empty() {
             return Err(format!(
-                "the {} pane ({}) is gone and its session was never recorded, so there is \
-                 nothing to re-open",
+                "the {} pane ({}) is gone and no session was ever recorded for it — its CLI \
+                 closed before it reported one — so there is nothing to re-open",
                 side.as_str(),
                 pane.agent
             ));

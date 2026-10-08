@@ -20,10 +20,12 @@
 
 use loomux_lib::orchestration::mcp::dispatch;
 use loomux_lib::orchestration::needsyou;
-use loomux_lib::orchestration::quickdrive::{self, QuickHeld, QuickSide, QuickState};
+use loomux_lib::orchestration::quickdrive::{
+    self, QuickHeld, QuickSide, QuickSignal, QuickState,
+};
 use loomux_lib::orchestration::{
-    AgentStatus, Caller, GroupId, Guardrails, OrchRegistry, QdDriveReport, QdOwner,
-    QuickStartRequest, QuickStepConfig, Role,
+    AgentStatus, Caller, GroupId, Guardrails, OrchRegistry, QdDriveReport, QdOwner, QdSignal,
+    QuickStartRequest, QuickStepConfig, Role, QD_BODY_CAP,
 };
 use serde_json::{json, Value};
 

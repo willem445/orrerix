@@ -105,7 +105,8 @@ export class QuickRuns {
     this.retime();
   }
 
-  /** Stop showing `group` — its tab closed, or its group ended. */
+  /** Stop showing `group` — its group ended (`orch-group-ended` reaches
+   *  this through the wiring's `forgetGroup`). */
   forget(group: string): void {
     this.statuses.delete(group);
     this.retime();

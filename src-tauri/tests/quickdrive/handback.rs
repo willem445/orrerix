@@ -178,3 +178,69 @@ fn a_reviewers_plain_done_sends_the_work_back_and_never_ends_the_run() {
         "the note stands in for the findings it did not send"
     );
 }
+
+/// **A `progress` report does not adopt a signal another side left behind**
+/// (#3681 review W3).
+///
+/// The fixture is what a worker's `done` leaves when it loses a race with the
+/// human's hand-off: written to the slot after the turn has moved to the
+/// reviewer. A reviewer's `progress` then re-labelled the slot as its own and
+/// left the `Done` in it, which is read as a request for changes — a round
+/// spent, with no findings written.
+#[test]
+fn a_progress_report_does_not_adopt_a_signal_another_side_left_behind() {
+    let dir = tempfile::tempdir().unwrap();
+    let reg = relaunch_registry(dir.path());
+    let repo = Repo::new();
+    let (group, _worker, reviewer) = reviewing(&reg, &repo);
+    let stale = QdSignal {
+        from: Some(QuickSide::Worker),
+        signal: QuickSignal::Done,
+        note: "a report from the turn before".to_string(),
+        ..QdSignal::default()
+    };
+    reg.qd_put_signal_for_test(&group, stale);
+
+    report(&reg, &reviewer, json!({ "outcome": "progress", "note": "still reading" }));
+    let slot = reg.qd_signal_for_test(&group);
+    assert_eq!(slot.from, Some(QuickSide::Reviewer), "the control: the slot is the reviewer's now");
+    assert_eq!(slot.signal, QuickSignal::None, "and it carries nothing the reviewer did not say");
+    assert_eq!(slot.note, "");
+
+    step(&reg, &group, T0 + 3);
+    assert_eq!(state(&reg, &group), "review-wait", "the reviewer still holds the turn");
+    assert_eq!(status(&reg, &group)["review_rounds"], json!(0), "and no round was spent");
+    let (_plan, findings, _messages) = reg.qd_document_paths_for_test(&group, 1);
+    assert!(!findings.exists(), "nor any findings written");
+
+    // The control on the mechanism: the reviewer's own verdict still moves the run.
+    report(&reg, &reviewer, json!({ "outcome": "request_changes", "note": "one thing", "summary": "fix the flag" }));
+    step(&reg, &group, T0 + 4);
+    assert_eq!(status(&reg, &group)["review_rounds"], json!(1), "that one spends the round");
+    assert!(findings.is_file(), "and writes its findings");
+}
+
+/// **A step drops a wrong-side signal from the slot itself**, not from its own
+/// copy of it — so nothing written later can find it there.
+#[test]
+fn a_step_drops_a_signal_from_a_side_that_no_longer_holds_the_turn() {
+    let dir = tempfile::tempdir().unwrap();
+    let reg = relaunch_registry(dir.path());
+    let repo = Repo::new();
+    let (group, _worker, _reviewer) = reviewing(&reg, &repo);
+    let stale = QdSignal {
+        from: Some(QuickSide::Worker),
+        signal: QuickSignal::Done,
+        note: "a report from the turn before".to_string(),
+        pr_ref: "#12".to_string(),
+        ..QdSignal::default()
+    };
+    reg.qd_put_signal_for_test(&group, stale.clone());
+    assert_eq!(reg.qd_signal_for_test(&group), stale, "the control: the seam reads what it wrote");
+
+    step(&reg, &group, T0 + 3);
+    assert_eq!(state(&reg, &group), "review-wait", "the stale report moved nothing");
+    let slot = reg.qd_signal_for_test(&group);
+    assert_eq!(slot.signal, QuickSignal::None);
+    assert_eq!((slot.note.as_str(), slot.pr_ref.as_str()), ("", ""));
+}

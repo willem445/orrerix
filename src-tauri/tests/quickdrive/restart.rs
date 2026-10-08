@@ -136,3 +136,64 @@ fn resuming_one_of_two_runs_on_a_repo_reattaches_that_run_and_not_the_other() {
     assert!(reg.group(&first).is_none(), "the other run's group was not reattached in passing");
     assert_eq!(state(&reg, &first), "work-wait", "and its record is as the old process left it");
 }
+
+/// **A session the CLI reported AFTER its spawn is re-opened after a restart**
+/// (#3681 review W1).
+///
+/// Only claude and pi are handed a session id at spawn; every other CLI mints
+/// its own after boot, and the registry writes it to the ROSTER when it learns
+/// it — not to the run's record, which only learns a session at a hand-over.
+/// After a restart no agent is in memory, so the roster is the one place a
+/// first-pass worker's session is written down. Resume has to read it there.
+#[test]
+fn resume_after_a_restart_reopens_a_session_the_cli_reported_after_its_spawn() {
+    const SESSION: &str = "0f9d2c1e-1111-4222-8333-444455556666";
+    let dir = tempfile::tempdir().unwrap();
+    let repo = Repo::new();
+    let (group, worker, cwd) = {
+        let reg = relaunch_registry(dir.path());
+        let (group, worker) = working_with(&reg, &repo, |r| r.work.cli = "copilot".into());
+        let a = reg.agent(&worker).unwrap();
+        assert!(
+            a.session_id.is_none(),
+            "the fixture's premise: copilot is handed no session id at its spawn"
+        );
+        // The CLI's session turns up some time after boot — the watcher's own call.
+        assert!(reg.associate_session(&group, &worker, SESSION), "the session is bound to the pane");
+        (group, worker, a.cwd)
+    };
+
+    let reg = relaunch_registry(dir.path());
+    let after = reg.quick_resume_at(&group, T0 + 10 * MIN).expect("the run resumes");
+    assert_eq!(after["state"], json!("work-wait"), "resumed, not parked as unresumable: {after}");
+
+    let reopened = pane(&reg, &group, QuickSide::Worker);
+    assert_ne!(reopened, worker, "the old pane died with the old process");
+    let a = reg.agent(&reopened).expect("a new pane is on the roster");
+    assert_eq!(a.role, Role::Worker);
+    assert_eq!(a.session_id.as_deref(), Some(SESSION), "running the session the roster recorded");
+    assert_eq!(a.cwd, cwd, "in the worktree the work is in");
+}
+
+/// **A pane whose CLI never reported a session cannot be re-opened, and the
+/// hold says exactly that** — the refusal half of the test above. Nothing is
+/// opened fresh in its place: a new worker would be cut a new worktree, away
+/// from the work.
+#[test]
+fn a_pane_whose_cli_never_reported_a_session_parks_the_resume_and_says_why() {
+    let dir = tempfile::tempdir().unwrap();
+    let repo = Repo::new();
+    let (group, worker) = {
+        let reg = relaunch_registry(dir.path());
+        working_with(&reg, &repo, |r| r.work.cli = "copilot".into())
+    };
+
+    let reg = relaunch_registry(dir.path());
+    let after = reg.quick_resume_at(&group, T0 + 10 * MIN).expect("the resume is answered");
+    assert_eq!(after["state"], json!("held"), "{after}");
+    assert_eq!(held_reason(&reg, &group), "unresumable");
+    let note = status(&reg, &group)["held_note"].as_str().unwrap_or_default().to_string();
+    assert!(note.contains("no session was ever recorded"), "{note}");
+    assert!(note.contains(&worker), "naming the pane: {note}");
+    assert!(live_agents(&reg, &group).is_empty(), "and nothing was opened in its place");
+}

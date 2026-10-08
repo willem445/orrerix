@@ -249,3 +249,38 @@ fn a_progress_report_is_answered_once_in_the_pane_that_sent_it() {
     assert_eq!(texts_to(&reg, &group, &worker).len(), 1);
     assert_eq!(state(&reg, &group), "work-wait");
 }
+
+/// **A message is cut to the body cap, and `messages.md` stops growing at its
+/// ceiling** (#3681 review N1). Any pane in the group may call the tool as
+/// often as it likes with up to a megabyte each time, and nothing reads the
+/// file back — so what it can cost is disk, and that is bounded.
+#[test]
+fn a_message_is_cut_and_the_messages_file_stops_growing() {
+    let dir = tempfile::tempdir().unwrap();
+    let reg = relaunch_registry(dir.path());
+    let repo = Repo::new();
+    let (group, worker) = working(&reg, &repo);
+    let (_plan, _findings, messages) = reg.qd_document_paths_for_test(&group, 1);
+    let long = "x".repeat(QD_BODY_CAP * 3);
+    let send = || call(&reg, &worker, "message_orchestrator", json!({ "text": long }));
+
+    let (is_error, answer) = send();
+    assert!(!is_error, "{answer}");
+    let one = std::fs::metadata(&messages).expect("the control: the first message was saved").len();
+    assert!(one > QD_BODY_CAP as u64 / 2, "most of a body cap was written: {one}");
+    assert!(one < QD_BODY_CAP as u64 + 200, "one message is cut to the cap, not written whole: {one}");
+
+    // Eighty more: 1.6 MB asked for against a 1 MiB ceiling.
+    for _ in 0..80 {
+        let (is_error, answer) = send();
+        assert!(!is_error, "a full file is not a tool error: {answer}");
+    }
+    let total = std::fs::metadata(&messages).unwrap().len();
+    assert!(total >= 1024 * 1024, "the control: the file did reach its ceiling: {total}");
+    assert!(total < 1024 * 1024 + QD_BODY_CAP as u64 + 200, "and stopped one message past it at most: {total}");
+
+    let rows = audit_details(&reg, &group, quickdrive::audit_action::MESSAGE);
+    assert!(rows.iter().any(|d| d["saved"] == json!(true)), "the control: some were kept");
+    let last = rows.last().expect("the calls were audited");
+    assert_eq!(last["saved"], json!(false), "and the audit says which were not: {last}");
+}

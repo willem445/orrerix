@@ -291,3 +291,26 @@ fn a_start_that_cannot_run_is_refused_before_a_group_exists() {
     ok.review.cli = "codex".into();
     reg.quick_start_at(ok, T0).expect("a review step that is off is not a reason to refuse");
 }
+
+/// **A step that finds the group already claimed says `busy`** (#3681 review
+/// W4). Its status shows no live pane — exactly what a pane that FAILED to
+/// open shows — and the launcher stops a run whose first pane failed, so the
+/// two have to be told apart or it stops one whose pane is still opening.
+#[test]
+fn a_step_that_finds_the_group_claimed_says_busy_and_opens_nothing() {
+    let dir = tempfile::tempdir().unwrap();
+    let reg = relaunch_registry(dir.path());
+    let repo = Repo::new();
+    let group = start(&reg, &repo);
+
+    let busy = reg.quick_step_while_claimed_for_test(&group);
+    assert_eq!(busy["busy"], json!(true), "{busy}");
+    assert_eq!(busy["state"], json!("work-wait"));
+    assert!(live_agents(&reg, &group).is_empty(), "it opened nothing itself");
+
+    // The control: the same call with the claim free opens the pane, and says
+    // nothing about being busy.
+    let free = reg.quick_step(&group);
+    assert!(free.get("busy").is_none(), "{free}");
+    assert_eq!(live_agents(&reg, &group).len(), 1, "the worker is open");
+}

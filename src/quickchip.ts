@@ -58,6 +58,9 @@ export interface QuickStatus {
   held_reason?: string | null;
   /** The engine's own sentence for the hold. */
   held_line?: string | null;
+  /** Only on the answer to a `step`: another step held the group, so this
+   *  status was read while a pane may still be opening. */
+  busy?: boolean;
   /** What the pane said, or what was refused. */
   held_note?: string;
   round?: number;
@@ -95,6 +98,31 @@ const isQuickState = (s: string | undefined): s is QuickState =>
 export function quickIsWorking(status: QuickStatus | null): boolean {
   if (!status?.exists || !isQuickState(status.state)) return false;
   return status.state !== "held" && status.state !== "satisfied" && status.state !== "cancelled";
+}
+
+/** What the launcher makes of the status its first `step` answered. */
+export type QuickLaunchVerdict =
+  | { kind: "opened" }
+  | { kind: "opening" }
+  | { kind: "failed"; why: string };
+
+/** Read the first step's answer: did the run's first pane open?
+ *
+ *  Three answers, because "no live pane" has two causes the launcher must not
+ *  treat alike. A pane that could not be opened leaves a run nobody can see,
+ *  and the launcher stops it. A step that found the group `busy` — the poll
+ *  tick claimed it first and is mid-spawn — shows the same empty status while
+ *  the pane is on its way, and stopping THAT run leaves the pane to arrive on
+ *  a cancelled one (#3681 review W4). So `busy` is "opening": wait, never
+ *  stop. A run that has already parked or ended is past waiting for, whatever
+ *  else the status says. */
+export function quickLaunchVerdict(status: QuickStatus): QuickLaunchVerdict {
+  if (Object.values(status.panes ?? {}).some((p) => p.live)) return { kind: "opened" };
+  if (status.busy === true && quickIsWorking(status)) return { kind: "opening" };
+  return {
+    kind: "failed",
+    why: status.held_note || status.held_line || "its first pane could not be opened",
+  };
 }
 
 /** Whether the run has ended — approved, done or stopped. */

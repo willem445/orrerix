@@ -156,6 +156,13 @@ answers**. They are the one part of a report the next pane cannot get from
 anywhere else, so they go to disk while the caller is still in its turn and can
 be told where they went.
 
+`messages.md` is the one file a pane can write as often as it likes: any pane in
+the group may call `message_orchestrator`, whether or not the run still wants
+it, with a body of up to a megabyte. So each message is cut to the 20,000
+characters a brief inlines, and the file stops taking messages at one megabyte.
+A message that was not kept is audited as not saved. Nothing reads the file back
+into a pane, so the bound is on disk and not on anyone's context.
+
 ## 5. Interception
 
 `report` asks its owners in a fixed order: the review driver, the plan driver,
@@ -219,6 +226,21 @@ The step then renders the brief from the record and delivers it:
 3. the side has never been opened → its first pane.
 
 A failed delivery parks the run with the refusal quoted.
+
+**Where a side's session comes from** is three places, asked in order: the
+registry's live entry for the pane, the run's own record, and the group's
+roster. The third is not a nicety. The record learns a session at a hand-over,
+from the spawn's own answer, and that answer is empty for every CLI that mints
+its session id after boot — four of the six. The registry learns the id later
+and writes it to the roster. After a restart no agent is in memory, so for a
+first-pass worker, a planner or a first reviewer on one of those CLIs the roster
+is the only place the session is written down. A pane whose CLI closed before it
+ever reported one has nothing to re-open, and the hold says that.
+
+A **planner** is resumed by a spawn with no worktree and no workspace override,
+which puts it back in the repository it read. The review driver's `rd_spawn`
+resolves a dedicated workspace first, through a function written for the two
+roles that must never land in the main clone; a planner is not one of them.
 
 Rendering the brief from the record, rather than storing it, is what makes a
 resume and a restart re-deliver "the pending brief" without a second copy to
@@ -288,6 +310,12 @@ tab is bound to, and the frontend can only bind once it has the group id. So
 `orch_quick_start` returns the id, the launcher binds its tab, and then asks for
 the first `step`. A step that never arrives costs nothing: the run is recorded
 with its first brief pending and the poll tick delivers it.
+
+The `step` answer carries `busy: true` when another step held the group — the
+poll tick got there first and is mid-spawn. Its status shows no live pane, which
+is also what a pane that failed to open shows. The launcher stops a run whose
+first pane failed, so it has to tell the two apart: on `busy` it asks again
+instead (`quickLaunchVerdict` in `src/quickchip.ts`).
 
 **The five verbs are one command**, with a closed action vocabulary. They are
 one authority exercised five ways — the same caller, group and ACL tier — and
@@ -406,6 +434,11 @@ branch, and by the brief.
   not own. Its report is recorded and answered; it moves nothing.
 - **The needs-you card** carries the run's notice as text. Resume and Stop are
   on the pane menu, not on the card.
+- **A run with no pane left in any tab cannot be resumed or stopped from the
+  UI**, because both verbs live on a pane's menu. Closing every pane of a run
+  parks it (the pane holding the turn is gone) and it then stays parked;
+  `next_group_id` keeps skipping its group. `orch_quick_control` still accepts
+  the verbs — what is missing is a surface that is not a pane.
 - **`remote-engine-protocol.md` §5.4** partitions the command manifest and is
   dated to an earlier count. These commands are not added to it; reconciling
   that table is its own change.

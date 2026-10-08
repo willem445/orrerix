@@ -293,9 +293,22 @@ impl OrchRegistry {
     /// Step this group's run now — what the launcher calls once its tab is
     /// bound to the group, so the first pane opens at once instead of on the
     /// next poll wake. Idempotent: a run with nothing pending does nothing.
+    ///
+    /// **`busy: true` when another step holds the group** — the poll tick
+    /// claimed it between `quick_start` and this call and is mid-spawn. The
+    /// status beside it then shows no live pane, exactly as a pane that failed
+    /// to open does, and the launcher must be able to tell the two apart: it
+    /// stops a run whose first pane failed, and stopping one whose pane is
+    /// opening leaves that pane on a cancelled run (#3681 review W4).
     pub fn quick_step(&self, group: &GroupId) -> Value {
-        self.qd_drive_group(group, now_ms());
-        self.quick_status(group)
+        let out = self.qd_drive_group(group, now_ms());
+        let mut status = self.quick_status(group);
+        if out.busy {
+            if let Some(o) = status.as_object_mut() {
+                o.insert("busy".to_string(), json!(true));
+            }
+        }
+        status
     }
 
     // ---------- status ----------

@@ -11,6 +11,7 @@ import {
   quickChipView,
   quickIsOver,
   quickIsWorking,
+  quickLaunchVerdict,
   quickMenuEntries,
   type QuickStatus,
 } from "../src/quickchip.ts";
@@ -345,4 +346,43 @@ test("a quick run's items reach the pane menu, fired at the run's group", () => 
     labels(without),
     "the run's items are added to the menu, and nothing else on it moves"
   );
+});
+
+test("the launcher reads a busy first step as a pane still opening, never as a failure", () => {
+  // The step opened the pane itself.
+  assert.deepEqual(quickLaunchVerdict(run()), { kind: "opened" });
+  // Another step held the group: no pane yet, and the run is working. This is
+  // the answer the launcher used to stop the run on.
+  const noPane = { panes: { worker: { agent: "", live: false } }, brief_pending: true };
+  assert.deepEqual(quickLaunchVerdict(run({ ...noPane, busy: true })), { kind: "opening" });
+  // The same empty status WITHOUT busy is a pane that could not be opened…
+  assert.deepEqual(quickLaunchVerdict(run(noPane)), {
+    kind: "failed",
+    why: "its first pane could not be opened",
+  });
+  // …and it carries the reason when the run parked on one.
+  assert.deepEqual(
+    quickLaunchVerdict(
+      run({ ...noPane, state: "held", held_reason: "cap-refused", held_line: "the group is at its limit", held_note: "max_agents reached" })
+    ),
+    { kind: "failed", why: "max_agents reached" }
+  );
+  assert.equal(
+    quickLaunchVerdict(run({ ...noPane, state: "held", held_reason: "cap-refused", held_line: "the group is at its limit" })).kind === "failed" &&
+      (quickLaunchVerdict(run({ ...noPane, state: "held", held_reason: "cap-refused", held_line: "the group is at its limit" })) as { why: string }).why,
+    "the group is at its limit"
+  );
+});
+
+test("busy does not outrank what the status itself says", () => {
+  const noPane = { panes: {}, brief_pending: true };
+  // A live pane is a live pane, busy or not.
+  assert.deepEqual(quickLaunchVerdict(run({ busy: true })), { kind: "opened" });
+  // A run that parked or ended is past waiting for: busy must not keep the
+  // launcher waiting on a run that will open nothing.
+  for (const state of ["held", "satisfied", "cancelled"] as const) {
+    assert.equal(quickLaunchVerdict(run({ ...noPane, busy: true, state })).kind, "failed", state);
+  }
+  // And a group with no run at all is a failure, not a wait.
+  assert.equal(quickLaunchVerdict({ group_id: "g", exists: false, busy: true }).kind, "failed");
 });

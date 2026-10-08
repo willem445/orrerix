@@ -4,9 +4,11 @@
 # advanced orchestrator on (or off-then-on) in the launcher and READ THE
 # RESOLVED-ROSTER PREVIEW before anything spawns.
 #
-# Shape: pi + OpenRouter GLM 5.3 Flash (thinking high for both tiers — GLM 5.3 Flash on OpenRouter supports only low|high|max and pi clamps upward, #2938) is the default worker and the
-# iterating reviewer; Claude Code Opus is the fallback worker (rule 3) and the
-# final validator. Orchestrator = Claude Opus, planner = Claude Fable.
+# Shape: Claude Code Haiku 5.5 at max effort is the default worker and Claude
+# Sonnet the iterating reviewer; Claude Code Opus is the fallback worker
+# (rule 3) and the final validator. Orchestrator = Claude Opus, planner =
+# Claude Fable. The `haiku` alias resolves to Haiku 5.5 on the Anthropic API
+# and needs Claude Code 2.1.293 or newer.
 #
 # THE THREE ROUTING RULES (2026-08-30 revision — each one is a measured cost):
 #
@@ -69,15 +71,6 @@
 #    entry is at the bottom of this file. The routing rules above are carried
 #    by the block NAMES the orchestrator sees in its roster, by the edges, and
 #    by the gate.
-#  * OpenRouter auth is the human's, and it is PER CLI: pi reads its own
-#    `auth.json` under pi's config dir (relocatable via `PI_CODING_AGENT_DIR`,
-#    kept separate from `OPENCODE_CONFIG_DIR`; docs/design/pi.md). Configure
-#    OpenRouter auth for pi before launching the cheap tier, and confirm with
-#    `pi --list-models` - it prints only models whose auth is configured, so
-#    an unauthed pi silently offers nothing. loomux passes
-#    `--model openrouter/z-ai/glm-5.3-flash` (verified against
-#    https://openrouter.ai/api/v1/models on 2026-08-29: id
-#    `z-ai/glm-5.3-flash`, 1.3M ctx, $0.075/M in, $0.25/M out).
 #  * effort:/context: are not settable on opencode blocks (CLI_CAPS); on the
 #    claude blocks they are left at the CLI default.
 #  * "Once" is a routing intent, not a mechanism: a verdict is bound to the
@@ -144,11 +137,11 @@ blocks:
 
   # -- workers: worker-std by default; worker-adv only per rule 3 ------------
   - id: worker-std
-    name: "Standard worker (DEFAULT for every task - pi GPT-6 Luna. Route here first, including design-shaped and evidence-heavy work)"
+    name: "Standard worker (DEFAULT for every task - Claude Haiku 5.5, max effort. Route here first, including design-shaped and evidence-heavy work)"
     kind: worker
-    cli: pi
-    model: openai-codex/gpt-6-luna
-    effort: medium
+    cli: claude
+    model: haiku
+    effort: max
     profile: .github/agents/worker-std.md
 
   - id: worker-adv
@@ -160,7 +153,7 @@ blocks:
 
   # -- reviewers: rev-std runs every round; rev-final ONCE, last, code PRs only
   - id: rev-std
-    name: "Standard review (EVERY ROUND - pi GPT-6 Luna; round 1 measures the WHOLE diff, later rounds the scope line the brief names; every finding must carry a repro; iterate to PASS with a FINAL body)"
+    name: "Standard review (EVERY ROUND - Claude Sonnet; round 1 measures the WHOLE diff, later rounds the scope line the brief names; every finding must carry a repro; iterate to PASS with a FINAL body)"
     kind: reviewer
     cli: claude
     model: sonnet
@@ -213,7 +206,7 @@ gates:
 # the injected tail is capped at ~4 KB, so it evicts the oldest unpinned entry):
 #
 # ## Cheap-tier roster: literal briefs, sequenced lanes, worker-std by default
-# When the roster carries `worker-std`/`rev-std` (pi + GLM Flash):
+# When the roster carries `worker-std`/`rev-std`:
 # 1. A brief names EXACT files and functions, the EXACT commands to run and the
 #    EXACT output that means done; one task, no judgment calls left open; grep
 #    every anchor before briefing. PR bodies carry the diffstat and run ids —

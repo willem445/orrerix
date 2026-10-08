@@ -221,7 +221,7 @@ pub(in crate::orchestration) fn load_usage_store(dir: &Path) -> Result<UsageLoad
     let base = match read_rows(&base_path) {
         RowsRead::Absent => Vec::new(), // normal: no usage yet
         RowsRead::Rows(rows) => rows,
-        RowsRead::Unreadable(e) => return Err(format!("{USAGE_FILE}: {e}")),
+        RowsRead::Unreadable(_) => Vec::new(),
         RowsRead::Corrupt(e) => {
             preserved.push(preserve_corrupt(&base_path, USAGE_FILE, e));
             base_stamp = stamp_of(&base_path);

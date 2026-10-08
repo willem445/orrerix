@@ -28,8 +28,9 @@ There are two ways to run one, and you pick under **How**:
 
 - **Steps.** You say which steps you want — **plan**, **work**, **review** — and
   orrerix passes the work between them itself. Most of this page describes it.
-- **Describe it.** You describe the task to one agent, and it decides whether
-  to plan and review and opens its own helpers. See [Describe it](#describe-it).
+- **Describe it.** One agent opens and waits. You tell it the task in its pane,
+  and it decides whether to plan and review and opens its own helpers. See
+  [Describe it](#describe-it).
 
 It never merges, tags, closes or labels anything, and it needs no GitHub issue or
 pull request. When the task ends, its panes stay open for you to read, and
@@ -43,7 +44,7 @@ Open a new pane and pick **Quick task** under **Kind**.
 | --- | --- |
 | **Repository** | Where the work happens. Required. |
 | **How** | **Steps** or **Describe it**. The rest of this table is the Steps form. |
-| **Task** | What you want done, in your own words. Required. |
+| **Task** | What you want done, in your own words. Required in Steps; Describe it has no task field. |
 | **Plan first** | Off by default. A read-only planner writes a plan, and the worker follows it. |
 | **Review the work** | On by default. A reviewer reads the work and approves it or asks for changes. |
 | **Plan / Work / Review step** | The CLI and model each step runs on, and a box for your own instructions to that step. |
@@ -170,44 +171,91 @@ and offered in every repository. Nothing in a repository can add or change one.
 ## Describe it
 
 Pick **Describe it** under **How** when you would rather say what you want than
-decide the steps yourself.
+decide the steps yourself. The form does not ask for the task. One agent opens
+and waits, and you tell it in its pane, as you would any agent.
 
 | Field | What it does |
 | --- | --- |
-| **Task** | What you want done. This is everything the agent is told. |
-| **Runs on** | The CLI and model of the agent that is given the task. Any CLI. |
+| **Runs on** | The CLI and model of the agent that opens. Any CLI. |
 | **Plan / Work / Review helper** | What each kind of helper runs on, if the agent opens one. |
-| **Review rounds** | How many times the agent may send work back after a review. |
-| **Time bound** | How long the whole run may take. |
+| **Review rounds** | How many times the agent may send work back after a review, for each task. |
+| **Time bound per task** | How long one task may take, counted from when the agent starts work on it. |
+| **Branch from** | The branch helpers' branches are cut from. Empty means the repository's default branch. |
 
-There are no steps to switch on and no instruction boxes. The agent reads the
-task and decides: a small change gets a worker and nothing else; a larger one
-may get a planner first and a reviewer after.
+There is no task field, no steps to switch on and no instruction boxes.
 
-One pane opens — the agent's — with a `quick · running` chip. It opens helper
-panes as it needs them, and they report back to it, not to you. It does not do
-the work in its own pane: it is in your checkout, and the work happens in a
-worker's worktree.
+### Giving it a task
 
-The run ends when the agent reports. You get one needs-you item with what it
-said: where the work is, and what it left open. If it cannot go on it says why,
-the run is held, and you can **Resume** it once you have answered in its pane.
+Press **Create**. One pane opens — the agent's — with a `quick · idle` chip.
+Nothing is typed into it. It already has its instructions: what a quick task
+is, which tools it has, and what it may open.
+
+Type what you want done. Your first message is the task. The agent can ask you
+questions before it starts, and you can answer them in the pane; none of that
+time counts against the time bound.
+
+The agent then decides how much the task needs. A small change gets a worker
+and nothing else; a larger one may get a planner first and a reviewer after. It
+opens helper panes as it needs them, and they report back to it, not to you. It
+does not do the work in its own pane: it is in your checkout, and the work
+happens in a worker's worktree.
+
+**The time bound starts when the agent opens or prompts its first helper.** The
+chip changes to `quick · running` at that moment.
+
+| Chip | Meaning |
+| --- | --- |
+| `quick · idle` | The agent is waiting for you. Nothing is running against a limit. |
+| `quick · running` | A task is in progress. |
+| `quick · held: …` | The task has stopped and is waiting for you. The word after the colon is why. |
+| `quick · stopped` | You stopped the run. |
+
+On gemini, which cannot be given its instructions any other way, one line is
+typed into the pane when it opens. It says where the instructions are and to
+wait for you. It is not a task.
+
+### When a task ends
+
+The task ends when the agent reports. You get one needs-you item with what it
+said: where the work is, and what it left open. The chip goes back to
+`quick · idle`.
+
+The pane is still yours to use. Type the next task into it and the agent starts
+again, with a fresh time bound and a fresh set of review rounds. Each task you
+give it ends with its own needs-you item. Helpers from an earlier task stay
+open until you or the agent close them.
+
+If the agent cannot go on it says why, the run is held, and you can **Resume**
+it once you have answered in its pane.
+
+### Closing it
+
+Close the pane when you are done with it. If no task is in progress, that is
+all there is to do: nothing is left running, nothing needs stopping, and the
+run does not appear under **Unfinished runs**. A pane you opened and never gave
+a task to costs nothing to leave open and nothing to close.
+
+If you close the pane while a task is in progress, its helpers are closed with
+it and the run is held. You can resume it from **Unfinished runs**.
 
 What the agent can and cannot do:
 
 - It can open a worker, a reviewer or a planner, and nothing else.
 - It cannot merge, tag, close or label anything, and it has no task board.
-- It cannot be closed by one of its helpers. If you close its pane, its helpers
-  are closed with it and the run is held.
-- **Stop quick run** tells it to stop and closes nothing.
+- It cannot be closed by one of its helpers.
+- **Stop quick run** tells it to stop and closes nothing. It ends the run, not
+  just the task: the agent cannot open helpers again afterwards. To change
+  what it is doing without ending the run, tell it in its pane.
 - When the run is held — at its time bound, for example — the agent is told,
   and it cannot open any more helpers until you resume the run.
 
 ## Runs that have not ended
 
-Open the Quick task form and, if any run has not ended, they are listed at the
-top under **Unfinished runs**: the task, the repository, and where the run
-stands.
+Open the Quick task form and, if any run is working or held, they are listed
+at the top under **Unfinished runs**: the task, the repository, and where the
+run stands. A Describe it run shows "A task given in its pane" for the task,
+and is listed only while a task is in progress or held — an idle one has
+nothing to resume or stop.
 
 - **Resume here** re-opens a held run's pane in the tab you are in.
 - **Stop** ends the run. Nothing is closed or deleted.
@@ -220,7 +268,8 @@ this list.
 
 If you close orrerix while a run is working, its panes go with it. The next time
 orrerix starts, the run is held with the reason `restart`, and nothing is
-re-opened until you say so. **Resume** re-opens the session that was working and
+re-opened until you say so. A Describe it run that was idle is simply over:
+there was no task to pick up again. **Resume** re-opens the session that was working and
 gives it its instructions again. With its panes gone, you resume it from
 **Unfinished runs** in the Quick task form.
 
@@ -230,8 +279,17 @@ press Resume.
 
 ## Limits
 
-- **One task per run.** A quick task has no queue. Start another for the next
-  task.
+- **One task at a time.** A quick task has no queue. A Steps run is one task:
+  start another for the next. A Describe it pane takes the next task when the
+  last one is done.
+- **A Describe it time bound starts with the first helper.** An agent that
+  never opens one is not on a clock.
+- **Opencode and codex record their session at the first message.** If you
+  give a Describe it agent on one of them its first task more than ten minutes
+  after the pane opened, a task interrupted by a restart or a closed pane
+  cannot be resumed.
+- **On copilot, its own autopilot prompt is yours to answer** when it appears
+  on your first message to a Describe it agent.
 - **A described run counts no review rounds itself.** The agent is told the
   limit and keeps to it; the time bound is the one orrerix enforces.
 - **No token budget.** A run is bounded by its review rounds and its time bound,

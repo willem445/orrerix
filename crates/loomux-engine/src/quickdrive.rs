@@ -174,7 +174,7 @@ impl QuickState {
     /// whether the run has ENDED and so is true of an idle one: that is the
     /// question "is this group still spoken for", and an idle run's is.
     pub fn is_in_progress(self) -> bool {
-        self.is_live() || self.is_parked()
+        self.is_live() || self.is_parked() || self.is_idle()
     }
 
     /// Which side holds the turn in this state, or `None` where nobody does

@@ -392,6 +392,20 @@ const STREAMS: StreamRow[] = [
     debt: null,
   },
   {
+    event: "orch-quick-changed",
+    rate: "lifecycle",
+    bound: "argued-none",
+    cite: "src/orchestration.ts",
+    reason:
+      "One per arc of a quick run that the backend takes on its own account (#3723): a described " +
+      "run's task beginning or finishing, a hold. A run takes a handful of arcs per task and each " +
+      "is caused by an agent's tool call or a human's verb, so there is no producer rate to " +
+      "bound. The handler drops the event for a run this window does not show, and otherwise " +
+      "makes one status read — the read the poll would have made, which this event exists to " +
+      "replace for an idle run that is deliberately not polled.",
+    debt: null,
+  },
+  {
     event: "orch-channel",
     rate: "gesture",
     bound: "argued-none",

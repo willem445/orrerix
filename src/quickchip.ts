@@ -11,7 +11,7 @@
 
 /** Every state a run's record can be in — the engine's `QuickState::ALL`
  *  (`crates/loomux-engine/src/quickdrive.rs`), in its order. Mirrored here and
- *  pinned against that file by `test/quickchip.test.ts`, so a ninth state is a
+ *  pinned against that file by `test/quickchip.test.ts`, so a tenth state is a
  *  red test rather than a pane whose chip reads `undefined`. */
 export const QUICK_STATES = [
   "plan-wait",
@@ -19,6 +19,7 @@ export const QUICK_STATES = [
   "review-wait",
   "fix-wait",
   "root-wait",
+  "root-idle",
   "held",
   "satisfied",
   "cancelled",
@@ -72,15 +73,22 @@ export interface QuickStatus {
   can_handoff?: boolean;
   turn?: { side: string; agent: string } | null;
   panes?: Record<string, { agent: string; live: boolean }>;
-  /** Whether this is a described run: one agent was given the task. */
+  /** Whether this is a described run: one agent, given its tasks in its pane. */
   described?: boolean;
+  /** How many tasks a described run's agent has begun (#3723). */
+  task_seq?: number;
+  /** What a described run's agent said when its last task finished. */
+  last_note?: string;
   /** Only on a row of the unfinished-runs list: the run's repository. */
   repo?: string;
 }
 
 /** How a chip is tinted: something is being done, the run is waiting on the
- *  human, it finished, or it was stopped. */
-export type QuickTone = "working" | "held" | "done" | "stopped";
+ *  human, it finished, it was stopped — or, for a described run with no task
+ *  in progress, nothing is happening and nothing is owed (#3723). `idle` has
+ *  no rule of its own in the stylesheet on purpose: it is the chip's plain,
+ *  untinted look, which is what "nothing to see" should look like. */
+export type QuickTone = "working" | "held" | "done" | "stopped" | "idle";
 
 export interface QuickChipView {
   /** The chip's text. */
@@ -98,10 +106,26 @@ const isQuickState = (s: string | undefined): s is QuickState =>
 /** Whether a run in this state is still doing something on its own — the one
  *  question the status poll asks. A parked run moves only when the human
  *  resumes or stops it, and a finished one never moves, so neither is polled:
- *  when the task ends, nothing keeps asking. */
+ *  when the task ends, nothing keeps asking.
+ *
+ *  An IDLE described run is not working either (#3723): its agent is waiting
+ *  for the human, and a pane left waiting must cost no timer. It starts
+ *  working when its agent opens a helper, which the backend announces
+ *  (`orch-quick-changed`) — that event, not a poll, is what wakes its chip. */
 export function quickIsWorking(status: QuickStatus | null): boolean {
   if (!status?.exists || !isQuickState(status.state)) return false;
-  return status.state !== "held" && status.state !== "satisfied" && status.state !== "cancelled";
+  return (
+    status.state !== "held" &&
+    status.state !== "satisfied" &&
+    status.state !== "cancelled" &&
+    status.state !== "root-idle"
+  );
+}
+
+/** Whether a described run has no task in progress (#3723): its agent's pane
+ *  is open — or opening — and waiting to be told what to do. */
+export function quickIsIdle(status: QuickStatus | null): boolean {
+  return status?.exists === true && status.state === "root-idle";
 }
 
 /** How long the backend waits for a new pane to bind before it gives the
@@ -152,7 +176,9 @@ function folderName(path: string): string {
  *  had — so this list is the way back to one. It is built from what the
  *  backend read off the run records, and it drops anything that is not a run
  *  still worth acting on: a group with no run, a state this build does not
- *  know, and a run that has ended.
+ *  know, a run that has ended — and an idle described run (#3723), which has
+ *  nothing in progress to resume or stop. The backend already leaves that one
+ *  out; it is dropped here too so the list's rule is in one readable place.
  *
  *  **Resume is offered only where it applies.** A working run is not resumed —
  *  it has a pane holding the turn, or it is about to be parked for not having
@@ -161,8 +187,11 @@ export function quickRunRows(list: readonly QuickStatus[]): QuickRunRow[] {
   const rows: QuickRunRow[] = [];
   for (const status of list) {
     const view = quickChipView(status, null);
-    if (!view || quickIsOver(status)) continue;
-    const task = (status.task ?? "").split(/\s+/).filter(Boolean).join(" ");
+    if (!view || quickIsOver(status) || quickIsIdle(status)) continue;
+    // A described run's task was given in its pane, so there is none to show;
+    // the row says so rather than reading as a run somebody forgot to name.
+    const typed = (status.task ?? "").split(/\s+/).filter(Boolean).join(" ");
+    const task = typed || (status.described ? "A task given in its pane" : "");
     rows.push({
       group: status.group_id,
       task: task.length > 90 ? `${task.slice(0, 89)}…` : task,
@@ -190,10 +219,16 @@ export type QuickLaunchVerdict =
  *  the pane is on its way, and stopping THAT run leaves the pane to arrive on
  *  a cancelled one (#3681 review W4). So `busy` is "opening": wait, never
  *  stop. A run that has already parked or ended is past waiting for, whatever
- *  else the status says. */
+ *  else the status says.
+ *
+ *  An idle described run is one that can still be opening (#3723): its first
+ *  pane is its agent's, opened with the run in `root-idle`. So the wait is
+ *  asked of "working or idle", not of "working" — otherwise a busy step on a
+ *  described run would read as a failure and its pane would arrive on a run
+ *  the launcher had just stopped. */
 export function quickLaunchVerdict(status: QuickStatus): QuickLaunchVerdict {
   if (Object.values(status.panes ?? {}).some((p) => p.live)) return { kind: "opened" };
-  if (status.busy === true && quickIsWorking(status)) return { kind: "opening" };
+  if (status.busy === true && (quickIsWorking(status) || quickIsIdle(status))) return { kind: "opening" };
   return {
     kind: "failed",
     why: status.held_note || status.held_line || "its first pane could not be opened",
@@ -213,6 +248,7 @@ const STATE_VERB: Record<QuickState, string> = {
   "review-wait": "reviewing",
   "fix-wait": "fixing",
   "root-wait": "running",
+  "root-idle": "idle",
   held: "held",
   satisfied: "approved",
   cancelled: "stopped",
@@ -224,6 +260,7 @@ const STATE_TONE: Record<QuickState, QuickTone> = {
   "review-wait": "working",
   "fix-wait": "working",
   "root-wait": "working",
+  "root-idle": "idle",
   held: "held",
   satisfied: "done",
   cancelled: "stopped",
@@ -261,6 +298,15 @@ export function quickChipView(status: QuickStatus | null, agentId: string | null
     title = `${head}\nFinished. Nothing was merged; the panes are yours to read or close.`;
   } else if (state === "cancelled") {
     title = `${head}\nStopped. The panes are yours to read or close.`;
+  } else if (state === "root-idle") {
+    // Nothing is in progress. Say what the pane is for, when its clock
+    // starts, and — once a task has finished here — what its agent said.
+    const last = (status.last_note ?? "").split(/\s+/).filter(Boolean).join(" ");
+    const before = (status.task_seq ?? 0) > 0 ? `\nThe last task finished${last ? `: ${last}` : "."}` : "";
+    title =
+      `${head}\nIdle — tell this agent what you want done, in its pane. ` +
+      `The time limit starts when it opens its first helper.${before}` +
+      "\nClose the pane when you are done with it; there is nothing to stop.";
   } else if (status.brief_pending) {
     title = `${head}\nHanding over to the next step…`;
   }
@@ -284,9 +330,13 @@ export interface QuickMenuEntry {
  *
  *  A parked run offers Resume first, because that is the answer the hold's
  *  notice asks for; a working one offers the hand-off first, named for the
- *  direction it would go. Stop is always last. */
+ *  direction it would go. Stop is always last.
+ *
+ *  An idle described run offers nothing (#3723). There is no task to stop,
+ *  hand off or annotate, and the human is one keystroke from its agent:
+ *  closing the pane is the whole of ending it. */
 export function quickMenuEntries(status: QuickStatus | null): QuickMenuEntry[] {
-  if (!status?.exists || !isQuickState(status.state) || quickIsOver(status)) return [];
+  if (!status?.exists || !isQuickState(status.state) || quickIsOver(status) || quickIsIdle(status)) return [];
   const entries: QuickMenuEntry[] = [];
   if (status.state === "held") {
     entries.push({ action: "resume", label: "Resume quick run" });

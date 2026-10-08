@@ -912,6 +912,15 @@ export function initOrchestration(wiring: OrchWiring): void {
       }
     }
   });
+  // #3723: a quick run moved on the backend's own account — a task began or
+  // finished, the run was held. This is what wakes an IDLE described run's
+  // chip: an idle run is not polled (a pane left waiting costs no timer), so
+  // without it the chip would read `quick · idle` all through the next task.
+  // Only a run this window already shows is re-read; one it has never painted
+  // has no chip here to keep honest, and reading it would start polling it.
+  void listen<{ group_id: string }>("orch-quick-changed", ({ payload }) => {
+    if (quickRuns?.statusOf(payload.group_id)) void quickRuns.refresh(payload.group_id);
+  });
   // End-orchestration: the backend has already killed the group's agents, so
   // close their (now-dead) panes across every tab rather than leaving a screen
   // of dead terminals — the pane-by-pane ✕-clicking this action replaces.

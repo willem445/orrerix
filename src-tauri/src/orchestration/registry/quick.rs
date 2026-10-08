@@ -481,7 +481,13 @@ impl OrchRegistry {
         validate_group_repo(&repo)?;
         let info = GroupInfo { id: group.clone(), repo, guardrails: guardrails.clamped() };
         self.groups.lock_safe().insert(group.clone(), info.clone());
-        crate::rootreg::admit_derived(&self.roots, &info.repo);
+        // Deliberately NOT declared as a root (#1042). `create_group_ex`
+        // declares a group's checkout from a value its caller just handed it;
+        // this one comes off a file on disk, and a second admit site fed from
+        // disk is a way to mint a root that nobody at a keyboard named. The
+        // reattach needs the group in the table, not a root: a pane that later
+        // browses the checkout is refused or admitted by the rule every other
+        // pane is, and `tests/rootreg.rs` keeps this file off its list.
         self.audit(group, brand::AUDIT_ACTOR, "group-resume", json!({
             "repo": info.repo, "max_agents": info.guardrails.max_agents, "by": "quick-resume",
         }));

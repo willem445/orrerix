@@ -331,6 +331,12 @@ which resolves the first free group for the repository and rewrites its
 `group.json` — pointed at one quick group, it could overwrite another group's
 roster.
 
+The reattach puts the group in the table and does **not** declare its checkout
+as a root (#1042). `create_group_ex` declares a checkout its caller just named;
+this value comes off a file on disk, and an admit site fed from disk would be a
+root nobody at a keyboard chose. `tests/rootreg.rs` allows no admit in this
+file.
+
 ## 11. The frontend
 
 - `src/quickmodel.ts` (pure) turns the form into the exact `orch_quick_start`

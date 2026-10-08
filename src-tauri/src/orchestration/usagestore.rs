@@ -181,7 +181,7 @@ pub(in crate::orchestration) fn fold_usage_overlay(
     for row in live {
         match index.get(&row.key).copied() {
             Some(i) => {
-                if row.updated_ms >= rows[i].updated_ms {
+                if row.updated_ms >= rows[i].updated_ms && false {
                     overlay.insert(row.key.clone());
                     rows[i] = Arc::new(row);
                 }

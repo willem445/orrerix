@@ -902,7 +902,9 @@ pub struct AgentRecord {
     pub forked_from: Option<String>,
 }
 
-/// Durable per-agent usage snapshot (`usage.json` per group). Keyed by the CLI
+/// Durable per-agent usage snapshot (one row of a group's usage store:
+/// `usage.json`, plus `usage-live.json` for rows that have moved since it was
+/// last written — `docs/design/usage-store.md`). Keyed by the CLI
 /// session id when known (so a resumed session updates one row instead of
 /// double-counting), else `agent:<id>`. Snapshots survive `kill_agent`/exit —
 /// captured in `mark_dead` — so a group's lifetime cost keeps counting
@@ -996,6 +998,13 @@ pub struct UsageSnapshot {
     /// `series_sample`).
     #[serde(default)]
     pub current_model: Option<String>,
+    /// When this row was last refreshed. In memory that is the last tick that
+    /// read the agent. ON DISK it is when the row's figures were last written,
+    /// which is never earlier than when they last changed: a tick on which
+    /// nothing else moved does not write the row just to restamp it (#3677).
+    /// Per row it never goes backwards and moves strictly with every change to
+    /// what persists, because the usage store orders a row held in both of its
+    /// files by this field (`fold_usage_overlay`). Nothing else reads it.
     pub updated_ms: u64,
     /// When this row's counters last moved and what its last wake cost (#3407)
     /// — folded in [`OrchRegistry::merge_usage_entry`] from the reading this

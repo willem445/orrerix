@@ -103,7 +103,7 @@ So `orch_strip_view` takes the caller's bound ids and stamps a strip lease per
 id, and the publisher covers `reg.groups` ∪ fresh strip leases. Still one IPC
 per sweep. A leased id the registry does not know is computed through the SAME
 functions as any other — `group_summary` answers zero live agents,
-`group_usage_live_within` reads that group's `usage.json` — so its entry is
+`group_usage_live_within` reads that group's usage store — so its entry is
 wire-identical to what the commands it replaced returned for it, by
 construction rather than by a second disk path.
 

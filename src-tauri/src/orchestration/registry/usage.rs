@@ -1,8 +1,9 @@
 //! Usage accounting: the per-agent usage snapshot and its merge, the usage
 //! time series (`usage_series`, `series_sample`), the group's usage and token
 //! totals, and the cost basis, as an `impl OrchRegistry` block (#3498). The
-//! designs are `docs/design/group-cost-tracking.md` and
-//! `docs/design/token-charts.md`.
+//! designs are `docs/design/group-cost-tracking.md`,
+//! `docs/design/usage-store.md` (where the rows live and when the disk is
+//! written) and `docs/design/token-charts.md`.
 
 use super::*;
 
@@ -1113,7 +1114,9 @@ impl OrchRegistry {
 
         // #2011 slice B: one series row per key whose counters moved, off the
         // snapshots this tick already computed and after the merge, so a row
-        // is only written for spend that persisted. Effort comes from a
+        // is only written for spend that persisted — except on a tick whose
+        // usage store could not be read, where the merge hands back this
+        // tick's own readings unsaved (#3677). Effort comes from a
         // separate bounded context-signal read scoped to this group.
         let context_signals = self.agent_context_signals_for_group(Some(group));
         self.series_sample(group, &snaps, &live_keys, &context_signals);

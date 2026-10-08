@@ -280,6 +280,7 @@ mod ghclose;
 mod fork;
 mod cacheage;
 mod postcompact;
+mod usagestore;
 
 use helpers::*;
 use registry::*;

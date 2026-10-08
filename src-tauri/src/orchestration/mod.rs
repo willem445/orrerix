@@ -586,6 +586,8 @@ mod tuning;
 pub use tuning::*;
 mod unconfirmed;
 pub use unconfirmed::*;
+mod usagestore;
+pub use usagestore::*;
 mod usageview;
 pub use usageview::*;
 mod worktrees;

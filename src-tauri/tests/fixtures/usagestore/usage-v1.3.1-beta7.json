@@ -1,0 +1,180 @@
+[
+  {
+    "key": "00000000-0000-4000-8000-000000000000",
+    "agent_id": "rev-3694",
+    "name": "rev-std: #3678 workflow haiku",
+    "role": "reviewer",
+    "source": "transcript",
+    "block": "rev-std",
+    "cli": "claude",
+    "input_tokens": 30,
+    "output_tokens": 9510,
+    "cache_creation_tokens": 115377,
+    "cache_read_tokens": 1455012,
+    "cost_usd": 1.01190735,
+    "estimated": true,
+    "model": "claude-sonnet-5-5",
+    "current_model": "claude-sonnet-5-5",
+    "updated_ms": 1791426741660,
+    "activity": {
+      "last_active_ms": 1791426230688,
+      "last_wake": {
+        "at_ms": 1791426211516,
+        "idle_before_ms": 127519,
+        "input_tokens": 2,
+        "output_tokens": 253,
+        "cache_creation_tokens": 201,
+        "cache_read_tokens": 111536,
+        "cost_usd": 0.03801555000000001
+      },
+      "baseline": {
+        "source": "transcript",
+        "counters": {
+          "input": 30,
+          "output": 9510,
+          "cache_creation": 115377,
+          "cache_read": 1455012
+        },
+        "cost_usd": 1.01190735
+      }
+    }
+  },
+  {
+    "key": "00000000-0000-4000-8000-000000000001",
+    "agent_id": "w-4",
+    "name": "w-59-labels",
+    "role": "worker",
+    "source": "transcript",
+    "block": "",
+    "cli": "",
+    "input_tokens": 4615,
+    "output_tokens": 12834,
+    "cache_creation_tokens": 52934,
+    "cache_read_tokens": 1515773,
+    "cost_usd": 1.4326490000000005,
+    "estimated": true,
+    "model": "claude-opus-4-8",
+    "current_model": null,
+    "updated_ms": 1783280638044,
+    "activity": {
+      "last_active_ms": null,
+      "last_wake": null,
+      "baseline": null
+    }
+  },
+  {
+    "key": "00000000-0000-4000-8000-000000000002",
+    "agent_id": "w-42",
+    "name": "w-78-jobobj",
+    "role": "worker",
+    "source": "none",
+    "block": "",
+    "cli": "",
+    "input_tokens": 0,
+    "output_tokens": 0,
+    "cache_creation_tokens": 0,
+    "cache_read_tokens": 0,
+    "cost_usd": null,
+    "estimated": false,
+    "model": null,
+    "current_model": null,
+    "updated_ms": 1783362507527,
+    "activity": {
+      "last_active_ms": null,
+      "last_wake": null,
+      "baseline": null
+    }
+  },
+  {
+    "key": "00000000-0000-4000-8000-000000000003",
+    "agent_id": "orch-1",
+    "name": "orchestrator",
+    "role": "orchestrator",
+    "source": "statusline",
+    "block": "",
+    "cli": "",
+    "input_tokens": 0,
+    "output_tokens": 0,
+    "cache_creation_tokens": 0,
+    "cache_read_tokens": 0,
+    "cost_usd": 0.0,
+    "estimated": false,
+    "model": null,
+    "current_model": null,
+    "updated_ms": 1784046737668,
+    "activity": {
+      "last_active_ms": null,
+      "last_wake": null,
+      "baseline": null
+    }
+  },
+  {
+    "key": "ses_fixture0000000000000000004",
+    "agent_id": "rev-1571",
+    "name": "rev-std #1751 lessons PR",
+    "role": "reviewer",
+    "source": "session-db",
+    "block": "",
+    "cli": "",
+    "input_tokens": 71427,
+    "output_tokens": 3080,
+    "cache_creation_tokens": 0,
+    "cache_read_tokens": 203776,
+    "cost_usd": 0.009183665,
+    "estimated": false,
+    "model": "{\"id\":\"z-ai/glm-5.3-flash\",\"providerID\":\"openrouter\",\"variant\":\"high\"}",
+    "current_model": null,
+    "updated_ms": 1788059333161,
+    "activity": {
+      "last_active_ms": null,
+      "last_wake": null,
+      "baseline": null
+    }
+  },
+  {
+    "key": "00000000-0000-4000-8000-000000000005",
+    "agent_id": "rev-2658",
+    "name": "Standard review (EVERY ROUND - pi + GLM 2658",
+    "role": "reviewer",
+    "source": "pi-transcript",
+    "block": "rev-std",
+    "cli": "pi",
+    "input_tokens": 239951,
+    "output_tokens": 42965,
+    "cache_creation_tokens": 0,
+    "cache_read_tokens": 6562880,
+    "cost_usd": 0.127180775,
+    "estimated": false,
+    "model": "openrouter/z-ai/glm-5.3-flash",
+    "current_model": null,
+    "updated_ms": 1788804216091,
+    "activity": {
+      "last_active_ms": null,
+      "last_wake": null,
+      "baseline": null
+    }
+  },
+  {
+    "key": "00000000-0000-4000-8000-000000000006",
+    "agent_id": "w-3070",
+    "name": "w-3070: #3373 fix (codex luna)",
+    "role": "worker",
+    "source": "codex-transcript",
+    "block": "worker-std",
+    "cli": "codex",
+    "input_tokens": 42484,
+    "output_tokens": 1182,
+    "cache_creation_tokens": 0,
+    "cache_read_tokens": 195072,
+    "cost_usd": null,
+    "estimated": true,
+    "model": "gpt-6-luna",
+    "current_model": null,
+    "updated_ms": 1790200129154,
+    "activity": {
+      "last_active_ms": null,
+      "last_wake": null,
+      "baseline": null
+    }
+  }
+]

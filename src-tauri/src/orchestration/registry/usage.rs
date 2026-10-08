@@ -490,7 +490,7 @@ impl OrchRegistry {
                 // the newer one. The fold above took the reading's own stamp
                 // before this, so the activity clock is untouched.
                 next.updated_ms = if changed {
-                    next.updated_ms.max(existing.updated_ms.saturating_add(1))
+                    next.updated_ms.max(existing.updated_ms)
                 } else {
                     next.updated_ms.max(existing.updated_ms)
                 };

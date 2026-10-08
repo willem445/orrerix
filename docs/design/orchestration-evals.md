@@ -39,7 +39,7 @@ field, or a new gate.
 | --- | --- | --- |
 | `audit.jsonl` (+ rotated `audit.N.jsonl`) | every row below | `<group>/` |
 | `usage.json` | tokens and cost per CLI session, with `agent_id` | `<group>/` |
-| `usage-live.json` | the same rows for sessions that have moved since `usage.json` was last written whole (#3677, `usage-store.md`); folded over `usage.json` when it sits beside `--usage`, absent on a store with nothing running | `<group>/` |
+| `usage-live.json` | the same rows for sessions that have moved since `usage.json` was last written whole (#3677, `usage-store.md`); folded over `usage.json` when it sits beside `--usage`, absent on a store where nothing has moved since that write | `<group>/` |
 | `agents.json` | `id → role, block, session, task` | `<group>/` |
 | the orchestrator's CLI transcript | per-turn token usage with a timestamp | `~/.claude/projects/<slug>/<session>.jsonl` |
 | a DELEGATE's CLI transcript | the tokens a zero `usage.json` row lost (#2167, §4.6) | the same tree, located by `--claude-projects` |

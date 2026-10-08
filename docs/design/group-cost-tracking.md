@@ -197,9 +197,9 @@ branch.
 resumed session updates one row instead of double-counting, since the transcript
 is cumulative.
 
-The store is two files, `<group>/usage.json` (every row) and
-`<group>/usage-live.json` (the rows that have changed since `usage.json` was
-last written whole), held in memory between ticks. Where the rows live and when
+The store is two files, `<group>/usage.json` (a row for every session, as of
+its last whole write) and `<group>/usage-live.json` (the rows whose figures
+have changed since then), held in memory between ticks. Where the rows live and when
 each file is written is [usage-store.md](usage-store.md); the rest of this
 section is what the rows mean.
 

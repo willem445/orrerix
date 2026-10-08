@@ -37,36 +37,56 @@ lock and nothing new to order: see *Locks* below.
 
 | file | holds | written |
 | --- | --- | --- |
-| `usage.json` | every row, as one pretty-printed JSON array — the shape it has always had | whole, when a row *settles* |
-| `usage-live.json` | the rows that changed since `usage.json` was last written, same row shape, compact | on a tick where a row changed |
+| `usage.json` | a row for every key the store has, as one pretty-printed JSON array — the shape it has always had. Each row's figures are as of the last whole write | whole, when a key is first seen or a row *settles* |
+| `usage-live.json` | the rows whose figures changed since `usage.json` was last written, same row shape, compact | on a tick where a row the store already had changed |
 
-**What a tick does** (`plan_usage_write`):
+**What a merge writes** (`plan_usage_write`):
 
 | the merge found | written |
 | --- | --- |
 | no row whose persisted content changed | nothing |
-| a change, and every row waiting in the overlay belongs to an agent this tick carried | `usage-live.json` |
-| a change, and the overlay holds a row no agent in this tick owns | `usage.json`, whole; the overlay is then removed |
+| a change to rows the store already had | `usage-live.json` |
+| a row for a key the store did not have | `usage.json`, whole; the overlay is then removed |
 | a kill snapshot (`upsert_usage_snapshot`), with anything waiting | `usage.json`, whole; the overlay is then removed |
 
 So the steady state while one agent spends is one small file replaced per
 tick, holding that agent's row and those of any other agent that has moved
-since the last whole write. Its size is bounded by the live agents, not by the
-group's history. The whole-file write happens once per agent that ends, which
-is the cadence at which the historical rows actually change.
+since the last whole write. Its size is bounded by the agents that have been
+live since then, not by the group's history. The whole-file write happens once
+per key that appears and once per agent that ends, which is the cadence at
+which the set of rows actually changes.
 
 **Why a kill writes the whole file.** A dead agent's row has no later tick to
 carry it anywhere, and `usage.json` is the file every build reads. The same
 write folds in whatever else was waiting, so the overlay is empty again
 afterwards.
 
-**Why a tick sometimes does.** The overlay must not become a second
-ever-growing file. Two things leave a row in it that no later tick will
-refresh: a process that stops without killing its agents (their rows are in
-the overlay when it comes back), and a pane whose key changes (an `agent:<id>`
-row from before its session id was known). The rule above catches both: the
-first tick that has anything to write, and finds such a row waiting, writes
-`usage.json` instead. That is one whole write per such event.
+**Why a new key does.** `usage.json` is the one file an older build, the
+scorecard and anything else outside this store opens. If a first sighting went
+to the overlay like any other change, a row would exist in `usage-live.json`
+alone until the next agent ended: `usage.json` would be missing every agent
+spawned since the last whole write, and would not exist at all in a group
+where nobody had ended yet. Writing a new key whole is what makes "a row for
+every key" true of that file, and it is the invariant the *Older builds*
+section rests on. The first version of this change did not do it; the review
+of #3680 found the gap (B1).
+
+**Why nothing else does.** That first version also wrote `usage.json` whenever
+the overlay held a row the current tick had not carried — one a previous
+process left behind, say — to keep the overlay to live rows. It is gone for
+two reasons. It is not needed: the overlay only ever takes keys `usage.json`
+already has, and the next new key or ended agent empties it, so it cannot grow
+past the agents that were live since the last whole write. And it was harmful
+with two instances of the app on one state root, which nothing prevents and
+which the solo-pane group makes ordinary: each instance saw the other's
+spending agent as a row it did not own, and the two rewrote the whole file
+against each other once a tick (#3680 review N1).
+
+**What two instances still cost.** Each one's overlay write moves the stamp
+the other is watching (below), so each re-reads both files on its next tick.
+That is a parse per foreign write where a single instance does none. Totals
+stay right, and the whole-file *write* per tick is gone; the re-read is the
+price of noticing another writer at all, and is not addressed here.
 
 ## What "unchanged" means
 
@@ -192,8 +212,15 @@ A stamp that cannot be taken at all never equals anything, itself included.
   They used to fail the *read*, which was taken for "absent", so the file was
   overwritten with no copy kept.
 - **A crash mid-write.** Both files are replaced through
-  `fsatomic::atomic_write` (temp file, `fsync`, rename), so each is always
-  either its old contents or its new ones (#133).
+  `fsatomic::atomic_write` (temp file, `fsync`, rename), so on the path that
+  function takes whenever the rename succeeds, each is either its old contents
+  or its new ones (#133). `atomic_write` has one fallback that is not atomic:
+  when the rename fails because something holds the destination, it writes the
+  file in place. A crash inside that write leaves a torn file, which the next
+  load moves aside as `.bad`. For the overlay that costs the live rows' spend
+  since the last whole write, until those sessions are read again. The same
+  exposure existed for `usage.json` before this change, where it cost every
+  row; it is smaller now and still not closed, and no test pins it.
 
 ## Older builds, in both directions
 
@@ -204,9 +231,10 @@ before. Reading it does not rewrite it. Both shapes are pinned on fixtures cut
 from a real store (`src-tauri/tests/fixtures/usagestore/`).
 
 **An older build can read what this build writes**, with one limit. It reads
-`usage.json`, which is still a valid, complete row list, and ignores
-`usage-live.json`. So it sees every row, with a live agent's row as of the
-last whole write. After an orderly end of every agent that is nothing, because
+`usage.json`, which is still a valid row list with a row for every key, and
+ignores `usage-live.json`. So it sees every session, with a live agent's
+figures as of the last whole write (the last time any agent was first seen or
+ended). After an orderly end of every agent that is nothing, because
 each kill writes the whole file. After the app is closed or crashes with
 agents running, an older build undercounts those agents by what they spent
 since the last whole write, until their sessions are resumed (a session's
@@ -241,7 +269,8 @@ the ones `series_sample`'s doc enumerates.
 - **Live and dead rows in two disjoint files.** Avoids deciding which file
   wins, but an older build reading `usage.json` alone would then be missing
   every live agent's row outright, rather than holding a slightly stale one.
-  With an overlay, `usage.json` is always a complete file.
+  With an overlay and a whole write for each new key, `usage.json` has a row
+  for every session.
 - **An append-only journal of changed rows.** Smaller writes still, but it
   grows by a row per tick for as long as an agent spends, so it needs a second,
   size-based trigger to rewrite the base and a rule for a torn final line. An
@@ -263,8 +292,12 @@ the ones `series_sample`'s doc enumerates.
   dropped by `end_group`. A group that is only ever read (a strip-leased one
   from an earlier session) keeps its rows for the process's life: one parsed
   copy of a file that path used to parse every second.
-- **A whole write is still a whole write.** Ending an agent in a group with
-  thousands of rows writes them all, once.
+- **A whole write is still a whole write.** Starting or ending an agent in a
+  group with thousands of rows writes them all, once each.
+- **A field that jitters.** A live row whose persisted content differs on every
+  reading (a statusline dollar figure that flickers, say) is a change on every
+  tick, and is written to the overlay every tick. That is a small write, not
+  the old whole one, and nothing here damps it.
 
 ## Tests
 
@@ -280,8 +313,10 @@ counter in the code under test:
   it has;
 - a kill snapshot lands in `usage.json`, and lifetime totals are the same
   after a restart that killed nothing;
-- a row in both files, in each direction, and an overlay row with no live
-  owner;
+- a newly seen agent is in `usage.json` from its first tick, including one
+  spawned after the last agent ended;
+- a row in both files, in each direction; an overlay row another writer owns
+  is left where it is; a changed row always gets a later `updated_ms`;
 - a failed write, an unreadable store, and a non-UTF-8 file;
 - `usage.json` as v1.3.0 and v1.3.1-beta7 wrote it, and `usage.json` as an
   older build would read it back.

@@ -624,7 +624,7 @@ impl OrchRegistry {
         use std::io::Write as _;
         fs::create_dir_all(self.qd_doc_dir(group)).map_err(|e| e.to_string())?;
         let size = fs::metadata(self.qd_messages_path(group)).map(|m| m.len()).unwrap_or(0);
-        if size >= QD_MESSAGES_FILE_CAP {
+        if false {
             return Err("the run's messages file is full".to_string());
         }
         let mut f = fs::OpenOptions::new()
@@ -1313,7 +1313,7 @@ impl OrchRegistry {
                 )
             }
             QuickState::FixWait => {
-                let path = self.qd_findings_path(group, rec.reviews_total);
+                let path = self.qd_findings_path(group, rec.review_rounds);
                 let findings = if rec.forced {
                     "The human sent this back without waiting for the reviewer's verdict, so no \
                      findings were recorded for it. Read the notes below, or ask them in this \

@@ -563,6 +563,9 @@ impl OrchRegistry {
             return Vec::new(); // unreachable: `ensure_usage_store` just put it there
         };
         if incoming.is_empty() && !settle {
+            if !store.rows.is_empty() {
+                let _ = store.write_whole(&dir);
+            }
             let rows = store.rows.clone();
             drop(stores);
             self.note_poll_read(group, "usage-store", Ok(()));

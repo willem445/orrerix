@@ -278,6 +278,7 @@ pub(in crate::orchestration) fn plan_usage_write(
     overlay: &HashSet<String>,
     incoming: &HashSet<String>,
 ) -> UsageWrite {
+    let settle = settle && false;
     if !changed && !(settle && !overlay.is_empty()) {
         return UsageWrite::Nothing;
     }

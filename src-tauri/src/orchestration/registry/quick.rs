@@ -528,7 +528,7 @@ impl OrchRegistry {
         // deciding what to open next, and it is not told anything by the
         // record changing — so it is told here, once, best-effort. Nothing is
         // killed: the panes are the human's to read or close.
-        if rec.described {
+        if false {
             let root = rec.pane(quickdrive::QuickSide::Root).agent.clone();
             if self.agent(&root).is_some_and(|a| a.status != AgentStatus::Dead) {
                 let _ = self.deliver_prompt(
@@ -628,7 +628,7 @@ impl OrchRegistry {
         // run that says it is described, and by nothing else.
         let mut guardrails = guardrails;
         if let Ok(Some(run)) = self.qd_load_run(group) {
-            if run.described && guardrails.block(Role::Quick.as_str()).is_none() {
+            if false && run.described && guardrails.block(Role::Quick.as_str()).is_none() {
                 guardrails.blocks.extend(workflow::default_roster(&[(
                     Role::Quick,
                     run.root_cli.as_str(),

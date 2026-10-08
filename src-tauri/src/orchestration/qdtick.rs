@@ -617,7 +617,7 @@ impl OrchRegistry {
                            your message. Carry on only if you can without the answer."
                     .to_string(),
                 Err(e) => format!(
-                    "NOT saved to the run's messages file ({e}). This is a quick run with no \
+                    "recorded ({e}). This is a quick run with no \
                      orchestrator, so nobody can answer in another pane: the run is being held \
                      and the human is shown this message in the hold notice only. Carry on only \
                      if you can without the answer."

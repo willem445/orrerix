@@ -42,7 +42,11 @@ pub struct QuickStepConfig {
 pub struct QuickStartRequest {
     /// The repository the run works in.
     pub repo: String,
-    /// The task, in the human's words.
+    /// The task, in the human's words — a STEPS run's, which the engine relays
+    /// to the first pane. A described run takes none here (#3723): its agent
+    /// opens idle and is given the task in its own pane, so a task sent with
+    /// `mode: "describe"` is refused rather than silently dropped.
+    #[serde(default)]
     pub task: String,
     /// Whether to plan first.
     #[serde(default)]
@@ -79,14 +83,15 @@ pub struct QuickStartRequest {
     pub max_spawns_per_hour: u32,
     /// How the run is driven (#3679): `"steps"` — orrerix relays between a
     /// planner, a worker and a reviewer itself — or `"describe"`, where one
-    /// agent is given the task and opens its own helpers. Empty is `steps`, so
+    /// agent opens idle, is told the task in its pane and opens its own
+    /// helpers. Empty is `steps`, so
     /// a caller written before the second mode existed means what it meant.
     /// Any other word is refused rather than read as one of the two.
     #[serde(default)]
     pub mode: String,
     /// The CLI and model of a described run's one agent. Read only in
     /// `describe` mode; its `instructions` are ignored, because that agent's
-    /// role template is its contract and the task is the human's whole input.
+    /// role template is its contract and the human says the rest in its pane.
     #[serde(default)]
     pub root: QuickStepConfig,
 }
@@ -136,11 +141,6 @@ impl OrchRegistry {
     /// [`quick_start`](Self::quick_start) with the clock injected.
     #[doc(hidden)]
     pub fn quick_start_at(&self, req: QuickStartRequest, now: u64) -> Result<Value, String> {
-        let task = qd_text(&req.task, quickdrive::QUICK_TASK_CAP);
-        if task.trim().is_empty() {
-            return Err("a quick task needs a description of what to do".into());
-        }
-        validate_group_repo(&req.repo)?;
         let described = match req.mode.trim() {
             "" | "steps" => false,
             "describe" => true,
@@ -150,6 +150,24 @@ impl OrchRegistry {
                 ))
             }
         };
+        let task = qd_text(&req.task, quickdrive::QUICK_TASK_CAP);
+        // #3723: the two modes take the task in different places. A steps run
+        // has no agent to tell — the engine relays the task into the first
+        // pane — so it is required here. A described run's agent opens idle
+        // and the human tells it the task in its pane; a task sent with that
+        // mode is refused, because accepting it would mean either typing it
+        // into the pane (the thing the mode exists not to do) or dropping it
+        // without a word.
+        if described && !task.trim().is_empty() {
+            return Err("a described quick task takes no task here — its agent opens idle, and \
+                        you give it the task in its pane. Send an empty task, or use the steps \
+                        mode to have orrerix relay one."
+                .into());
+        }
+        if !described && task.trim().is_empty() {
+            return Err("a quick task needs a description of what to do".into());
+        }
+        validate_group_repo(&req.repo)?;
 
         // The group's default CLI is the work step's: the worker is the one
         // pane every run has.
@@ -261,7 +279,7 @@ impl OrchRegistry {
         // as the default, exactly as every other spawn's is, and the review
         // brief resolves a NAME for it when it is rendered.
         let rec = if described {
-            let mut rec = QuickDriveRecord::new_described(&task, req.base.trim(), &limits, now);
+            let mut rec = QuickDriveRecord::new_described(req.base.trim(), &limits, now);
             rec.root_cli = root_cli.clone();
             rec.root_model = req.root.model.trim().to_string();
             rec
@@ -297,17 +315,25 @@ impl OrchRegistry {
             let file = QuickDriveFile { run: Some(rec.clone()), ..QuickDriveFile::default() };
             quickdrive::store_state(&dir, &file)?;
         }
+        // Known to THIS process before the marker makes the group findable:
+        // the start-up scan reads the orchestration root for marked groups and
+        // treats one it does not know as an earlier process's — parking a
+        // working run, and (#3723) ending an idle one. A run this call has
+        // just written is neither.
+        {
+            let mut mem = self.qd_mem.lock_safe();
+            mem.known.insert(group.id.clone());
+            // On the tick's candidate list in both modes: a steps run is
+            // working, and a described run is owed its root's pane. The step
+            // that opens that pane takes an idle run off the list again.
+            mem.working.insert(group.id.clone());
+            mem.signals.remove(&group.id);
+        }
         // THE MARKER, written after the record: a marker with no run would make
         // every report in this group answer "nothing is listening".
         // Best-effort like the `lead` marker it sits beside — a failed write
         // loses the interception, and the run then parks on its own bounds.
         let _ = fs::write(dir.join(crate::orchestration::QUICK_MARKER), b"1");
-        {
-            let mut mem = self.qd_mem.lock_safe();
-            mem.known.insert(group.id.clone());
-            mem.working.insert(group.id.clone());
-            mem.signals.remove(&group.id);
-        }
         self.qd_audit(&group.id, act::STARTED, json!({
             "plan_step": rec.plan_step, "review_step": rec.review_step,
             "described": rec.described,
@@ -415,7 +441,11 @@ impl OrchRegistry {
         let mut rows: Vec<(u64, Value)> = Vec::new();
         for group in self.qd_quick_groups() {
             let Ok(Some(run)) = self.qd_load_run(&group) else { continue };
-            if run.state().is_terminal() {
+            // #3723: an idle described run is not listed. Every task it was
+            // given has finished, or it was never given one, so there is
+            // nothing here to resume or stop — and a pane opened and left
+            // alone must not sit on this list for ever.
+            if !run.state().is_in_progress() {
                 continue;
             }
             let mut row = self.qd_status_json(&group, &run);
@@ -450,6 +480,7 @@ impl OrchRegistry {
                 _ => false,
             };
         let plan = self.qd_plan_path(group);
+        let last_note = if r.described { r.worker_note.as_str() } else { "" };
         json!({
             "group_id": group,
             "exists": true,
@@ -477,6 +508,11 @@ impl OrchRegistry {
             "notes_pending": r.notes.len(),
             "plan_path": plan.is_file().then(|| plan.to_string_lossy().to_string()),
             "described": r.described,
+            // #3723: how many tasks a described run's root has begun, and what
+            // it said when the last one finished — what an idle chip's tooltip
+            // has to go on, since the task itself is not on the record.
+            "task_seq": r.task_seq,
+            "last_note": last_note,
             "panes": {
                 "planner": pane(quickdrive::QuickSide::Planner),
                 "worker": pane(quickdrive::QuickSide::Worker),
@@ -670,10 +706,17 @@ impl OrchRegistry {
     /// The root is unclamped and is never reaped, and the argument for that is
     /// that its run's bounds bound it. A bound that only changed a record
     /// would bind nothing: `spawn_agent` and `fork_session` read no run
-    /// state, so a root whose run was held at its time bound — or had ended —
-    /// could go on opening helpers for as long as it liked. So both ask here
-    /// first. A run that is held refuses until the human resumes it; a run
-    /// that is over refuses for good.
+    /// state, so a root whose run was held at its time bound — or had been
+    /// stopped — could go on opening helpers for as long as it liked. So both
+    /// ask here first. A run that is held refuses until the human resumes it;
+    /// a run the human STOPPED refuses for good.
+    ///
+    /// **A finished task refuses nothing** (#3723). A described run's root
+    /// reporting `done` returns the run to idle, where this answers `None`:
+    /// the pane takes another task, and the helper it opens for that task is
+    /// what begins it ([`qd_root_acted`](Self::qd_root_acted)). The two
+    /// refusals left are the two a human caused or has been told about — a
+    /// hold, which they are asked to resume, and a stop, which they chose.
     ///
     /// `send_prompt` and `get_output` are not gated: a held root may still
     /// read what its helpers have done and tell one to stop, and the human who
@@ -698,6 +741,153 @@ impl OrchRegistry {
         }
     }
 
+    /// **A described run's root just called `tool`, and it succeeded** — if
+    /// that put a helper to work while the run was idle, a task has begun
+    /// (#3723). Answers the tool's own answer, with the task's limits added
+    /// when this call is what began one.
+    ///
+    /// # What begins a task, and why it is these three
+    ///
+    /// `spawn_agent`, `fork_session` and `send_prompt`: the three calls that
+    /// hand a helper something to do. The record cannot see the human type,
+    /// and no hook that could exists on every CLI that can host a root; what
+    /// it can see, on all of them, is the root starting to delegate — which is
+    /// also the only work a root does, since it may not edit. A spawn alone
+    /// would not be enough: nothing is closed when a task ends, so a second
+    /// task is often begun by prompting a helper that is still open, and a run
+    /// that only noticed spawns would leave that task with no clock and its
+    /// `done` with nothing to end.
+    ///
+    /// The reads and the housekeeping — `list_agents`, `get_output`,
+    /// `group_usage`, `kill_agent`, `rename_agent`, `focus_agent` — begin
+    /// nothing. A root may look around, and clear up after the last task,
+    /// without a clock starting.
+    ///
+    /// # Why the clock starts AFTER the call
+    ///
+    /// The caller is the dispatch funnel, once the tool has answered `Ok`. A
+    /// spawn blocks until its pane has opened, which can take most of a
+    /// minute; a task is not charged for that, for the reason a state's clock
+    /// starts at delivery rather than at the arc. And a call that was REFUSED
+    /// — by the cap, by the class rule — begins nothing.
+    ///
+    /// Only `root-idle` begins a task. A working run is already on one, and a
+    /// held or stopped run is not moved by its root acting — `send_prompt` is
+    /// deliberately left open to a held root so it can tell a helper to stop.
+    ///
+    /// **And only the run's own root.** `agent_id` is the caller's, off its
+    /// token; a quick root the record does not name as its current one — a
+    /// second root in the group, which `qd_owner` already answers as a
+    /// stranger — begins nothing. Its helper is opened, since the spawn rule
+    /// is the class's and not the run's, but the run's clock is not its to
+    /// start.
+    pub(in crate::orchestration) fn qd_root_acted(
+        &self,
+        group: &GroupId,
+        agent_id: &str,
+        tool: &str,
+        answer: String,
+    ) -> String {
+        if !matches!(tool, "spawn_agent" | "fork_session" | "send_prompt") {
+            return answer;
+        }
+        if !self.is_quick_group(group) {
+            return answer;
+        }
+        let now = now_ms();
+        let begun = self.qd_edit_run(group, |r| {
+            let own_root = r.pane(quickdrive::QuickSide::Root).standing(agent_id) == Some(true);
+            if !r.described || !r.state().is_idle() || !own_root {
+                return Ok((false, None));
+            }
+            match r.begin_task(now) {
+                Ok(seq) => Ok((true, Some((seq, r.clone())))),
+                Err(_) => Ok((false, None)),
+            }
+        });
+        let Ok(Some((seq, rec))) = begun else { return answer };
+        {
+            let mut mem = self.qd_mem.lock_safe();
+            mem.working.insert(group.clone());
+            // Whatever was said while idle was said about no task.
+            mem.signals.remove(group);
+        }
+        self.qd_audit(group, act::TASK_BEGUN, json!({
+            "task": seq, "by": tool,
+            "drive_timeout_minutes": rec.drive_timeout_minutes,
+            "max_review_rounds": rec.max_review_rounds,
+        }));
+        self.qd_emit_changed(group);
+        // The limits ride on the answer of the call that began the task: an
+        // idle root is handed no first message to carry them, and this is the
+        // moment they start to apply.
+        format!(
+            "{answer}\n\nThis is the start of a task in this quick run (task {seq}). Its limits: \
+             {} minutes from now, after which the run is held for the human; and at most {} \
+             review rounds, after which you stop and report what is still open. When the task \
+             is finished, report(outcome=done).",
+            rec.drive_timeout_minutes, rec.max_review_rounds,
+        )
+    }
+
+    /// **A quick root's pane has gone** — and if no task was in progress, the
+    /// run goes with it (#3723).
+    ///
+    /// A root that dies with a task in progress is the tick's to find: the run
+    /// parks on `root-gone`, the human is told, and Resume re-opens the
+    /// session. An IDLE root has nothing to park. Every task it was given has
+    /// finished, or it was never given one, so a record left behind would be a
+    /// run that needs stopping for no reason — and would hold its group id for
+    /// a pane that is not coming back. So closing an idle root is the whole of
+    /// ending it: the record goes to `cancelled`, with no notice, because
+    /// nothing was interrupted.
+    ///
+    /// Only the run's CURRENT root ends it. A superseded pane closing says
+    /// nothing about the one that replaced it.
+    pub(in crate::orchestration) fn qd_root_exited(&self, group: &GroupId, agent_id: &str) {
+        if !self.is_quick_group(group) {
+            return;
+        }
+        let now = now_ms();
+        let closed = self.qd_edit_run(group, |r| {
+            let current = r.pane(quickdrive::QuickSide::Root).standing(agent_id) == Some(true);
+            if !r.described || !r.state().is_idle() || !current {
+                return Ok((false, false));
+            }
+            let ended = r.advance(QuickState::Cancelled, None, now).is_ok();
+            Ok((ended, ended))
+        });
+        if let Ok(true) = closed {
+            {
+                let mut mem = self.qd_mem.lock_safe();
+                mem.working.remove(group);
+                mem.signals.remove(group);
+            }
+            self.qd_audit(group, act::CLOSED, json!({
+                "agent": agent_id,
+                "why": "its root's pane closed with no task in progress",
+            }));
+            self.qd_emit_changed(group);
+        }
+    }
+
+    /// The branch a described run's helpers are cut from when the root names
+    /// none — the one the human set on the form (#3723).
+    ///
+    /// The root used to be told this in its first message and had to pass it
+    /// on every spawn. It is handed no first message now, so the default is
+    /// applied where the worktree is cut instead: a spawn in a described run's
+    /// group that names no `base` takes the run's. `None` for every other
+    /// group, for a steps run (which passes its base itself), and for a run
+    /// whose human left the field empty — the repository's default branch.
+    pub(in crate::orchestration) fn qd_helper_base(&self, group: &GroupId) -> Option<String> {
+        if !self.is_quick_group(group) {
+            return None;
+        }
+        let run = self.qd_load_run(group).ok().flatten()?;
+        (run.described && !run.base.trim().is_empty()).then(|| run.base.trim().to_string())
+    }
+
     // ---------- force a hand-off ----------
 
     /// **Hand the turn to the other side now**, without waiting for the pane
@@ -720,6 +910,11 @@ impl OrchRegistry {
             }
             if r.brief_pending {
                 return Err("the last hand-off is still being delivered — try again in a moment"
+                    .to_string());
+            }
+            if r.described {
+                return Err("a described run has no hand-off — its agent decides who works and \
+                            who reviews. Tell it in its pane."
                     .to_string());
             }
             let from = r.state();
@@ -754,6 +949,13 @@ impl OrchRegistry {
         let rec = self.qd_edit_run(group, |r| {
             if r.state().is_terminal() {
                 return Err("this quick run has already ended".to_string());
+            }
+            // #3723: an idle run has no task to attach a note to and no brief
+            // to carry it in. The human is one keystroke from the agent.
+            if r.state().is_idle() {
+                return Err("no task is in progress in this quick run — tell its agent in its \
+                            pane instead"
+                    .to_string());
             }
             r.add_note(note.trim());
             Ok((true, r.clone()))

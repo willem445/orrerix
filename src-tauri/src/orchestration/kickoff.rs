@@ -37,6 +37,51 @@ pub const MANAGER_WORKSPACE_NOTE: &str = "You work in the repository itself — 
 /// worktree, not here.
 pub const QUICK_ROOT_WORKSPACE_NOTE: &str = "You are in the repository itself — the human's own checkout. Read it freely, but do not edit files, commit or switch branches here: the work is done by the helpers you open, each in a worktree of its own.";
 
+/// The CLIs whose launch has **no system-prompt seam** for the role contract:
+/// `persona_inject` has nowhere to put it, so the kickoff's pointer to the
+/// instructions file is the only way the agent learns its role.
+///
+/// Gemini today (`build_agent_command`'s gemini arm states it: no
+/// custom-agent flag, so a persona reaches it through the kickoff). Named
+/// here as a property of a launch seam, not as a way to produce a name:
+/// `persona_inject` falls through to its generated-file arm for a CLI it has
+/// no branch for and reports the carrier that arm sets, so the carrier alone
+/// would say "full" about a CLI that received nothing.
+const NO_SYSTEM_LAYER_CLIS: [&str; 1] = ["gemini"];
+
+/// **Whether a fresh spawn types nothing into its pane** (#3723) — the idle
+/// start of a described quick run's root.
+///
+/// All four have to hold:
+///
+/// - it is a quick root, the one class that takes its task from a human
+///   typing into a pane orrerix opened;
+/// - it was spawned with NO task (a root re-opened by Resume carries the
+///   resume message, and that is typed);
+/// - its CLI has a system-prompt seam at all ([`NO_SYSTEM_LAYER_CLIS`]);
+/// - and the contract really is on that layer for this launch — a contract
+///   file that could not be written leaves [`ContractCarrier::KickoffOnly`].
+///
+/// When the last two fail, the kickoff is typed after all: it is the pointer
+/// to the instructions file and a sentence saying to wait, and it carries no
+/// task (`kickoff_body`'s quick arm). That is the documented exception, not a
+/// silent one — the alternative is a root with no instructions.
+///
+/// `SystemLayerCore` counts as there. It is Copilot's slim copy — the
+/// mechanics core, which says who the agent is and to wait, plus a pointer to
+/// the full file — and it is what every Copilot block already runs on.
+pub fn idle_start_types_nothing(
+    role: Role,
+    task: &str,
+    cli: &str,
+    carrier: ContractCarrier,
+) -> bool {
+    role == Role::Quick
+        && task.trim().is_empty()
+        && !NO_SYSTEM_LAYER_CLIS.contains(&cli)
+        && carrier != ContractCarrier::KickoffOnly
+}
+
 /// The **non-overridable orrerix mechanics core** for a capability class
 /// (harvested from PR #105, issue #51).
 ///
@@ -349,9 +394,10 @@ ends the group."
         Role::Quick => "\
 These orrerix mechanics are guaranteed by the app and are NOT optional:
 \
-- **You were given one task, and you are the ROOT of this group.** There is no \
-orchestrator above you and no `message_orchestrator`: your helpers report to you, and \
-your own `report` is read by orrerix as the END of the run and typed into no pane.
+- **You are the ROOT of this group, and the human gives you your tasks in THIS pane.** \
+You were opened idle: nothing is typed to start you, so wait for the human to say what \
+they want, and ask them whatever you need to in plain text before you start. There is \
+no orchestrator above you and no `message_orchestrator`: your helpers report to you.
 \
 - **`spawn_agent` opens a helper as a real orrerix pane**: `kind: \"worker\"`, \
 `\"reviewer\"` or `\"planner\"`, and nothing else — every other kind, and a second \
@@ -367,20 +413,24 @@ what the run has cost. These tools never need approval.
 `[orrerix]` and naming the helper. A `progress` report is recorded, not delivered. A \
 helper whose pane closes without reporting sends you nothing; `list_agents` shows it.
 \
-- **End the run with `report`**: `outcome: \"done\"` with where the work is and what \
-is left open, or `outcome: \"blocked\"` with the one thing the human has to decide — \
-the run is then held and they can resume it. Never use your CLI's own question dialog: \
-nobody is in this pane to answer it.
+- **A task begins when you first put a helper to work** — your first `spawn_agent`, \
+`fork_session` or `send_prompt` after being idle — and that call's answer states the \
+task's limits. **End it with `report`**: `outcome: \"done\"` with where the work is and \
+what is left open, or `outcome: \"blocked\"` with the one thing the human has to decide \
+— the run is then held and they can resume it. Your `report` is read by orrerix as the \
+END of the task and typed into no pane; afterwards you wait here for the next one. \
+Never use your CLI's own question dialog: ask in plain text and end your turn, so a \
+helper's report is never stuck behind a dialog.
 \
 - You have no task board, no merge queue, no verdicts and no issue comments, and you \
 never merge, tag, publish, close or label anything. Do not edit files in this pane: it \
 is the human's own checkout, and the work belongs in a worker's worktree.
 \
 - Your helpers count against the live-agent cap and the spawn-rate limit the human set, \
-and the run has a time bound; when it is reached the run is held. **When the run is \
-held you are told here, and `spawn_agent` is refused until the human resumes it.** You \
-cannot be killed by a helper or by yourself, and if your pane closes your helpers are \
-closed with it."
+and each task has a time bound, counted from when it begins; when it is reached the run \
+is held. **When the run is held you are told here, and `spawn_agent` is refused until \
+the human resumes it.** You cannot be killed by a helper or by yourself, and if your \
+pane closes your helpers are closed with it."
             .to_string(),
     };
     // A role_hint (#250/#324/#891) addendum — the same non-overridable treatment as

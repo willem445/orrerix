@@ -33,10 +33,26 @@
 //! ```
 //!
 //! `plan-wait` is skipped when the plan step is off, and a run with the review
-//! step off goes `work-wait → satisfied`. [`QuickState::RootWait`] is the one
-//! working state nothing in this build enters: it is the "describe it" mode's
-//! state (#3679 item 2), kept in the table so that mode can be added without
-//! reshaping a record an older build has already written.
+//! step off goes `work-wait → satisfied`.
+//!
+//! # A described run
+//!
+//! The "describe it" mode (#3679 way 2, reshaped by #3723) has one pane, its
+//! root, and two states of its own. The root opens **idle** and is given its
+//! task by the human, in the pane; the record knows a task has begun only when
+//! the root first puts a helper to work:
+//!
+//! ```text
+//! root-idle ──the root's first spawn / fork / prompt──▶ root-wait
+//! root-wait ──root done──▶ root-idle          (one notice per finished task)
+//! root-wait ──bound / blocked / dead root──▶ held{reason} ──resume──▶ root-wait
+//! root-idle | root-wait | held ──stop──▶ cancelled
+//! ```
+//!
+//! [`QuickState::RootIdle`] is neither working, parked nor terminal: nothing
+//! holds the turn, no clock runs against it and no tick looks at it. A
+//! described run never enters `satisfied` — its root's `done` ends a TASK, and
+//! the pane goes back to waiting for the next one.
 
 use std::collections::BTreeMap;
 use std::fmt;
@@ -69,10 +85,15 @@ pub enum QuickState {
     ReviewWait,
     /// The worker holds the turn again, with a round's findings to address.
     FixWait,
-    /// The "describe it" mode's one working state (#3679 item 2): a root pane
-    /// runs the task itself and its own `report` ends the run. **Nothing in
-    /// this build enters it** — see the module doc.
+    /// A described run's one working state (#3679 way 2): its root has a task
+    /// in progress, and the root's own `report` ends that task.
     RootWait,
+    /// A described run with **no task in progress** (#3723): its root pane is
+    /// open — or still to open — and waiting for the human to say what they
+    /// want. Not working, not parked and not terminal: nobody holds the turn,
+    /// no bound is read against it, and the tick never looks at it. It is
+    /// where a described run starts and where each finished task returns to.
+    RootIdle,
     /// **Parked**, carrying a [`QuickHeld`]. The tick does not advance it;
     /// the human's Resume and Stop do.
     Held,
@@ -87,12 +108,13 @@ impl QuickState {
     /// Every state, so a test can walk the machine without matching on the
     /// enum — which is what lets it fail when a ninth is added rather than
     /// silently keep checking eight.
-    pub const ALL: [QuickState; 8] = [
+    pub const ALL: [QuickState; 9] = [
         QuickState::PlanWait,
         QuickState::WorkWait,
         QuickState::ReviewWait,
         QuickState::FixWait,
         QuickState::RootWait,
+        QuickState::RootIdle,
         QuickState::Held,
         QuickState::Satisfied,
         QuickState::Cancelled,
@@ -106,6 +128,7 @@ impl QuickState {
             QuickState::ReviewWait => "review-wait",
             QuickState::FixWait => "fix-wait",
             QuickState::RootWait => "root-wait",
+            QuickState::RootIdle => "root-idle",
             QuickState::Held => "held",
             QuickState::Satisfied => "satisfied",
             QuickState::Cancelled => "cancelled",
@@ -128,9 +151,30 @@ impl QuickState {
         matches!(self, QuickState::Held)
     }
 
-    /// A working state — neither terminal nor parked.
+    /// A described run with no task in progress (#3723). Asked on its own
+    /// because it is the one state that is none of the other three: it has
+    /// not ended, nobody is waiting on the human, and nothing is being done.
+    pub fn is_idle(self) -> bool {
+        matches!(self, QuickState::RootIdle)
+    }
+
+    /// A working state — neither terminal nor parked nor idle. This is the
+    /// tick's whole candidate test: only a live run is polled, read against a
+    /// clock, or parked by a restart.
     pub fn is_live(self) -> bool {
-        !self.is_terminal() && !self.is_parked()
+        !self.is_terminal() && !self.is_parked() && !self.is_idle()
+    }
+
+    /// A run with something IN PROGRESS: working, or parked with a human's
+    /// answer owed. An idle described run is not one — every task it was given
+    /// has finished, or it was never given one — which is why it is absent
+    /// from the launcher's list of unfinished runs.
+    ///
+    /// Narrower than [`QuickDriveFile::has_unfinished_run`], which asks only
+    /// whether the run has ENDED and so is true of an idle one: that is the
+    /// question "is this group still spoken for", and an idle run's is.
+    pub fn is_in_progress(self) -> bool {
+        self.is_live() || self.is_parked()
     }
 
     /// Which side holds the turn in this state, or `None` where nobody does
@@ -146,7 +190,12 @@ impl QuickState {
             QuickState::WorkWait | QuickState::FixWait => Some(QuickSide::Worker),
             QuickState::ReviewWait => Some(QuickSide::Reviewer),
             QuickState::RootWait => Some(QuickSide::Root),
-            QuickState::Held | QuickState::Satisfied | QuickState::Cancelled => None,
+            // An idle root holds no turn: there is no task for its report to
+            // end, so its report is answered and moves nothing.
+            QuickState::RootIdle
+            | QuickState::Held
+            | QuickState::Satisfied
+            | QuickState::Cancelled => None,
         }
     }
 }
@@ -158,7 +207,8 @@ pub enum QuickSide {
     Planner,
     Worker,
     Reviewer,
-    /// The "describe it" root (#3679 item 2). Nothing in this build opens one.
+    /// A described run's root (#3679 way 2): the one agent the human gives
+    /// tasks to. Its helpers are not sides of the run.
     Root,
 }
 
@@ -383,19 +433,27 @@ pub fn transition(
         (ReviewWait, FixWait) => true,
         // 5. The reviewer approved.
         (ReviewWait, Satisfied) => true,
-        // 6. The "describe it" root reported done (#3679 item 2).
-        (RootWait, Satisfied) => true,
-        // 7. Every hold, from every working state.
-        (PlanWait | WorkWait | ReviewWait | FixWait | RootWait, Held) => true,
+        // 6. A described run's task (#3723). It BEGINS when the root first
+        //    puts a helper to work, and its root's `done` returns the run to
+        //    idle rather than ending it: the pane stays, and the human may
+        //    give it another task. A described run has no arc to `satisfied`.
+        (RootIdle, RootWait) | (RootWait, RootIdle) => true,
+        // 7. Every hold, from every working state — and from `root-idle`,
+        //    whose one hold is a root pane that could not be opened.
+        (PlanWait | WorkWait | ReviewWait | FixWait | RootWait | RootIdle, Held) => true,
         // 8. Resume, back into the state the hold came from.
         (Held, PlanWait)
         | (Held, WorkWait)
         | (Held, ReviewWait)
         | (Held, FixWait)
-        | (Held, RootWait) => true,
+        | (Held, RootWait)
+        | (Held, RootIdle) => true,
         // 9. Stop. From any non-terminal state, `held` included: stopping is a
-        //    parked run's second way out.
-        (PlanWait | WorkWait | ReviewWait | FixWait | RootWait | Held, Cancelled) => true,
+        //    parked run's second way out. From `root-idle` it is also what an
+        //    idle root's pane closing does — there is nothing left to resume.
+        (PlanWait | WorkWait | ReviewWait | FixWait | RootWait | RootIdle | Held, Cancelled) => {
+            true
+        }
         _ => false,
     };
     if ok {
@@ -534,6 +592,7 @@ pub fn state_bound(state: QuickState, limits: &QuickLimits) -> Option<(u64, Quic
         QuickState::FixWait => Some((ms(limits.drive.fix_timeout_minutes), QuickHeld::FixStalled)),
         QuickState::WorkWait
         | QuickState::RootWait
+        | QuickState::RootIdle
         | QuickState::Held
         | QuickState::Satisfied
         | QuickState::Cancelled => None,
@@ -623,7 +682,11 @@ impl QuickPane {
 /// One quick run — the whole of what `quick_drive.json` holds for a group.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct QuickDriveRecord {
-    /// The task, as the human typed it and the wiring sanitized it.
+    /// The task, as the human typed it on the launcher form and the wiring
+    /// sanitized it. **Empty for a described run** (#3723): its task is given
+    /// in the root's own pane and never reaches the record. A described
+    /// record written before that change carries the text it was started
+    /// with, and it is kept for the chip and the list to show.
     pub task: String,
     /// Private on purpose: [`advance`](QuickDriveRecord::advance) is the only
     /// way to change it, and it goes through [`transition`].
@@ -674,7 +737,9 @@ pub struct QuickDriveRecord {
     pub drive_timeout_minutes: u32,
     /// When the run began. **Absolute**, never an elapsed figure: a stored
     /// elapsed time is stale the instant it is written and meaningless across
-    /// a restart.
+    /// a restart. For a described run this is when its CURRENT task began
+    /// ([`begin_task`](QuickDriveRecord::begin_task)); before the first one,
+    /// when the run was started.
     pub started_ms: u64,
     /// When the record entered its current state — the per-state bound's
     /// anchor.
@@ -695,14 +760,20 @@ pub struct QuickDriveRecord {
     /// overwrite an earlier round's.
     #[serde(default)]
     pub reviews_total: u32,
+    /// How many tasks a described run's root has BEGUN (#3723) — one per
+    /// `root-idle → root-wait`. It numbers the finish notices, so two finished
+    /// tasks in one pane do not read as the same one. Defaulted: a record
+    /// written before the field existed is on its first task, which the
+    /// notice then simply does not number.
+    #[serde(default)]
+    pub task_seq: u32,
     #[serde(default)]
     pub planner: QuickPane,
     #[serde(default)]
     pub worker: QuickPane,
     #[serde(default)]
     pub reviewer: QuickPane,
-    /// The "describe it" root (#3679 item 2). Empty in every record this build
-    /// writes.
+    /// A described run's root pane. Empty in a steps run.
     #[serde(default)]
     pub root: QuickPane,
     /// The worker's worktree, recorded at its spawn — where the reviewer is
@@ -737,6 +808,11 @@ pub struct QuickDriveRecord {
     /// every arc into a working state and cleared by the wiring once the brief
     /// has been delivered; [`decide`] answers `None` while it is set, because
     /// a turn nobody has been given is not a turn to judge.
+    ///
+    /// In `root-idle` it means the one thing that state can still be owed:
+    /// **the root's pane has not been opened yet**. Nothing is typed when it
+    /// is — an idle root is handed no brief — so there it is cleared by the
+    /// pane opening, not by a delivery.
     #[serde(default)]
     pub brief_pending: bool,
     /// The hold the pending brief is being delivered AFTER — set by
@@ -789,6 +865,7 @@ impl QuickDriveRecord {
             clock_ms: now_ms,
             review_rounds: 0,
             reviews_total: 0,
+            task_seq: 0,
             planner: QuickPane::default(),
             worker: QuickPane::default(),
             reviewer: QuickPane::default(),
@@ -809,22 +886,52 @@ impl QuickDriveRecord {
         }
     }
 
-    /// A fresh DESCRIBED run (#3679 way 2): in `root-wait`, with the root's
-    /// first message — the task — still to deliver.
+    /// A fresh DESCRIBED run (#3679 way 2, #3723): in `root-idle`, with its
+    /// root's pane still to open and **no task**. The human gives the task in
+    /// that pane, so the record never holds one.
     ///
-    /// It has no plan step and no review step of its own: whether the task is
+    /// It has no plan step and no review step of its own: whether a task is
     /// planned or reviewed is the root's decision, made in its pane. The round
     /// bound is carried anyway, because the root's instructions quote it.
-    pub fn new_described(
-        task: &str,
-        base: &str,
-        limits: &QuickLimits,
-        now_ms: u64,
-    ) -> QuickDriveRecord {
-        let mut rec = QuickDriveRecord::new(task, false, false, base, limits, now_ms);
-        rec.state = QuickState::RootWait;
+    pub fn new_described(base: &str, limits: &QuickLimits, now_ms: u64) -> QuickDriveRecord {
+        let mut rec = QuickDriveRecord::new("", false, false, base, limits, now_ms);
+        rec.state = QuickState::RootIdle;
         rec.described = true;
         rec
+    }
+
+    /// **Begin a described run's next task** (#3723): `root-idle → root-wait`,
+    /// with the run's clock started HERE. Answers the task's number.
+    ///
+    /// This is the whole of "the time limit does not count idle time": an idle
+    /// root is read against no clock at all, and the bound a task runs against
+    /// is anchored at the moment the root first put a helper to work — not at
+    /// the moment the pane opened, and not at the previous task's start.
+    ///
+    /// **No brief is owed.** Every other arc into a working state hands the
+    /// turn to a pane that has to be told; here the root took the turn itself,
+    /// by acting, so `brief_pending` is cleared rather than left for the
+    /// wiring to "deliver" something into a pane that is mid-turn.
+    ///
+    /// The last task's account — its note, its pull request, the id of the
+    /// notice it raised — is dropped from the record. The notice ITSELF is not
+    /// withdrawn: it says where finished work is, and that stays true.
+    ///
+    /// Refused from every state but `root-idle`. In particular a HELD run does
+    /// not begin a task by its root acting; only the human's Resume moves it.
+    pub fn begin_task(&mut self, now_ms: u64) -> Result<u32, QuickInvalidTransition> {
+        if self.state != QuickState::RootIdle {
+            return Err(QuickInvalidTransition { from: self.state, to: QuickState::RootWait });
+        }
+        self.advance(QuickState::RootWait, None, now_ms)?;
+        self.brief_pending = false;
+        self.started_ms = now_ms;
+        self.clock_ms = now_ms;
+        self.task_seq = self.task_seq.saturating_add(1);
+        self.worker_note.clear();
+        self.pr = None;
+        self.notice_item.clear();
+        Ok(self.task_seq)
     }
 
     /// This run's state. The field is private so that every write goes through
@@ -960,7 +1067,9 @@ impl QuickDriveRecord {
             return QuickState::FixWait;
         }
         match self.held_from {
-            Some(s) if s.is_live() => s,
+            // `root-idle` is a resume target too: its one hold is a root pane
+            // that could not be opened, and resuming it is asking again.
+            Some(s) if s.is_live() || s.is_idle() => s,
             _ => QuickState::WorkWait,
         }
     }
@@ -978,6 +1087,13 @@ impl QuickDriveRecord {
         self.advance(to, None, now_ms)?;
         if was == Some(QuickHeld::ReviewLimit) {
             self.review_rounds = 0;
+        }
+        // A hold out of `root-idle` is a root pane that never opened, so the
+        // resumed run is owed that pane again. `advance` leaves the flag clear
+        // for an idle destination — right for a task that just finished, whose
+        // root is sitting there — so it is set here, for this arc alone.
+        if to.is_idle() {
+            self.brief_pending = true;
         }
         self.clock_ms = now_ms;
         self.resumed_from = was;
@@ -1021,6 +1137,15 @@ impl QuickDriveRecord {
         self.forced = false;
         self.notes.clear();
         self.state_since_ms = now_ms;
+    }
+
+    /// A described run's root pane opened while the run is idle (#3723):
+    /// record the pane and stop owing it. Nothing was typed into it, so there
+    /// is no brief to have been delivered — this is
+    /// [`brief_delivered`](Self::brief_delivered) under the name of what
+    /// actually happened.
+    pub fn root_opened(&mut self, agent: &str, session: &str, now_ms: u64) {
+        self.brief_delivered(QuickSide::Root, agent, session, now_ms);
     }
 
     /// Queue one human note for the next brief, dropping the oldest past
@@ -1082,7 +1207,9 @@ impl QuickDriveFile {
         self.version == QUICK_DRIVE_VERSION
     }
 
-    /// Whether the file holds a run that has not ended — working or parked.
+    /// Whether the file holds a run that has not ENDED — working, parked, or
+    /// a described run idle between tasks. Wider than
+    /// [`QuickState::is_in_progress`], which leaves the idle one out.
     pub fn has_unfinished_run(&self) -> bool {
         self.run.as_ref().is_some_and(|r| !r.state().is_terminal())
     }
@@ -1306,7 +1433,9 @@ pub fn decide(rec: &QuickDriveRecord, facts: &QuickFacts, limits: &QuickLimits) 
             WorkWait if rec.review_step => QuickStep::to(ReviewWait),
             WorkWait => QuickStep::to(Satisfied),
             FixWait => QuickStep::to(ReviewWait),
-            RootWait => QuickStep::to(Satisfied),
+            // #3723: the root's `done` ends a TASK. The run goes back to idle
+            // and its pane waits for the next one.
+            RootWait => QuickStep::to(RootIdle),
             ReviewWait if facts.signal == QuickSignal::Approved => {
                 QuickStep::to(Satisfied).reviewed()
             }
@@ -1319,10 +1448,10 @@ pub fn decide(rec: &QuickDriveRecord, facts: &QuickFacts, limits: &QuickLimits) 
                 QuickStep::held(QuickHeld::ReviewLimit).reviewed()
             }
             ReviewWait => QuickStep::to(FixWait).reviewed().spending_round(),
-            // Unreachable: `turn()` answered `None` for all three above.
-            // Spelled out rather than caught by `_` so a ninth state cannot
+            // Unreachable: `turn()` answered `None` for all four above.
+            // Spelled out rather than caught by `_` so a tenth state cannot
             // land here silently.
-            Held | Satisfied | Cancelled => return None,
+            RootIdle | Held | Satisfied | Cancelled => return None,
         };
         return Some(step);
     }
@@ -1387,6 +1516,13 @@ pub mod audit_action {
     pub const STATE_UNREADABLE: &str = "qd-state-unreadable";
     /// A live run was found after a restart and parked.
     pub const RESTART_PARKED: &str = "qd-restart-parked";
+    /// A described run's root pane was opened idle — nothing was typed (#3723).
+    pub const OPENED: &str = "qd-opened";
+    /// A described run's root put a helper to work, which begins a task and
+    /// starts its clock (#3723).
+    pub const TASK_BEGUN: &str = "qd-task-begun";
+    /// An idle described run ended because its root's pane is gone (#3723).
+    pub const CLOSED: &str = "qd-closed";
 }
 
 #[cfg(test)]
@@ -1449,12 +1585,16 @@ mod tests {
             (WorkWait, Satisfied),
             (ReviewWait, FixWait),
             (ReviewWait, Satisfied),
-            (RootWait, Satisfied),
+            // A described run's task: begun by its root, ended by its root.
+            (RootIdle, RootWait),
+            (RootWait, RootIdle),
         ];
-        for working in [PlanWait, WorkWait, ReviewWait, FixWait, RootWait] {
-            arcs.push((working, Held));
-            arcs.push((Held, working));
-            arcs.push((working, Cancelled));
+        // `root-idle` holds, resumes and stops like a working state — its one
+        // hold is a root pane that could not be opened.
+        for from in [PlanWait, WorkWait, ReviewWait, FixWait, RootWait, RootIdle] {
+            arcs.push((from, Held));
+            arcs.push((Held, from));
+            arcs.push((from, Cancelled));
         }
         arcs.push((Held, Cancelled));
         arcs
@@ -1483,7 +1623,13 @@ mod tests {
         // The walk saw every arc the list names — a list that silently lost a
         // row would otherwise pass against a table that lost the same one.
         assert_eq!(allowed, expected.len());
-        assert_eq!(expected.len(), 23);
+        assert_eq!(expected.len(), 27);
+        // A described run never reaches `satisfied`: its root's `done` ends a
+        // task and returns the run to idle. The arc that used to end the run
+        // is gone, and nothing else leads there from either root state.
+        for from in [QuickState::RootWait, QuickState::RootIdle] {
+            assert!(transition(from, QuickState::Satisfied).is_err(), "{}", from.as_str());
+        }
     }
 
     #[test]
@@ -1525,6 +1671,18 @@ mod tests {
         for s in QuickState::ALL {
             assert_eq!(s.turn().is_some(), s.is_live(), "{}", s.as_str());
         }
+        // The four kinds partition the states: each is exactly one of working,
+        // parked, idle or terminal, and "unfinished" is the first two.
+        for s in QuickState::ALL {
+            let kinds = [s.is_live(), s.is_parked(), s.is_idle(), s.is_terminal()];
+            assert_eq!(kinds.iter().filter(|k| **k).count(), 1, "{}: {kinds:?}", s.as_str());
+        }
+        // What the launcher lists, spelled out state by state: the five
+        // working ones and the hold — and NOT an idle described run, which has
+        // nothing in progress to resume or stop.
+        let unfinished: Vec<QuickState> =
+            QuickState::ALL.into_iter().filter(|s| s.is_in_progress()).collect();
+        assert_eq!(unfinished, vec![PlanWait, WorkWait, ReviewWait, FixWait, RootWait, Held]);
     }
 
     // ── the happy path ─────────────────────────────────────────────────────
@@ -2011,48 +2169,154 @@ mod tests {
 
     // ── a described run (way 2) ────────────────────────────────────────────
 
-    /// **A described run has one working state and one pane that can move
-    /// it.** It starts in `root-wait` with its first message pending, the root
-    /// holds the turn, and no plan or review step is recorded — those are the
-    /// root's decisions, not the record's.
-    #[test]
-    fn a_described_run_starts_in_root_wait_with_the_root_holding_the_turn() {
-        let rec = QuickDriveRecord::new_described("add a flag", "main", &QuickLimits::default(), T0);
-        assert_eq!(rec.state(), QuickState::RootWait);
-        assert!(rec.described);
-        assert!(rec.brief_pending, "its first message is still to deliver");
-        assert_eq!(rec.state().turn(), Some(QuickSide::Root));
-        assert!(!rec.plan_step && !rec.review_step);
-        // The control: a steps run is not one.
-        let steps = QuickDriveRecord::new("add a flag", false, true, "main", &QuickLimits::default(), T0);
-        assert!(!steps.described);
-        assert_ne!(steps.state(), QuickState::RootWait);
+    /// A described run whose root pane has opened — where every test below
+    /// starts, except the one about the pane still to open.
+    fn idle_root() -> QuickDriveRecord {
+        let mut rec = QuickDriveRecord::new_described("main", &QuickLimits::new(3, 5), T0);
+        rec.root_opened("quick-1", "s-root", T0);
+        rec
     }
 
-    /// **The root's `done` ends the run, and nothing else it can say does.**
-    /// `blocked` parks it on the root's own reason, and a dead root parks it
-    /// too; `approved` is a reviewer's word and a root saying it has finished.
+    /// **A described run starts IDLE, with no task and its root still to
+    /// open** (#3723). Nobody holds the turn, and no plan or review step is
+    /// recorded — those are the root's decisions, not the record's.
     #[test]
-    fn the_roots_done_ends_a_described_run_and_blocked_parks_it() {
-        let delivered = || {
-            let mut rec = QuickDriveRecord::new_described("add a flag", "main", &QuickLimits::default(), T0);
-            rec.brief_delivered(QuickSide::Root, "quick-1", "s-root", T0);
-            rec
+    fn a_described_run_starts_idle_with_no_task_and_its_root_still_to_open() {
+        let rec = QuickDriveRecord::new_described("main", &QuickLimits::default(), T0);
+        assert_eq!(rec.state(), QuickState::RootIdle);
+        assert!(rec.described);
+        assert_eq!(rec.task, "", "the task is given in the pane; the record never holds one");
+        assert!(rec.brief_pending, "the root's pane is still to open");
+        assert_eq!(rec.state().turn(), None, "nobody holds the turn while idle");
+        assert_eq!(rec.task_seq, 0);
+        assert!(!rec.plan_step && !rec.review_step);
+
+        let mut opened = rec.clone();
+        opened.root_opened("quick-1", "s-root", T0 + 9);
+        assert!(!opened.brief_pending, "the pane opened, and nothing else was owed");
+        assert_eq!((opened.root.agent.as_str(), opened.root.session.as_str()), ("quick-1", "s-root"));
+        assert_eq!(opened.state(), QuickState::RootIdle, "opening the pane begins no task");
+
+        // The control: a steps run is not one, and starts working.
+        let steps = QuickDriveRecord::new("add a flag", false, true, "main", &QuickLimits::default(), T0);
+        assert!(!steps.described);
+        assert_eq!(steps.state(), QuickState::WorkWait);
+    }
+
+    /// **An idle root is read against no clock** (#3723): however long it sits
+    /// there, and whatever else is true of it, a tick decides nothing. The
+    /// bound is five minutes; the control is the same record with a task
+    /// begun, which the same clock parks.
+    #[test]
+    fn an_idle_described_run_is_never_held_however_long_it_waits() {
+        let rec = idle_root();
+        for minutes in [0, 4, 5, 6, 60, 10_000] {
+            let now = T0 + minutes * MIN;
+            assert_eq!(step(&rec, &QuickFacts::quiet(now)), None, "{minutes} min idle");
+        }
+        // Not a dead pane, not a provider limit, not a message, not a report.
+        let loud = QuickFacts {
+            signal: QuickSignal::Done,
+            pane_alive: false,
+            messaged: true,
+            provider_limited: true,
+            now_ms: T0 + 10_000 * MIN,
         };
-        let facts = |signal| QuickFacts { now_ms: T0 + 1, signal, pane_alive: true, messaged: false, provider_limited: false };
+        assert_eq!(step(&rec, &loud), None);
 
-        let rec = delivered();
-        assert!(decide(&rec, &facts(QuickSignal::None), &rec.limits()).is_none(), "a quiet root moves nothing");
-        let done = decide(&rec, &facts(QuickSignal::Done), &rec.limits()).expect("done decides");
-        assert_eq!((done.to, done.held), (QuickState::Satisfied, None));
+        // The control: begin a task at T0 and the same six minutes park it.
+        let mut working = idle_root();
+        working.begin_task(T0).unwrap();
+        assert_eq!(
+            step(&working, &QuickFacts::quiet(T0 + 6 * MIN)),
+            Some(QuickStep::held(QuickHeld::DriveStalled))
+        );
+    }
+
+    /// **The clock starts when the task begins**, not when the pane opened.
+    /// A root that sat idle for ten hours and then began a task has the whole
+    /// of its five minutes.
+    #[test]
+    fn a_tasks_clock_starts_when_the_task_begins_and_not_when_the_pane_opened() {
+        let mut rec = idle_root();
+        let began = T0 + 600 * MIN;
+        assert_eq!(rec.begin_task(began), Ok(1));
+        assert_eq!(rec.state(), QuickState::RootWait);
+        assert_eq!(rec.state().turn(), Some(QuickSide::Root));
+        assert!(!rec.brief_pending, "the root took the turn itself; no brief is owed");
+        assert_eq!((rec.started_ms, rec.clock_ms), (began, began));
+        assert_eq!(rec.age_ms(began + 4 * MIN), 4 * MIN, "measured from the task's start");
+
+        assert_eq!(step(&rec, &QuickFacts::quiet(began + 4 * MIN)), None, "inside the bound");
+        assert_eq!(
+            step(&rec, &QuickFacts::quiet(began + 5 * MIN)),
+            Some(QuickStep::held(QuickHeld::DriveStalled)),
+            "at the bound, counted from the task's start"
+        );
+    }
+
+    /// **A task begins from idle and from nowhere else.** A held run in
+    /// particular does not begin one because its root acted: only the human's
+    /// Resume moves a hold.
+    #[test]
+    fn a_task_begins_only_from_idle() {
+        let mut working = idle_root();
+        working.begin_task(T0).unwrap();
+        assert!(working.begin_task(T0 + 1).is_err(), "a task is already in progress");
+        assert_eq!(working.task_seq, 1, "and the refusal counted nothing");
+
+        let mut held = working.clone();
+        held.take(&QuickStep::held(QuickHeld::DriveStalled), T0 + 2).unwrap();
+        assert!(held.begin_task(T0 + 3).is_err());
+        assert_eq!(held.state(), QuickState::Held);
+
+        let mut stopped = idle_root();
+        stopped.advance(QuickState::Cancelled, None, T0 + 1).unwrap();
+        assert!(stopped.begin_task(T0 + 2).is_err());
+
+        let mut steps = run(false, true);
+        assert!(steps.begin_task(T0).is_err(), "a steps run has no tasks to begin");
+        assert_eq!(steps.state(), QuickState::WorkWait);
+    }
+
+    /// **The root's `done` ends a TASK and the run goes back to idle**, where
+    /// the next task begins with a clock of its own. `blocked` parks it on the
+    /// root's reason, and a dead root parks it too.
+    #[test]
+    fn the_roots_done_ends_a_task_and_a_second_task_gets_a_clock_of_its_own() {
+        let mut rec = idle_root();
+        rec.begin_task(T0).unwrap();
+        assert!(step(&rec, &said(QuickSignal::None)).is_none(), "a quiet root moves nothing");
+
+        let done = step(&rec, &said(QuickSignal::Done)).expect("done decides");
+        assert_eq!((done.to, done.held), (QuickState::RootIdle, None));
         assert!(!done.spends_round && !done.reviewed, "no review round is the record's to count");
+        rec.take(&done, T0 + 4 * MIN).unwrap();
+        rec.worker_note = "work is on agent/w".into();
+        rec.pr = Some(77);
+        rec.notice_item = "ny-1".into();
+        assert_eq!(rec.state(), QuickState::RootIdle);
+        assert!(!rec.brief_pending, "the root is sitting there; nothing is owed");
+        assert!(rec.described);
 
-        let blocked = decide(&rec, &facts(QuickSignal::Blocked), &rec.limits()).expect("blocked decides");
+        // Idle again: the first task's clock no longer counts, however old.
+        assert_eq!(step(&rec, &QuickFacts::quiet(T0 + 900 * MIN)), None);
+
+        // The second task: numbered, its own clock, the first one's account gone.
+        let second = T0 + 900 * MIN;
+        assert_eq!(rec.begin_task(second), Ok(2));
+        assert_eq!((rec.worker_note.as_str(), rec.pr, rec.notice_item.as_str()), ("", None, ""));
+        assert_eq!(step(&rec, &QuickFacts::quiet(second + 4 * MIN)), None);
+        assert_eq!(
+            step(&rec, &QuickFacts::quiet(second + 5 * MIN)),
+            Some(QuickStep::held(QuickHeld::DriveStalled))
+        );
+
+        // The other two things a working root can do.
+        let blocked = step(&rec, &said(QuickSignal::Blocked)).expect("blocked decides");
         assert_eq!((blocked.to, blocked.held), (QuickState::Held, Some(QuickHeld::RootBlocked)));
-
-        let dead = QuickFacts { pane_alive: false, ..facts(QuickSignal::None) };
-        let gone = decide(&rec, &dead, &rec.limits()).expect("a dead root decides");
-        assert_eq!(gone.held, Some(QuickHeld::RootGone));
+        let dead = QuickFacts { pane_alive: false, ..said(QuickSignal::None) };
+        assert_eq!(step(&rec, &dead).expect("a dead root decides").held, Some(QuickHeld::RootGone));
 
         // A root is not a reviewer: its report is read as done or blocked, and
         // the outcome word cannot make it anything else.
@@ -2061,12 +2325,12 @@ mod tests {
         assert_eq!(QuickSignal::from_report(QuickSide::Root, "blocked", None), QuickSignal::Blocked);
     }
 
-    /// **A parked described run resumes to `root-wait`**, and the marker
-    /// survives the hold and the end — which is the reason it is a field.
+    /// **A parked described run resumes to `root-wait`**, owed its message,
+    /// and the marker survives the hold — which is the reason it is a field.
     #[test]
     fn a_described_run_keeps_its_marker_through_a_hold_and_resumes_to_the_root() {
-        let mut rec = QuickDriveRecord::new_described("add a flag", "main", &QuickLimits::default(), T0);
-        rec.brief_delivered(QuickSide::Root, "quick-1", "s-root", T0);
+        let mut rec = idle_root();
+        rec.begin_task(T0).unwrap();
         rec.take(&QuickStep::held(QuickHeld::Restart), T0 + 1).expect("a working run can park");
         assert_eq!(rec.state(), QuickState::Held);
         assert!(rec.described, "still a described run while parked");
@@ -2074,11 +2338,122 @@ mod tests {
         rec.resume(T0 + 2).expect("a held run resumes");
         assert_eq!(rec.state(), QuickState::RootWait);
         assert!(rec.brief_pending, "the root is owed its message again");
+        assert_eq!(rec.task_seq, 1, "a resume continues the task; it does not begin one");
 
         // And the record written before the field existed reads as a steps run.
         let mut v = serde_json::to_value(&rec).unwrap();
         v.as_object_mut().unwrap().remove("described");
         let old: QuickDriveRecord = serde_json::from_value(v).expect("the field is optional on read");
         assert!(!old.described);
+    }
+
+    /// **A root pane that could not be opened parks the idle run, and Resume
+    /// asks for the pane again.** That hold is the only one `root-idle` has,
+    /// and it resumes to idle — owed its pane, not a brief.
+    #[test]
+    fn a_hold_out_of_idle_resumes_to_idle_still_owed_its_pane() {
+        let mut rec = QuickDriveRecord::new_described("main", &QuickLimits::default(), T0);
+        rec.advance(QuickState::Held, Some(QuickHeld::Unresumable), T0 + 1).unwrap();
+        assert_eq!(rec.held_from, Some(QuickState::RootIdle));
+        assert!(!rec.brief_pending);
+        assert_eq!(rec.resume(T0 + 2), Ok(QuickState::RootIdle));
+        assert!(rec.brief_pending, "the pane is owed again");
+        assert_eq!(rec.task_seq, 0, "no task began");
+
+        // The control: a task that FINISHED goes to idle owing nothing.
+        let mut done = idle_root();
+        done.begin_task(T0).unwrap();
+        done.advance(QuickState::RootIdle, None, T0 + 1).unwrap();
+        assert!(!done.brief_pending);
+    }
+
+    /// **A record written by the build before #3723 still loads, and is a
+    /// task in progress.** That build started a described run in `root-wait`
+    /// with the task on the record and no `task_seq`. The text is spelled out
+    /// here rather than produced by this build's serializer, so the test reads
+    /// the shape that is really on disk.
+    #[test]
+    fn a_described_record_from_before_the_idle_start_still_loads_as_a_task_in_progress() {
+        let beta8 = r#"{
+          "version": 1,
+          "run": {
+            "task": "add a --json flag to the list command",
+            "state": "root-wait",
+            "held_reason": null,
+            "held_from": null,
+            "plan_step": false,
+            "review_step": false,
+            "described": true,
+            "root_cli": "claude",
+            "root_model": "",
+            "base": "main",
+            "max_review_rounds": 3,
+            "drive_timeout_minutes": 240,
+            "started_ms": 1000000,
+            "state_since_ms": 1000001,
+            "clock_ms": 1000000,
+            "review_rounds": 0,
+            "reviews_total": 0,
+            "planner": { "agent": "", "session": "", "superseded": [] },
+            "worker": { "agent": "", "session": "", "superseded": [] },
+            "reviewer": { "agent": "", "session": "", "superseded": [] },
+            "root": { "agent": "quick-1", "session": "s-root", "superseded": [] },
+            "worker_cwd": "",
+            "worker_branch": "",
+            "pr": null,
+            "worker_note": "",
+            "review_note": "",
+            "held_note": "",
+            "notes": [],
+            "progress_answered": false,
+            "brief_pending": false,
+            "resumed_from": null,
+            "forced": false,
+            "notice_item": ""
+          }
+        }"#;
+        let file = parse_state(beta8).expect("a beta8 record parses");
+        let mut rec = file.run.clone().expect("and holds its run");
+        assert_eq!(rec.state(), QuickState::RootWait, "a task in progress");
+        assert!(rec.described);
+        assert_eq!(rec.task, "add a --json flag to the list command", "its task text is kept");
+        assert_eq!(rec.task_seq, 0, "the field it never wrote defaults");
+        assert!(file.has_unfinished_run() && rec.state().is_in_progress());
+        assert!(rec.holds_turn("quick-1"));
+
+        // It is bounded by its own clock, parks, resumes and finishes like any
+        // task this build began — and finishing it leaves the run idle.
+        assert_eq!(
+            step(&rec, &QuickFacts::quiet(T0 + 240 * MIN)),
+            Some(QuickStep::held(QuickHeld::DriveStalled))
+        );
+        rec.take(&QuickStep::held(QuickHeld::Restart), T0 + 2).unwrap();
+        assert_eq!(rec.resume(T0 + 3), Ok(QuickState::RootWait));
+        rec.brief_pending = false;
+        let done = step(&rec, &said(QuickSignal::Done)).unwrap();
+        rec.take(&done, T0 + 4).unwrap();
+        assert_eq!(rec.state(), QuickState::RootIdle);
+        assert_eq!(rec.begin_task(T0 + 5), Ok(1), "and the next task is this build's first");
+
+        // A described run that had ENDED under that build is still ended.
+        let ended = beta8.replace("\"root-wait\"", "\"satisfied\"");
+        let ended = parse_state(&ended).unwrap();
+        assert!(ended.run.as_ref().unwrap().state().is_terminal() && !ended.has_unfinished_run());
+    }
+
+    /// **An idle record round-trips**, and its state word is the one a build
+    /// before #3723 does not know — which is what "an older build cannot read
+    /// a new idle record" rests on, so it is pinned rather than assumed.
+    #[test]
+    fn an_idle_record_round_trips_under_a_state_word_older_builds_do_not_know() {
+        let file = QuickDriveFile { run: Some(idle_root()), ..QuickDriveFile::default() };
+        let v = serde_json::to_value(&file).unwrap();
+        assert_eq!(v["run"]["state"], Value::from("root-idle"));
+        assert_eq!(v["run"]["task"], Value::from(""));
+        assert_eq!(v["run"]["task_seq"], Value::from(0));
+        let back = parse_state(&v.to_string()).unwrap();
+        assert_eq!(back, file);
+        assert!(back.has_unfinished_run(), "it has not ended: its group is still held");
+        assert!(!back.run.as_ref().unwrap().state().is_in_progress(), "but nothing is in progress");
     }
 }

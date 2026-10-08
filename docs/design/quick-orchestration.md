@@ -8,9 +8,12 @@ reviewer. It has no orchestrator pane, no task board, no issue queue and no
 merge gate. orrerix relays between the steps itself and tells the human when the
 run finishes, parks, or needs them.
 
-This note covers the steps mode ("way 1" in the issue). The second mode, where
-one agent runs the task from a description, is a later change; §14 says what
-this one leaves in place for it.
+There are two ways to run one. In the **steps** mode ("way 1" in the issue)
+orrerix relays between the steps itself; §1–§12 describe it. In the
+**describe** mode ("way 2") one agent is given the task and decides for itself
+whether to plan and review; §15 describes it and the capability class it
+needed. §16 is how a run is reached when none of its panes is left, which
+applies to both.
 
 ## 1. Why a state machine in the engine, and not a small orchestrator
 
@@ -65,7 +68,7 @@ pane's `report`.
 | `work-wait` | worker | its `done` → `review-wait`, or → `satisfied` when the review step is off |
 | `review-wait` | reviewer | `approved` → `satisfied`; `request_changes` → `fix-wait`, or → `held` on the last round |
 | `fix-wait` | worker | its `done` → `review-wait` |
-| `root-wait` | (the later mode's root) | nothing in this build enters it — §14 |
+| `root-wait` | the root of a described run | its `done` → `satisfied` (§15) |
 | `held` | nobody | Resume → the state it came from; Stop → `cancelled` |
 | `satisfied` | nobody | terminal |
 | `cancelled` | nobody | terminal |
@@ -96,8 +99,8 @@ notice (§9).
 | `messaged` | a pane of the run called `message_orchestrator` |
 | `restart` | orrerix restarted under a working run |
 
-`root-blocked` and `root-gone` exist for §14's mode and nothing produces them
-yet.
+`root-blocked` and `root-gone` are a described run's (§15): its root reported
+`blocked`, or its root's pane closed before it reported.
 
 A pane closing is a hold only when it is the pane **holding the turn**. A worker
 whose pane is reaped while the reviewer works is not a problem: the next
@@ -304,6 +307,7 @@ a pane and a spawn waits on the frontend:
 | `orch_quick_start(req)` | `orch-control` | mints the group, records the run, opens no pane |
 | `orch_quick_status(group_id)` | `orch-read` | a pure read of the run |
 | `orch_quick_control(group_id, action, text?)` | `orch-control` | `step`, `stop`, `resume`, `handoff`, `note` |
+| `orch_quick_list()` | `orch-read` | every run that has not ended, newest first (§16) |
 
 **Starting is two calls on purpose.** A spawned pane is placed by the group its
 tab is bound to, and the frontend can only bind once it has the group id. So
@@ -415,8 +419,23 @@ branch, and by the brief.
    change: a quick run's panes are ordinary orchestration panes.
 7. `next_group_id` skips a group whose quick run has not ended (§2).
 8. Two ranked locks, `qd_state_lock` (860) and `qd_mem` (870).
+9. `Role` gains `Quick`, wire string `"quick"` — in `agents.json`, in
+   `list_agents` and `session_roles`, and as a key of `group_summary.roles`
+   (§15).
+10. Two templates: `templates/quick.md`, the class's role instructions, and
+    `templates/quick-root.md`, a described run's first message.
+11. `orch_quick_start`'s request gains `mode` (`steps` | `describe`; absent
+    means `steps`) and `root` (the CLI and model of a described run's agent).
+12. `quick_drive.json` gains three defaulted fields — `described`,
+    `root_cli`, `root_model` — so every record already on disk reads as a
+    steps run. A quick run's status gains `described` and `panes.root`.
+13. `orch_quick_list`, and `busy` on a `step`'s answer (§8).
+14. `report` for a caller of the new class is the run's end; the tool it is
+    listed with says so. `message_orchestrator` replies that a message was
+    NOT saved when the run's messages file is full.
+15. The launcher's result gains `quick-resume` (§16).
 
-## 14. Residuals, and what is left for the second mode
+## 14. Residuals
 
 - **No token cap.** A run is bounded by rounds, clocks and one pane per step.
   The autonomy budget gates an orchestrator's idle tick, and there is no
@@ -428,22 +447,221 @@ branch, and by the brief.
 - **A paused group** queues the run's deliveries and its clocks keep running.
 - **Idle-kill** applies after a run ends, as it does to any idle pane, if the
   human set one.
-- **The watchdog** is forced off for a quick group: its notice goes to the
-  group's root, and there is none.
+- **The watchdog** is forced off for a quick group: its notice is addressed
+  to an orchestrator, and no quick group has one. A described run's root is
+  bounded by the run's own clock instead.
 - **A session rejoined by hand** into a quick group is an agent the run does
   not own. Its report is recorded and answered; it moves nothing.
 - **The needs-you card** carries the run's notice as text. Resume and Stop are
-  on the pane menu, not on the card.
-- **A run with no pane left in any tab cannot be resumed or stopped from the
-  UI**, because both verbs live on a pane's menu. Closing every pane of a run
-  parks it (the pane holding the turn is gone) and it then stays parked;
-  `next_group_id` keeps skipping its group. `orch_quick_control` still accepts
-  the verbs — what is missing is a surface that is not a pane.
-- **`remote-engine-protocol.md` §5.4** partitions the command manifest and is
-  dated to an earlier count. These commands are not added to it; reconciling
-  that table is its own change.
+  on the pane menu and in the launcher's list (§16), not on the card.
 
-`root-wait`, `root-blocked`, `root-gone` and the `root` pane record are in the
-engine so the second mode is additive to a record already written. Nothing in
-`src-tauri` enters that state, no `Role` exists for it, and the launcher offers
-no control for it.
+## 15. The second mode — one agent given the task
+
+In describe mode the human writes the task and nothing else. One pane opens.
+The agent in it decides whether the task wants a plan and a review, opens the
+helpers it needs, reads what they report, relays between them, and ends the run
+by reporting.
+
+### 15.1 A class of its own
+
+That agent is a new capability class, `Role::Quick`. It could have been a lead
+with more tools, or an orchestrator with fewer, and it is neither:
+
+| | Lead | Quick root | Orchestrator |
+| --- | --- | --- | --- |
+| Opened by | the human, in their own launcher | orrerix, for a run the human started | orrerix |
+| First message | none; the human types | the task | the orchestrator kickoff |
+| May open | workers | workers, reviewers, planners | every roster block |
+| Its `report` | has none | **the end of the run** | has none |
+| Board, merge queue, verdicts, issue comments, questions to the human | none | none | all |
+| Ends | when the human closes it | when it reports, or at a bound | never |
+
+A lead is the human's own pane, so it has nothing to report and nobody to
+report to. An orchestrator holds exactly the tools a quick run must not have,
+and removing them by a hint would make capability a function of data, which is
+the thing #222 exists to rule out. So the difference is a class.
+
+**It shares two predicates with the other two roots, and nothing else.**
+`Role::is_root` is what a delegate's `report` is delivered by, so a quick
+root's helpers report to it with no new code on that path. `Role::is_fixture`
+is the one exemption rule the cap, the dock, the reaper, the watchdog, the
+review driver, `spawn_agent` and persona ownership all read, so a quick root is
+never reaped, never counted against the cap it spends on its own helpers, never
+spawnable by an agent and never given a repo-authored persona — each at the one
+place that already decided it for the other fixtures.
+
+**It is unclamped** (`Containment::None`), for the orchestrator's reason: it
+delegates and decides, in the repository, with no worktree of its own. Every CLI
+can therefore host it, which is why a described run is not limited to the CLIs
+that can be held read-only. What bounds it is the four things below, none of
+which a deny tier can express.
+
+### 15.2 What it may call
+
+Twelve tools: `list_agents`, `request_compact`, `note_directive`;
+`spawn_agent`, `fork_session`, `send_prompt`, `get_output`, `kill_agent`,
+`focus_agent`, `rename_agent`; `group_usage`; and `report`.
+
+The list is positive and is spelled twice — once where `tools/list` is built
+and once where `call_tool` dispatches — and
+`the_gate_and_the_listing_agree_for_a_quick_root` asserts the two are one set by
+calling every tool any class is ever shown. Most arms of `call_tool` have no
+role check of their own, so a class that was merely *not refused* would reach
+all of them. This is the manager's and the lead's pattern unchanged, and it
+lives in `mcp/quickroot.rs` so that `mcp.rs`, which is at its line budget,
+carries only the call sites.
+
+Everything that could land, publish or decide for the human is absent: the
+board, the merge queue, `review_verdict`, `post_issue_comment`, `ask_human`,
+`request_attention`, and the notify, lock, state, channel, mailbox and to-do
+tools. So is `message_orchestrator`: the root is the root, and one that called
+it would park its own run.
+
+### 15.3 What it may open
+
+A worker, a reviewer or a planner. The rule is applied to the spawn's
+**effective** class — a named block's kind wins over `kind:` — at the same point
+the lead's rule is, and a spawn that resolves to no class at all is refused too.
+
+There are three refusals, and it matters which is which:
+
+- `kind: "quick"` is refused as an **unknown kind**, by the parse.
+  `workflow::kind_from_str` has no `quick` arm, and that absence is the whole
+  no-nesting rule: no workflow file can declare the class and no agent can spawn
+  it. An arm written to refuse it would be unreachable code taking credit for a
+  refusal it does not make.
+- `block: "quick"` — the root's own block — is the one spelling that reaches
+  the class rule with `Role::Quick`, and the class rule refuses it.
+- `cwd` and `task_id` are refused for this caller. A helper's workspace is
+  orrerix's to choose, and the argument that picks another is how a root would
+  put a worker in the human's own checkout. There is no board to attach a pane
+  to.
+
+The root also cannot be killed by any agent, itself included, and cannot be
+forked: a fork inherits its source's block, so a fork of the root would be a
+second root, outside the cap.
+
+### 15.4 The run
+
+`orch_quick_start` with `mode: "describe"` records a run in `root-wait`, with
+`described` set, and adds the root's block to the built-in roster. That is the
+one place a quick block is ever minted.
+
+**The root's helpers are not sides of the run.** In the steps mode every pane is
+one, and `qd_owner` answers for all of them. In a described run it answers for
+the root alone: a helper's `report` and `message_orchestrator` are the root's to
+read, so they take the ordinary relay to the group's root — a `done` is typed
+into the root's pane, a `progress` is recorded — and the record never names a
+worker. The one caller that must not fall through is a quick root the record
+does not name, because the relay's target would be itself; it is answered as a
+stranger.
+
+The root's `report(done)` moves the run to `satisfied` and is typed into no
+pane. Its note is the account of the run and is what the notice carries.
+`blocked` parks the run on `root-blocked`; Resume gives the turn back to the
+same pane and says why. Stop types one line into the root, because a root is
+mid-decision when a run is stopped and learns nothing from a record changing.
+Nothing is killed in either case.
+
+**If the root's pane closes, its helpers are closed with it**, and the run parks
+on `root-gone`. Helpers left running would be working towards a report with no
+recipient. Their sessions and worktrees are still there.
+
+The root runs in the repository itself, with no worktree and **no branch**. That
+last part is load-bearing: a delegate may close only a pull request whose head
+is its own recorded branch, so a root with none can close nothing. Its Claude
+launch denies the interactive question dialog, and a structured pane does not
+park on a dialog, for the orchestrator's reason in both cases — its helpers'
+reports queue behind it, and nobody is in the pane.
+
+A reviewer needs no pull request here either. Every helper's worktree shares the
+repository, so a reviewer reads a worker's commits as soon as they exist. The
+steps mode puts the reviewer in the worker's worktree to read uncommitted work;
+a root is told to have the worker commit instead.
+
+### 15.5 Restart
+
+A described run parks on `restart` like any other, and Resume re-opens the
+root's own session. One thing is different. The roster in `group.json` is read
+back through the workflow vocabulary, which has no word for the root's kind —
+deliberately — so the root's block is not in what a restart reads. The reattach
+rebuilds it from the run's own record (`root_cli`, `root_model`), for that
+group and for a run that says it is described, and by nothing else.
+
+### 15.6 Every place that asks what class a pane is
+
+Adding a class is only safe if nothing decides for it by default. `Role`'s
+exhaustive matches are compile errors until they have an arm; the risk is
+everywhere else — a `matches!`, an `==`, a wildcard arm, a hand-keyed table.
+Each such site was read and classified; the PR that added the class lists them.
+The decisions fall into four groups:
+
+- **An arm or a predicate, because the default was wrong.** The two predicates
+  above; the tool listing and the dispatch gate; the spawn rule; the workspace
+  chain (the default was a worker's worktree and branch); `kill_agent`;
+  `fork_agent`'s wildcard (the default made the root forkable); the exit branch
+  (the default left helpers running and addressed a notice to nobody); the two
+  dialog rules; `group_summary.roles`.
+- **Left to the default, because the default is the refusal.** Every
+  orchestrator-only gate. A quick root is refused the board, state, questions,
+  verdicts and mail by gates that name the orchestrator, and by its own surface
+  gate before any of them is reached.
+- **Left to the default, because the lead already takes it.** Notices addressed
+  to an orchestrator — a delegate's exit notice, a queue failure — find nobody
+  in a group whose root is not one. A lead's helpers are in the same position;
+  the root's instructions say a helper that dies without reporting sends it
+  nothing, and `list_agents` shows it.
+- **Deliberately absent.** The workflow vocabulary, the built-in block ids, the
+  roster editor and the workflow schema have no `quick`.
+
+### 15.7 Residuals
+
+- **Instruction-only on copilot.** Copilot's in-process `agent` tool cannot be
+  denied on its launch seam, so a copilot root is told to prefer `spawn_agent`
+  and is not prevented from using its own subagents. The lead has the same row.
+- **Inherited from the lead pane: #2893 item 3.** A root's tab is the tab its
+  group is bound to; drag the pane to another tab and its helpers still open in
+  the first.
+- **Not inherited: #2893 item 2**, a restored lead losing its launch
+  guardrails. A quick run is not restored as a pane — its record carries its
+  bounds and Resume reads them.
+- **Not inherited: #2833**, a codex lead. A lead is launched by the human's own
+  command line, which is where codex has no seam for the MCP config; a quick
+  root is spawned by orrerix like any agent, so codex can host one.
+- **The round bound is an instruction.** The record counts no rounds for a
+  described run, because the reviews happen between the root and its helpers.
+  The root is told the bound; the time bound is the one the engine enforces.
+- **Helpers are listed flat** in the agent rows, not nested under the root.
+- **A root's session is not rejoined by hand.** The session browser's rejoin
+  refuses a recorded role it has no class for; the run's own Resume is the way.
+
+## 16. Reaching a run with no pane
+
+Resume and Stop are on a pane's menu, and a run can outlive every pane it had:
+close them, or quit and reopen the app. The run is then parked, on disk, with
+nothing on screen that leads to it.
+
+**The launcher's Quick task form lists the runs that have not ended**, each with
+Stop and, when it is held, Resume. `orch_quick_list` reads them off the run
+records under the orchestration root, newest first, with each run's repository.
+
+The alternative was a button on the run's needs-you item, and the list was
+chosen over it for two reasons. A needs-you item can be dismissed, and a run
+whose item was dismissed would be unreachable again; a record cannot be
+dismissed. And Resume has to open a pane somewhere. The form is in a tab, so
+"Resume here" binds that tab to the run's group and resumes it there, which is
+exactly how a new run is started; a card has no tab to offer.
+
+**Closing a tab** closes its panes. The engine parks the run when it next looks
+and finds the pane that held the turn gone. In the window, a run is painted onto
+the panes of the tab its group is bound to, so when that tab closes the run
+stops being polled at once; the poll had no reader. The run itself is not ended
+by closing a tab, and it is on the list.
+
+**A first pane that never opens.** A new pane is not known to have failed until
+the backend's bind deadline (`BIND_TIMEOUT`, 20 s) has passed; until then the
+step opening it holds the group and every answer is `busy`. The launcher waits
+past that deadline — the wait is derived from a mirror of the constant, pinned
+against `tuning.rs` — and then shows the reason in the form and stops the run.
+A run that is still `busy` after the whole wait is not stopped, since a step is
+still holding it; the form says it was left as it is and where to find it.

@@ -215,6 +215,7 @@ const ROOTS: &[(&str, bool)] = &[
     ("src/orchestration/commands/launch.rs", true),
     ("src/orchestration/commands/mergegate.rs", true),
     ("src/orchestration/commands/panes.rs", true),
+    ("src/orchestration/commands/quick.rs", true),
     ("src/orchestration/commands/tasks.rs", true),
     ("src/gh.rs", true),
 ];

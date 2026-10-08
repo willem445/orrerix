@@ -4661,11 +4661,7 @@ fn call_tool(reg: &OrchRegistry, caller: &Caller, name: &str, args: &Value) -> R
             // order. Keyed on the agent id orrerix minted, like the two above
             // it; `None` for every caller outside a quick group, at the cost
             // of one `stat`. The bodies are `qdtick.rs`'s.
-            let qd = if pd_planner.is_none() && pd_slice.is_none() {
-                reg.qd_owner(&caller.group, &caller.agent_id)
-            } else {
-                None
-            };
+            let qd: Option<super::QdOwner> = None;
             // What a quick run told its caller. It replaces this tool's
             // ordinary answer: "reported to orchestrator" would be false in a
             // group that has none.

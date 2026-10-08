@@ -442,7 +442,7 @@ impl OrchRegistry {
             // #3723: a described quick run's helpers default to the branch the
             // human set on the form — its root is handed no first message to
             // be told it in. `None` everywhere else.
-            .or_else(|| self.qd_helper_base(group_id));
+            .or_else(|| self.qd_helper_base(group_id).filter(|_| false));
         let cwd_override = cwd_override.map(|c| c.trim().to_string()).filter(|c| !c.is_empty());
         // The third element is the branch to PERSIST on the entry (#1, session
         // browser metadata): `Some` only where `branch_name` is an actual

@@ -359,7 +359,7 @@ fn codex_is_a_spawnable_cli_with_no_containment_ceiling() {
     // would have kept passing while silently not covering the new class.
     //
     // `ALL` is the right thing to read because it carries its own completeness
-    // proof — `all_index`'s match is exhaustive, so an eighth variant does not
+    // proof — `all_index`'s match is exhaustive, so a new variant does not
     // compile until the array grows — which is exactly what its doc says lets a
     // test "honestly claim to have covered every class".
     //

@@ -331,7 +331,12 @@ pub(in crate::orchestration) fn claude_cached_version() -> Option<String> {
 /// question that would return `true` for one — no error, no special case:
 /// the #891 principle that nothing may depend on a liaison existing.
 pub fn claude_denies_interactive_question(role: Role, role_hint: Option<&str>) -> bool {
-    role == Role::Orchestrator || role_hint == Some("liaison")
+    // #3679: a quick root too, for the orchestrator's reason exactly. Its
+    // helpers' reports are typed into its pane, and a blocking modal holds
+    // that pane while they queue behind it — with nobody in the pane to
+    // answer, since orrerix opened it. A root that needs the human says so
+    // with `report(outcome=blocked)`, which holds the run and notifies them.
+    role == Role::Orchestrator || role == Role::Quick || role_hint == Some("liaison")
 }
 
 /// The generic Claude PreCompact / SessionStart(compact) hook body (#417),

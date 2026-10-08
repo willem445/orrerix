@@ -77,6 +77,18 @@ pub struct QuickStartRequest {
     pub idle_kill_minutes: u32,
     #[serde(default)]
     pub max_spawns_per_hour: u32,
+    /// How the run is driven (#3679): `"steps"` — orrerix relays between a
+    /// planner, a worker and a reviewer itself — or `"describe"`, where one
+    /// agent is given the task and opens its own helpers. Empty is `steps`, so
+    /// a caller written before the second mode existed means what it meant.
+    /// Any other word is refused rather than read as one of the two.
+    #[serde(default)]
+    pub mode: String,
+    /// The CLI and model of a described run's one agent. Read only in
+    /// `describe` mode; its `instructions` are ignored, because that agent's
+    /// role template is its contract and the task is the human's whole input.
+    #[serde(default)]
+    pub root: QuickStepConfig,
 }
 
 /// The live-agent cap a quick group gets when the launcher names none: one
@@ -126,6 +138,15 @@ impl OrchRegistry {
             return Err("a quick task needs a description of what to do".into());
         }
         validate_group_repo(&req.repo)?;
+        let described = match req.mode.trim() {
+            "" | "steps" => false,
+            "describe" => true,
+            other => {
+                return Err(format!(
+                    "unknown quick-task mode {other:?} — one of: steps, describe"
+                ))
+            }
+        };
 
         // The group's default CLI is the work step's: the worker is the one
         // pane every run has.
@@ -136,10 +157,13 @@ impl OrchRegistry {
         // Refused HERE, before anything is created, with the sentence that
         // knows why — the same containment check a spawn makes, asked at the
         // moment the human can still change the form.
+        // In a described run the three are not steps the human switched on:
+        // they are the helpers the agent MAY open, and it may open any of
+        // them, so each one's CLI has to be able to host its class.
         let steps = [
             (true, "work", &req.work, Role::Worker),
-            (req.plan_step, "plan", &req.plan, Role::Planner),
-            (req.review_step, "review", &req.review, Role::Reviewer),
+            (described || req.plan_step, "plan", &req.plan, Role::Planner),
+            (described || req.review_step, "review", &req.review, Role::Reviewer),
         ];
         for (on, step, cfg, role) in steps {
             if !on {
@@ -159,12 +183,46 @@ impl OrchRegistry {
                 .map_err(|e| format!("the {step} step cannot run on {cli}: {e}"))?;
         }
 
+        let root_cli = match req.root.cli.trim() {
+            "" => group_cli.clone(),
+            cli => cli.to_string(),
+        };
+        if described {
+            if !SUPPORTED_CLIS.contains(&root_cli.as_str()) {
+                return Err(format!(
+                    "unsupported CLI {root_cli:?} for the task's agent — supported: {}",
+                    SUPPORTED_CLIS.join(", ")
+                ));
+            }
+            // Asked like the three above, though today every CLI can host this
+            // class: it is not clamped, so no deny tier rules a CLI out. The
+            // check is here so that a class that gains a tier later is refused
+            // at the form rather than at the spawn.
+            cli_can_host(&root_cli, Role::Quick)
+                .map_err(|e| format!("the task's agent cannot run on {root_cli}: {e}"))?;
+        }
         let mut blocks = workflow::default_roster(&[
             (Role::Worker, req.work.cli.as_str(), req.work.model.as_str()),
             (Role::Reviewer, req.review.cli.as_str(), req.review.model.as_str()),
             (Role::Planner, req.plan.cli.as_str(), req.plan.model.as_str()),
         ]);
+        if described {
+            // The root's own block. This is the ONE place a quick block is
+            // minted: no workflow file can declare the kind and `spawn_agent`
+            // cannot name it, so a roster carries one only because a human
+            // started a described run from the launcher.
+            blocks.extend(workflow::default_roster(&[(
+                Role::Quick,
+                root_cli.as_str(),
+                req.root.model.as_str(),
+            )]));
+        }
         for b in &mut blocks {
+            // A described run takes no per-step instructions: the task is the
+            // human's whole input, and each helper runs on its role's own.
+            if described {
+                break;
+            }
             let text = match b.kind {
                 Role::Worker => &req.work.instructions,
                 Role::Reviewer => &req.review.instructions,
@@ -184,6 +242,9 @@ impl OrchRegistry {
             auto_ops: req.auto_ops,
             idle_kill_minutes: req.idle_kill_minutes,
             max_spawns_per_hour: req.max_spawns_per_hour,
+            // (A described run does have a root — but the watchdog's notice
+            // is addressed to an ORCHESTRATOR, which no quick group has, and
+            // the run's own time bound is the clock on a quiet root.)
             // The watchdog's notice goes to the group's root, and this group
             // has none — a stall here is the run's own bounds to report.
             watchdog_stall_minutes: 0,
@@ -197,14 +258,21 @@ impl OrchRegistry {
         // worktree is then cut from whatever `git_worktree_add_sync` resolves
         // as the default, exactly as every other spawn's is, and the review
         // brief resolves a NAME for it when it is rendered.
-        let rec = QuickDriveRecord::new(
-            &task,
-            req.plan_step,
-            req.review_step,
-            req.base.trim(),
-            &limits,
-            now,
-        );
+        let rec = if described {
+            let mut rec = QuickDriveRecord::new_described(&task, req.base.trim(), &limits, now);
+            rec.root_cli = root_cli.clone();
+            rec.root_model = req.root.model.trim().to_string();
+            rec
+        } else {
+            QuickDriveRecord::new(
+                &task,
+                req.plan_step,
+                req.review_step,
+                req.base.trim(),
+                &limits,
+                now,
+            )
+        };
 
         // Held across the mint AND the record write, for
         // `create_orchestration_group`'s reason: a group id is chosen by
@@ -240,6 +308,7 @@ impl OrchRegistry {
         }
         self.qd_audit(&group.id, act::STARTED, json!({
             "plan_step": rec.plan_step, "review_step": rec.review_step,
+            "described": rec.described,
             "max_review_rounds": rec.max_review_rounds,
             "drive_timeout_minutes": rec.drive_timeout_minutes,
             "base": rec.base, "task_chars": rec.task.chars().count(),
@@ -405,10 +474,12 @@ impl OrchRegistry {
             "can_handoff": can_handoff,
             "notes_pending": r.notes.len(),
             "plan_path": plan.is_file().then(|| plan.to_string_lossy().to_string()),
+            "described": r.described,
             "panes": {
                 "planner": pane(quickdrive::QuickSide::Planner),
                 "worker": pane(quickdrive::QuickSide::Worker),
                 "reviewer": pane(quickdrive::QuickSide::Reviewer),
+                "root": pane(quickdrive::QuickSide::Root),
             },
         })
     }
@@ -452,6 +523,26 @@ impl OrchRegistry {
         self.qd_audit(group, act::CANCELLED, json!({
             "from": from.as_str(), "panes_left_running": left, "killed": Vec::<String>::new(),
         }));
+        // A steps run's panes each finished a turn or were waiting for one, so
+        // a stop leaves nothing in motion. A described run's root is still
+        // deciding what to open next, and it is not told anything by the
+        // record changing — so it is told here, once, best-effort. Nothing is
+        // killed: the panes are the human's to read or close.
+        if rec.described {
+            let root = rec.pane(quickdrive::QuickSide::Root).agent.clone();
+            if self.agent(&root).is_some_and(|a| a.status != AgentStatus::Dead) {
+                let _ = self.deliver_prompt(
+                    &root,
+                    &format!(
+                        "{} the human stopped this quick run. Stop here: open no further \
+                         helpers and send no further work. Your report is no longer needed.",
+                        brand::NOTICE_MARKER
+                    ),
+                    brand::AUDIT_ACTOR,
+                    Delivery::MidSession,
+                );
+            }
+        }
         Ok(self.quick_status(group))
     }
 
@@ -529,6 +620,22 @@ impl OrchRegistry {
             .load_group_file(group)
             .ok_or("this quick run's group record is missing, so it cannot be resumed")?;
         validate_group_repo(&repo)?;
+        // A described run's roster had a quick block, and it is not in what
+        // was just read: `group.json` is read back through the workflow
+        // vocabulary, which has no word for that kind — deliberately, since
+        // that absence is what stops a file declaring one. So the block is
+        // rebuilt here from the run's own record, for this group and for a
+        // run that says it is described, and by nothing else.
+        let mut guardrails = guardrails;
+        if let Ok(Some(run)) = self.qd_load_run(group) {
+            if run.described && guardrails.block(Role::Quick.as_str()).is_none() {
+                guardrails.blocks.extend(workflow::default_roster(&[(
+                    Role::Quick,
+                    run.root_cli.as_str(),
+                    run.root_model.as_str(),
+                )]));
+            }
+        }
         let info = GroupInfo { id: group.clone(), repo, guardrails: guardrails.clamped() };
         self.groups.lock_safe().insert(group.clone(), info.clone());
         // Deliberately NOT declared as a root (#1042). `create_group_ex`
@@ -542,6 +649,17 @@ impl OrchRegistry {
             "repo": info.repo, "max_agents": info.guardrails.max_agents, "by": "quick-resume",
         }));
         Ok(())
+    }
+
+    /// A live root pane in `group`, if there is one — the backstop behind "a
+    /// quick run has exactly one root" (#3679). Read by the hand-over before
+    /// it opens a root, so a second cannot be opened beside a live first.
+    pub(in crate::orchestration) fn qd_live_root(&self, group: &GroupId) -> Option<String> {
+        self.agents
+            .lock_safe()
+            .values()
+            .find(|a| &a.group == group && a.status != AgentStatus::Dead && a.role.is_root())
+            .map(|a| a.id.clone())
     }
 
     // ---------- force a hand-off ----------

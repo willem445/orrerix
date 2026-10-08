@@ -474,6 +474,13 @@ impl OrchRegistry {
             // a stray directory per session. `needs_dedicated_workspace`
             // (mcp.rs) is the other half and likewise excludes it.
             && role != Role::Manager
+            // #3679: a quick root is a root, and a root is never cut a
+            // worktree — whatever the caller passed. Without this line a
+            // `use_worktree: true` spawn gave it a worker's worktree and
+            // branch, and without the arm below it fell to the worker's
+            // "create branch 'agent/<id>'" else-branch with a persisted branch
+            // of its own, which is what the gh close guard keys on.
+            && role != Role::Quick
         {
             // Cut the branch from the default branch (or an explicit `base`),
             // never the primary checkout's incidental HEAD (#204).
@@ -502,6 +509,11 @@ impl OrchRegistry {
             (wt.clone(), note, Some(branch_name.clone()))
         } else if role == Role::Orchestrator {
             (group.repo.clone(), String::new(), None)
+        } else if role == Role::Quick {
+            // The repository, no branch. `None` here is load-bearing beyond
+            // tidiness: a delegate may close only a pull request whose head is
+            // its own recorded branch, so a root with none can close nothing.
+            (group.repo.clone(), QUICK_ROOT_WORKSPACE_NOTE.to_string(), None)
         } else if role == Role::Manager {
             // The repo root, like the orchestrator — and a note, unlike it,
             // because a manager's containment (`NoEdits`) leaves the shell
@@ -1428,6 +1440,25 @@ impl OrchRegistry {
                 name = a.name, id = a.id, gid = g.id, repo = g.repo,
                 ins = instructions.display(),
                 delivery = kickoff_delivery_note(&g.id, &a.id),
+            ),
+            // #3679: the quick root. Its task IS its first message — the brief
+            // the quick drive rendered (`qd_brief`), carried in `a.task` like
+            // any delegate's — so unlike a lead it has something to start on
+            // and nobody to greet.
+            //
+            // The wording is chosen against `sessions::detect_orch_signature`,
+            // which classifies a transcript by its kickoff: this sentence must
+            // not read as an orchestrator's or a worker's, or the session
+            // browser would offer to resume a quick root as one of those.
+            Role::Quick => format!(
+                "You are \"{name}\" ({id}), the agent this quick task was given to — orrerix \
+                 group {gid}, repository {repo}. Nobody is above you: you open the helpers \
+                 the task needs, and you end the run with report.\n\
+                 First read your role instructions: {ins}\n{note}\n{delivery}\n{task}",
+                name = a.name, id = a.id, gid = g.id, repo = g.repo,
+                ins = instructions.display(), note = branch_note,
+                delivery = kickoff_delivery_note(&g.id, &a.id),
+                task = a.task,
             ),
         }
     }

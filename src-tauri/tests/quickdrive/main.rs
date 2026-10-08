@@ -7,7 +7,8 @@
 //! What lives here is everything that needs the registry: the interception of
 //! `report` and `message_orchestrator`, the step that moves a run, the
 //! hand-over ladder, the briefs a pane is actually typed, the notice, and what
-//! a restart does.
+//! a restart does — and, in `described.rs`, the second mode (one agent given
+//! the task) together with its capability class, `Role::Quick`.
 //!
 //! A directory target for `tests/reviewdrive/`'s reasons: CLAUDE.md constraint
 //! 4 makes the target KIND what matters (an integration test carries the
@@ -20,6 +21,7 @@
 
 use loomux_lib::orchestration::mcp::dispatch;
 use loomux_lib::orchestration::needsyou;
+use loomux_lib::orchestration::workflow;
 use loomux_lib::orchestration::quickdrive::{
     self, QuickHeld, QuickSide, QuickSignal, QuickState,
 };
@@ -38,5 +40,6 @@ mod briefs;
 mod plan;
 mod controls;
 mod restart;
+mod described;
 
 use helpers::*;

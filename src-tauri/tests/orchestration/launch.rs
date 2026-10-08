@@ -396,6 +396,12 @@ fn every_capability_class_pins_its_deny_tier() {
             // it. What bounds the fan-out is the cap and the spawn-rate
             // backstop, not containment.
             Role::Lead => Containment::None,
+            // #3679. Unclamped, on the orchestrator's argument: the quick root
+            // delegates and decides, in the repository, with no worktree of its
+            // own. What bounds it is its enumerated tool surface, the three
+            // delegate classes it may open and its run's time bound —
+            // `tests/quickroot.rs` pins each — not a deny tier.
+            Role::Quick => Containment::None,
         };
         assert_eq!(role.containment(), want, "{role:?} changed deny tier — was that deliberate?");
     }

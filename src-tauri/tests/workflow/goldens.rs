@@ -61,7 +61,7 @@ const PRE222: [(&str, &str); 5] = [
 ///   against `LIVE` below. That question is about the TEMPLATE and is asked of
 ///   all of them equally, which is why `manager.md` gets the same re-bless gate as
 ///   the other four rather than a weaker one.
-const GOLDENS: [(&str, &str); 9] = [
+const GOLDENS: [(&str, &str); 10] = [
     PRE222[0],
     PRE222[1],
     PRE222[2],
@@ -101,6 +101,12 @@ const GOLDENS: [(&str, &str); 9] = [
     // without this row an edit to what every agent is told about writing would
     // redden nothing.
     ("writing.md", include_str!("../fixtures/pre222/writing.md")),
+    // #3679. The quick root's role instructions, pinned in the slice that
+    // delivers the class — `lead.md`'s posture exactly, and for its reason: a
+    // described run's root reads this file, so an accidental edit to it should
+    // be a red. Not in `PRE222`: a default group has no quick block, so no
+    // `quick.md` is written into its dir.
+    ("quick.md", include_str!("../fixtures/pre222/quick.md")),
 ];
 
 /// The live templates, with the placeholder(s) each must carry. Each element of the
@@ -113,7 +119,7 @@ const GOLDENS: [(&str, &str); 9] = [
 /// `{{BLOCK_NOTE}}{{ADVISOR_CONSULT_NOTE}}`), they stay a single contiguous-string key
 /// — same reasoning `block.md`'s `{{PERSONA_NOTE}}{{LANE_NOTE}}{{GATE_NOTE}}` already
 /// relies on.
-const LIVE: [(&str, &str, &[&str]); 9] = [
+const LIVE: [(&str, &str, &[&str]); 10] = [
     // #1683: the merge-gate and re-sync sections moved to the playbook, and
     // their two workflow-conditional fragments with them — the orchestrator
     // core's key list shrinks to `{{WORKFLOW}}` and `{{LOCKS_ORCH}}`.
@@ -184,6 +190,11 @@ const LIVE: [(&str, &str, &[&str]); 9] = [
     ("dod.md", loomux_lib::orchestration::brief::DOD_TPL, &[]),
     // #3441. Empty for `dod.md`'s reason: it IS a placeholder's value.
     ("writing.md", loomux_lib::orchestration::WRITING_TPL, &[]),
+    // #3679. Empty for `lead.md`'s reason: `quick.md` carries no
+    // workflow-conditional prose — a quick group reads no workflow file — and
+    // the `{{GROUP_ID}}`/`{{REPO}}` it does carry are per-group value
+    // variables the golden keeps literal.
+    ("quick.md", loomux_lib::orchestration::QUICK_TPL, &[]),
 ];
 
 /// Render a template with the plain per-group VALUE variables `render_template`

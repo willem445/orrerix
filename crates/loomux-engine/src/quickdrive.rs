@@ -652,6 +652,16 @@ pub struct QuickDriveRecord {
     /// existed reads as a steps run, which is what every such record is.
     #[serde(default)]
     pub described: bool,
+    /// The CLI and model a described run's root was started on.
+    ///
+    /// The roster carries them too, as the root's block — but a block whose
+    /// kind no workflow file can name is dropped when `group.json` is read
+    /// back, which is what a restart does. Resume has to re-open the root on
+    /// the CLI that owns its session, so the run keeps its own copy.
+    #[serde(default)]
+    pub root_cli: String,
+    #[serde(default)]
+    pub root_model: String,
     /// The ref the worker's branch was cut from, which the review brief diffs
     /// against. Empty means the repo's default branch.
     #[serde(default)]
@@ -769,6 +779,8 @@ impl QuickDriveRecord {
             plan_step,
             review_step,
             described: false,
+            root_cli: String::new(),
+            root_model: String::new(),
             base: base.trim().to_string(),
             max_review_rounds: limits.drive.max_review_rounds,
             drive_timeout_minutes: limits.drive.drive_timeout_minutes as u32,

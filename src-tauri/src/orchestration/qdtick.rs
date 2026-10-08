@@ -53,6 +53,10 @@ pub const QUICK_PLAN_TPL: &str = include_str!("templates/quick-plan.md");
 pub const QUICK_WORK_TPL: &str = include_str!("templates/quick-work.md");
 pub const QUICK_REVIEW_TPL: &str = include_str!("templates/quick-review.md");
 pub const QUICK_FIX_TPL: &str = include_str!("templates/quick-fix.md");
+/// The first message of a DESCRIBED run's root (#3679 way 2): the task, the
+/// run's limits and how to end it. The root's standing contract is its role
+/// template (`templates/quick.md`); this is the part that differs per run.
+pub const QUICK_ROOT_TPL: &str = include_str!("templates/quick-root.md");
 
 /// The marker file that says a group was minted for a quick run.
 ///
@@ -159,7 +163,9 @@ fn qd_carry_notes(
         if step.held == Some(QuickHeld::ReviewLimit) {
             rec.held_note = signal.note.clone();
         }
-    } else if matches!(from, QuickState::WorkWait | QuickState::FixWait) && step.held.is_none() {
+    } else if matches!(from, QuickState::WorkWait | QuickState::FixWait | QuickState::RootWait)
+        && step.held.is_none()
+    {
         rec.worker_note = signal.note.clone();
         if let Some(pr) = pr_number(&signal.pr_ref).filter(|_| !signal.pr_ref.is_empty()) {
             rec.pr = Some(pr);
@@ -426,6 +432,24 @@ impl OrchRegistry {
             return None;
         }
         let run = self.qd_load_run(group).ok().flatten();
+        // A DESCRIBED run (#3679 way 2) has one side: its root. The panes the
+        // root opens are its helpers, not sides of the run — their reports and
+        // messages are the root's to read, so they are not intercepted here and
+        // take the ordinary relay to the group's root, exactly as a lead's
+        // helpers' do. The one caller that must never fall through is a quick
+        // root the record does not name (a second one, a stale one): the
+        // relay's target is the group's root, which would be itself.
+        if let Some(r) = run.as_ref().filter(|r| r.described) {
+            return match r.owner_of(agent_id) {
+                Some((side, current)) => {
+                    Some(QdOwner::Pane { side, current, holds_turn: r.holds_turn(agent_id) })
+                }
+                None if self.agent(agent_id).is_some_and(|a| a.role == Role::Quick) => {
+                    Some(QdOwner::Stranger)
+                }
+                None => None,
+            };
+        }
         Some(match run.as_ref().and_then(|r| r.owner_of(agent_id).map(|o| (r, o))) {
             Some((r, (side, current))) => {
                 QdOwner::Pane { side, current, holds_turn: r.holds_turn(agent_id) }
@@ -1052,11 +1076,7 @@ impl OrchRegistry {
             QuickSide::Planner => (Role::Planner, "quick: plan"),
             QuickSide::Worker => (Role::Worker, "quick: work"),
             QuickSide::Reviewer => (Role::Reviewer, "quick: review"),
-            QuickSide::Root => {
-                return Err("a quick run with a single agent running the task is not part of \
-                            this build"
-                    .to_string());
-            }
+            QuickSide::Root => (Role::Quick, "quick: task"),
         };
         // The built-in roster names each block after its class.
         let block = role.as_str();
@@ -1096,7 +1116,10 @@ impl OrchRegistry {
                 // workspace through `resolve_worker_resume_cwd`, which is for
                 // the two roles that must never land in the main clone and
                 // says a planner resume must not call it (#3681 review W5).
-                QuickSide::Planner => self.spawn_agent_bound(
+                //
+                // A described run's root (#3679) is the same case for the same
+                // reason: it ran in the repository, with no worktree.
+                QuickSide::Planner | QuickSide::Root => self.spawn_agent_bound(
                     group,
                     role,
                     Some(block.to_string()),
@@ -1194,9 +1217,33 @@ impl OrchRegistry {
                     None,
                 )?
             }
-            // Refused at the top of this function; answered again here rather
-            // than asserted, because this path must never be able to panic.
-            QuickSide::Root => return Err("no such pane in this build".to_string()),
+            // The root of a described run (#3679): the repository, no
+            // worktree, and exactly one — `qd_live_root` is the backstop on
+            // that, for the reason `lead_prepare` has one: a group with two
+            // roots delivers a helper's report to whichever a map iteration
+            // returns first.
+            QuickSide::Root => {
+                if let Some(other) = self.qd_live_root(group) {
+                    return Err(format!(
+                        "this run's group already has a live root pane ({other}) — a quick \
+                         run has exactly one"
+                    ));
+                }
+                self.spawn_agent_bound(
+                    group,
+                    role,
+                    Some(block.to_string()),
+                    name,
+                    text,
+                    false,
+                    None,
+                    None,
+                    None,
+                    None,
+                    None,
+                    None,
+                )?
+            }
         };
         Ok(QdHandOver {
             session: a.session_id.clone().unwrap_or_default(),
@@ -1372,10 +1419,25 @@ impl OrchRegistry {
                 )
             }
             // Nothing holds the turn in these, so there is no brief to render.
-            QuickState::RootWait
-            | QuickState::Held
-            | QuickState::Satisfied
-            | QuickState::Cancelled => String::new(),
+            QuickState::RootWait => {
+                let base = if rec.base.trim().is_empty() {
+                    "the repository's default branch".to_string()
+                } else {
+                    qd_fact(&rec.base)
+                };
+                let minutes = rec.drive_timeout_minutes.to_string();
+                render_template(
+                    QUICK_ROOT_TPL,
+                    &[
+                        ("TASK", &task),
+                        ("NOTES", &notes),
+                        ("BASE", &base),
+                        ("MAX_ROUNDS", &max),
+                        ("MINUTES", &minutes),
+                    ],
+                )
+            }
+            QuickState::Held | QuickState::Satisfied | QuickState::Cancelled => String::new(),
         };
         match rec.resumed_from {
             Some(reason) => format!(
@@ -1427,6 +1489,21 @@ impl OrchRegistry {
         let pr = rec.pr.map(|n| format!(" (PR #{n})")).unwrap_or_default();
         let place = if branch.is_empty() { String::new() } else { format!("{branch}{pr}.") };
         let text = match rec.state() {
+            // A described run: the root's own note is the account of it, and
+            // the branch is whatever that note says — the record names no
+            // worker, because the root's helpers are not sides of the run.
+            QuickState::Satisfied if rec.described => {
+                let note = if rec.worker_note.trim().is_empty() {
+                    String::new()
+                } else {
+                    format!(" It said: {}", qd_fact(&rec.worker_note))
+                };
+                let pr = rec.pr.map(|n| format!(" (PR #{n})")).unwrap_or_default();
+                format!(
+                    "Quick run finished — its agent reported done: \"{task}\".{pr}{note} Nothing \
+                     was merged; its panes are still open for you to read or close."
+                )
+            }
             QuickState::Satisfied if rec.review_step => {
                 let reviews = rec.reviews_total;
                 let note = if rec.review_note.trim().is_empty() {
@@ -1469,7 +1546,8 @@ impl OrchRegistry {
                 };
                 format!(
                     "Quick run held ({}): \"{task}\". {}{detail}.{messages}{place} Resume it or \
-                     stop it from the menu of any of its panes.",
+                     stop it from the menu of any of its panes, or from Unfinished runs in the \
+                     launcher's Quick task form.",
                     reason.as_str(),
                     capitalized(reason.notice_line()),
                 )

@@ -825,8 +825,11 @@ impl OrchRegistry {
             self.mark_dead(&id, None);
             ended.push(id);
         }
+        // The action keeps its name — it is a persisted audit word — and the
+        // row says which class of root went, since a quick root (#3679) takes
+        // its helpers with it by this same function.
         self.audit(&lead.group, brand::AUDIT_ACTOR, "lead-children-ended", json!({
-            "lead": lead.id, "ended": ended,
+            "lead": lead.id, "ended": ended, "root": lead.role.as_str(),
         }));
     }
 
@@ -897,6 +900,20 @@ impl OrchRegistry {
                     "{} is a lead pane — the human's own. A lead's session forks into a standalone \
                      (Solo) pane, never a second lead: the lead asks for that with fork_session on its \
                      own id, and the human with the pane menu.",
+                    src.id
+                ))
+            }
+            // #3679. A fork inherits its source's block, so forking a quick
+            // root would open a SECOND root in the run's group — outside the
+            // cap and the spawn-rate limit, since a root is a fixture — and
+            // `fork_session` is on the root's own surface, so the caller that
+            // could ask is the root itself. Refused by class rather than left
+            // to the wildcard below, which is the arm a new class lands in
+            // when nobody decides.
+            Role::Quick => {
+                return Err(format!(
+                    "{} is a quick run's own agent — a run has exactly one, and a fork of it \
+                     would be a second. Fork a worker, reviewer or planner.",
                     src.id
                 ))
             }

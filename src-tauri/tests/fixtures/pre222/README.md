@@ -1734,3 +1734,18 @@ comparison is honest either way. If it still says MISMATCH, that is a real one.
   on the live template (`git diff -U0` against `main` on each, compared), and neither changed
   line carries a `{{...}}` key, so `live-minus-keys == golden` holds exactly where it held
   before.
+- **#3679, `quick.md` JOINS this directory** — nothing already here changed.
+  `Role::Quick` is the capability class of the one agent a described quick run is given to,
+  and `templates/quick.md` is its role instructions. The new file is a byte copy of the
+  live template with no edit at all.
+
+  It is in `GOLDENS` and `LIVE` and not in `PRE222`, for `lead.md`'s reason: a default
+  group has no quick block, so `write_instruction_files` writes no `quick.md` into its
+  dir, and the two default-group pins would be looking for a file that is correctly absent.
+
+  **Its `LIVE` key list is empty.** `quick.md` carries no workflow-conditional prose — a
+  quick group reads no workflow file — and the `{{GROUP_ID}}` and `{{REPO}}` it does carry
+  are per-group value variables, which the golden keeps literal.
+
+  The four quick BRIEF templates and the new `quick-root.md` are not in this directory and
+  never were: they are pinned by their own goldens in `tests/quickdrive/briefs.rs`.

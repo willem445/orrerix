@@ -738,7 +738,7 @@ fn progress_from_a_lead_child_types_nothing() {
 ///
 /// Driven through the consumers rather than only through `Role::is_fixture`,
 /// because the predicate's set is already pinned in `model.rs`
-/// (`the_fixture_classes_are_exactly_these_three`) and what this asserts is the
+/// (`the_fixture_classes_are_exactly_these_four`) and what this asserts is the
 /// other half: that each CONSUMER really routes through it. A consumer that
 /// kept its own copy of the old `Orchestrator | Manager` spelling would still
 /// pass a predicate test.

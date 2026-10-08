@@ -289,3 +289,15 @@ pub(crate) fn reviewing_with(
     assert_eq!((side.as_str(), how.as_str()), ("reviewer", "opened"), "{out:?}");
     (group, worker, reviewer)
 }
+
+/// The names `tools/list` shows `agent` — its listed surface, as its own CLI
+/// would read it.
+pub(crate) fn listed_tools(reg: &OrchRegistry, agent: &str) -> Vec<String> {
+    dispatch(reg, &caller(reg, agent), "tools/list", &Value::Null)
+        .unwrap_or_else(|e| panic!("{agent} could not list its tools: {e:?}"))["tools"]
+        .as_array()
+        .expect("tools/list answers an array")
+        .iter()
+        .map(|t| t["name"].as_str().unwrap_or_default().to_string())
+        .collect()
+}

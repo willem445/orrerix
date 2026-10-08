@@ -6,7 +6,11 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 
 import {
+  QUICK_BIND_TIMEOUT_S,
   QUICK_HELD_REASONS,
+  QUICK_OPENING_TRIES,
+  QUICK_OPENING_WAIT_MS,
+  quickRunRows,
   QUICK_STATES,
   quickChipView,
   quickIsOver,
@@ -385,4 +389,72 @@ test("busy does not outrank what the status itself says", () => {
   }
   // And a group with no run at all is a failure, not a wait.
   assert.equal(quickLaunchVerdict({ group_id: "g", exists: false, busy: true }).kind, "failed");
+});
+
+// ── the unfinished-runs list, and the wait for a first pane (#3679) ──────────
+
+test("the launcher's list shows the runs that can still be acted on, and Resume only where it applies", () => {
+  const rows = quickRunRows([
+    run({ group_id: "held", state: "held", held_reason: "worker-gone", held_line: "the worker's pane closed before it reported", repo: "C:\\src\\widgets", panes: {} }),
+    run({ group_id: "working", state: "review-wait", repo: "/home/me/src/gadgets/" }),
+    run({ group_id: "root", state: "root-wait", described: true, review_step: false, repo: "/home/me/src/gadgets" }),
+    run({ group_id: "done", state: "satisfied" }),
+    run({ group_id: "stopped", state: "cancelled" }),
+    { group_id: "plain", exists: false },
+    run({ group_id: "future", state: "a-state-this-build-does-not-know" }),
+  ]);
+  assert.deepEqual(rows.map((r) => r.group), ["held", "working", "root"], "ended, absent and unknown runs are not listed");
+  const [held, working, root] = rows;
+  assert.equal(held.canResume, true);
+  assert.equal(held.why, "the worker's pane closed before it reported");
+  assert.equal(held.repo, "widgets", "a Windows path's folder");
+  assert.equal(working.canResume, false, "a working run is not resumed — only stopped");
+  assert.equal(working.why, "");
+  assert.equal(working.repo, "gadgets", "a trailing separator is not a folder name");
+  assert.equal(root.label, "quick · running", "a described run reads as running");
+  // The task is one line, and a long one is cut rather than wrapped into the row.
+  assert.equal(held.task, "add a --json flag to the list command");
+  const long = quickRunRows([run({ task: "x".repeat(200) })])[0];
+  assert.equal(long.task.length, 90);
+  assert.ok(long.task.endsWith("…"));
+});
+
+test("the wait for a first pane outlasts the backend's bind deadline", () => {
+  // A pane that never binds is not a failure the backend knows about until its
+  // own deadline passes; until then every answer is `busy`. A budget shorter
+  // than that deadline gives up while the answer is still "opening", which is
+  // how a failed launch came to be shown as "still opening" and nothing else.
+  const rust = readFileSync(new URL("../src-tauri/src/orchestration/tuning.rs", import.meta.url), "utf8");
+  const m = rust.match(/const BIND_TIMEOUT: Duration = Duration::from_secs\((\d+)\);/);
+  assert.ok(m, "tuning.rs still declares BIND_TIMEOUT in seconds");
+  assert.equal(QUICK_BIND_TIMEOUT_S, Number(m[1]), "the mirror is the backend's own figure");
+  const budgetMs = QUICK_OPENING_TRIES * QUICK_OPENING_WAIT_MS;
+  assert.ok(budgetMs >= (QUICK_BIND_TIMEOUT_S + 5) * 1000, `${budgetMs} ms leaves room past a ${QUICK_BIND_TIMEOUT_S} s deadline`);
+  assert.ok(budgetMs <= 60_000, "and is still a wait a human sits through");
+});
+
+test("a run whose tab closed stops being polled, and the others do not", async () => {
+  const h = harness({
+    a: [run({ group_id: "a", state: "work-wait" })],
+    b: [run({ group_id: "b", state: "review-wait" })],
+  });
+  await h.runs.refresh("a");
+  await h.runs.refresh("b");
+  assert.equal(h.runs.polling, true);
+
+  // Tab A closed: only B is still bound to a tab.
+  h.runs.retain((group) => group === "b");
+  assert.equal(h.runs.statusOf("a"), null, "nothing is kept for a run with no tab");
+  assert.notEqual(h.runs.statusOf("b"), null);
+  assert.equal(h.runs.polling, true, "B is still working");
+  h.reads.length = 0;
+  await h.runs.tick();
+  assert.deepEqual(h.reads, ["b"], "and only B is read");
+
+  h.runs.retain(() => false);
+  assert.equal(h.runs.polling, false, "with no run left there is no timer");
+  // Keeping everything changes nothing — the common tab change is not a close.
+  await h.runs.refresh("a");
+  h.runs.retain(() => true);
+  assert.notEqual(h.runs.statusOf("a"), null);
 });

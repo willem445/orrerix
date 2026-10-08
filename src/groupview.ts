@@ -1403,6 +1403,8 @@ export class GroupView {
     const roleBits = [
       s.roles.orchestrator ? `${s.roles.orchestrator} orch` : "",
       s.roles.lead ? `${s.roles.lead} lead${s.roles.lead > 1 ? "s" : ""}` : "",
+      // A group has one quick root at most, so the word takes no plural.
+      s.roles.quick ? `${s.roles.quick} quick` : "",
       s.roles.manager ? `${s.roles.manager} manager${s.roles.manager > 1 ? "s" : ""}` : "",
       s.roles.worker ? `${s.roles.worker} worker${s.roles.worker > 1 ? "s" : ""}` : "",
       s.roles.reviewer ? `${s.roles.reviewer} reviewer${s.roles.reviewer > 1 ? "s" : ""}` : "",

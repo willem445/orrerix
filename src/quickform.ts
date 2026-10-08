@@ -12,16 +12,20 @@
 import { ModelPicker } from "./modelpicker";
 import { promptModal } from "./modal";
 import { ORCH_CLIS, orchCliFor } from "./orchclis.ts";
+import { quickRunRows, type QuickRunRow, type QuickStatus } from "./quickchip.ts";
 import {
   QUICK_MINUTES,
+  QUICK_MODES,
   QUICK_ROUNDS,
   QUICK_STEPS,
   QUICK_STEP_LABEL,
   QUICK_STEP_ROLE,
+  quickRootCliOptions,
   quickStepCli,
   quickStepCliOptions,
   type QuickFocus,
   type QuickFormValues,
+  type QuickMode,
   type QuickStep,
 } from "./quickmodel.ts";
 import {
@@ -41,6 +45,23 @@ const STEP_HINT: Record<QuickStep, string> = {
   work: "always on — the worker does the task in a worktree of its own",
   review: "a reviewer reads the work where it is and asks for changes or approves",
 };
+
+/** The same three rows in a described run, where they are not steps the human
+ *  switched on but the helpers the agent may open. */
+const HELPER_HINT: Record<QuickStep, string> = {
+  plan: "what a planner runs on, if the agent opens one",
+  work: "what a worker runs on, in a worktree of its own",
+  review: "what a reviewer runs on, if the agent opens one",
+};
+
+const MODE_LABEL: Record<QuickMode, string> = {
+  steps: "Steps — orrerix passes the work between a planner, a worker and a reviewer",
+  describe: "Describe it — one agent gets the task and opens its own helpers",
+};
+
+/** Radio groups are matched by `name` across the whole document, and a tab can
+ *  hold more than one welcome form — so each form's group gets its own. */
+let modeGroupSeq = 0;
 
 function el<K extends keyof HTMLElementTagNameMap>(tag: K, cls: string, text?: string): HTMLElementTagNameMap[K] {
   const e = document.createElement(tag);
@@ -95,6 +116,13 @@ interface StepRow {
   instructions: HTMLTextAreaElement;
 }
 
+/** Replace a field's label and hint — the two text nodes `field` built. */
+function relabel(wrap: HTMLElement, label: string, hint: string): void {
+  const lab = wrap.querySelector(".dlg-label");
+  if (!lab) return;
+  lab.replaceChildren(document.createTextNode(label), el("span", "opt", ` — ${hint}`));
+}
+
 export class QuickFormSection {
   readonly el: HTMLElement;
   private readonly task: HTMLTextAreaElement;
@@ -112,6 +140,20 @@ export class QuickFormSection {
    *  from it: every write goes through the store, which re-reads the file. */
   private presets: QuickPreset[] = [];
   private presetsLoaded = false;
+  private mode: QuickMode = "steps";
+  private readonly modeBoxes = new Map<QuickMode, HTMLInputElement>();
+  private readonly rootCli: HTMLSelectElement;
+  private readonly rootModel: ModelPicker;
+  private readonly rootField: HTMLElement;
+  private readonly stepsField: HTMLElement;
+  private readonly presetField: HTMLElement;
+  private readonly runsField: HTMLElement;
+  private readonly runsList: HTMLElement;
+  /** The unfinished runs last read. The list's DOM is a view of this — it is
+   *  rebuilt from it, never read back from. */
+  private runs: QuickRunRow[] = [];
+  /** A row whose Stop is in flight, so a second click cannot send a second. */
+  private readonly stopping = new Set<string>();
 
   constructor(
     private readonly opts: {
@@ -120,6 +162,14 @@ export class QuickFormSection {
       presets: QuickPresetsStore;
       /** Show a message in the form's own error line. */
       onError: (msg: string) => void;
+      /** The runs that have not ended, and the two things to do with one. */
+      runs: {
+        list: () => Promise<QuickStatus[]>;
+        stop: (group: string) => Promise<unknown>;
+        /** Resume `group` into this form's tab. The host owns the tab, so the
+         *  form only says which run. */
+        resume: (group: string) => void;
+      };
     }
   ) {
     const known = ORCH_CLIS.map((c) => c.id);
@@ -130,6 +180,52 @@ export class QuickFormSection {
     this.el = el("div", "quick-section");
 
     this.task = textarea(4, "What should be done? One task, in your own words — required");
+
+    const modeRow = el("div", "quick-modes");
+    const modeName = `quick-mode-${++modeGroupSeq}`;
+    for (const m of QUICK_MODES) {
+      const box = el("input", "");
+      box.type = "radio";
+      box.name = modeName;
+      box.value = m;
+      box.checked = m === this.mode;
+      box.addEventListener("change", () => {
+        if (!box.checked) return;
+        this.mode = m;
+        this.applyMode();
+      });
+      const wrap = el("label", "quick-check");
+      wrap.append(box, document.createTextNode(MODE_LABEL[m]));
+      modeRow.appendChild(wrap);
+      this.modeBoxes.set(m, box);
+    }
+
+    this.rootCli = el("select", "dlg-select");
+    for (const id of quickRootCliOptions(known)) {
+      const o = el("option", "", id);
+      o.value = id;
+      this.rootCli.appendChild(o);
+    }
+    this.rootCli.value = quickRootCliOptions(known).includes(opts.defaultCli)
+      ? opts.defaultCli
+      : (quickRootCliOptions(known)[0] ?? "");
+    this.rootModel = new ModelPicker();
+    const seedRoot = () => {
+      const c = orchCliFor(this.rootCli.value);
+      // The agent a task is given to does an orchestrator's kind of work —
+      // deciding, delegating, reading what comes back — so it starts on that
+      // class's default model.
+      this.rootModel.setOptions(c.models, c.defaults.orchestrator, c.id);
+    };
+    this.rootCli.addEventListener("change", seedRoot);
+    seedRoot();
+    const rootPair = el("div", "dlg-row quick-step-row");
+    rootPair.append(this.rootCli, this.rootModel.root);
+    this.rootField = field("Runs on", rootPair, "the agent that is given the task; it decides whether to plan and to review");
+
+    this.runsList = el("div", "quick-runs");
+    this.runsField = field("Unfinished runs", this.runsList, "resume or stop a run from here when none of its panes is left");
+    this.runsField.hidden = true;
 
     const check = (label: string, on: boolean): [HTMLLabelElement, HTMLInputElement] => {
       const box = el("input", "");
@@ -212,24 +308,59 @@ export class QuickFormSection {
     this.planBox.addEventListener("change", () => this.applySteps());
     this.reviewBox.addEventListener("change", () => this.applySteps());
 
+    this.stepsField = field("Steps", stepsRow, "orrerix relays between them and tells you when the run ends");
+    this.presetField = field("Instruction preset", presetRow, "your own saved instructions, offered wherever you work");
     this.el.append(
+      this.runsField,
+      field("How", modeRow),
       field("Task", this.task),
-      field("Steps", stepsRow, "orrerix relays between them and tells you when the run ends"),
+      this.rootField,
+      this.stepsField,
       this.rows.plan.wrap,
       this.rows.work.wrap,
       this.rows.review.wrap,
-      field("Instruction preset", presetRow, "your own saved instructions, offered wherever you work"),
+      this.presetField,
       bounds,
       field("Permissions", this.perms)
     );
-    this.applySteps();
+    this.applyMode();
     this.paintPresets();
   }
 
-  /** Show only the rows of the steps that are on. */
+  /** Lay the form out for the chosen mode.
+   *
+   *  In a described run the human gives the task and nothing else: there are
+   *  no steps to switch on and no instruction boxes, because whether to plan,
+   *  and what to tell each helper, is the agent's call. The three CLI rows
+   *  stay — they say what each KIND of helper runs on, if it is opened. */
+  private applyMode(): void {
+    const described = this.mode === "describe";
+    this.rootField.hidden = !described;
+    this.stepsField.hidden = described;
+    this.presetField.hidden = described;
+    for (const step of QUICK_STEPS) {
+      const row = this.rows[step];
+      row.instructions.hidden = described;
+      relabel(
+        row.wrap,
+        described ? `${QUICK_STEP_LABEL[step]} helper` : `${QUICK_STEP_LABEL[step]} step`,
+        described ? HELPER_HINT[step] : STEP_HINT[step]
+      );
+    }
+    this.applySteps();
+  }
+
+  /** Show only the rows of the steps that are on — all three in a described
+   *  run, where they are the helpers the agent may open. */
   private applySteps(): void {
-    this.rows.plan.wrap.hidden = !this.planBox.checked;
-    this.rows.review.wrap.hidden = !this.reviewBox.checked;
+    const described = this.mode === "describe";
+    this.rows.plan.wrap.hidden = !described && !this.planBox.checked;
+    this.rows.review.wrap.hidden = !described && !this.reviewBox.checked;
+    // A described run quotes the round bound to its agent, so the box stays.
+    if (described) {
+      this.roundsField.hidden = false;
+      return;
+    }
     this.roundsField.hidden = !this.reviewBox.checked;
   }
 
@@ -237,6 +368,7 @@ export class QuickFormSection {
    *  per form. A failed read leaves the picker empty and is retried by the
    *  next save or delete, which read for themselves. */
   activate(): void {
+    void this.refreshRuns();
     if (this.presetsLoaded) return;
     this.presetsLoaded = true;
     void this.opts.presets.read().then((presets) => {
@@ -247,6 +379,68 @@ export class QuickFormSection {
       this.presets = presets;
       this.paintPresets();
     });
+  }
+
+  /** Re-read the runs that have not ended and repaint the list. A read that
+   *  fails leaves what was shown: "could not look" is not "there are none". */
+  private async refreshRuns(): Promise<void> {
+    let list: QuickStatus[];
+    try {
+      list = await this.opts.runs.list();
+    } catch {
+      return;
+    }
+    this.runs = quickRunRows(list);
+    this.paintRuns();
+  }
+
+  /** Rebuild the list from `this.runs`. Hidden when there is nothing to show,
+   *  so a form with no unfinished run looks exactly as it did before. */
+  private paintRuns(): void {
+    this.runsField.hidden = this.runs.length === 0;
+    this.runsList.replaceChildren(
+      ...this.runs.map((run) => {
+        const row = el("div", "quick-run");
+        const text = el("div", "quick-run-text");
+        text.append(
+          el("span", "quick-run-task", run.task || "(no description)"),
+          el("span", "quick-run-meta", [run.repo, run.label, run.why].filter(Boolean).join(" · "))
+        );
+        text.title = [run.task, run.why].filter(Boolean).join("\n");
+        row.appendChild(text);
+        if (run.canResume) {
+          const resume = el("button", "dlg-btn", "Resume here");
+          resume.type = "button";
+          resume.title = "Re-open this run's pane in this tab and carry on";
+          resume.addEventListener("click", () => this.opts.runs.resume(run.group));
+          row.appendChild(resume);
+        }
+        const stop = el("button", "dlg-btn", "Stop");
+        stop.type = "button";
+        stop.title = "End this run. Nothing is closed or deleted; the work stays where it is.";
+        stop.disabled = this.stopping.has(run.group);
+        stop.addEventListener("click", () => void this.stopRun(run.group));
+        row.appendChild(stop);
+        return row;
+      })
+    );
+  }
+
+  private async stopRun(group: string): Promise<void> {
+    if (this.stopping.has(group)) return;
+    this.stopping.add(group);
+    this.paintRuns();
+    try {
+      await this.opts.runs.stop(group);
+    } catch (err) {
+      this.opts.onError(`That run could not be stopped: ${String(err)}`);
+    } finally {
+      this.stopping.delete(group);
+    }
+    await this.refreshRuns();
+    // A failed re-read leaves the old rows, so the button is repainted from
+    // the cleared flag either way.
+    this.paintRuns();
   }
 
   private instructions(): QuickInstructions {
@@ -339,6 +533,8 @@ export class QuickFormSection {
     });
     return {
       ...shared,
+      mode: this.mode,
+      root: { cli: this.rootCli.value, model: this.rootModel.value },
       task: this.task.value,
       planStep: this.planBox.checked,
       reviewStep: this.reviewBox.checked,
@@ -353,6 +549,11 @@ export class QuickFormSection {
   /** The CLIs the steps that are ON will run — what the launcher probes on
    *  PATH before it starts anything. */
   programs(): string[] {
+    // A described run may open any of the three helpers, so all three CLIs
+    // have to be there — and so does the one the agent itself runs on.
+    if (this.mode === "describe") {
+      return [...new Set([this.rootCli.value, ...QUICK_STEPS.map((s) => this.rows[s].cli.value)])];
+    }
     const on = QUICK_STEPS.filter(
       (s) => s === "work" || (s === "plan" ? this.planBox.checked : this.reviewBox.checked)
     );
@@ -365,6 +566,7 @@ export class QuickFormSection {
     if (target === "task") this.task.focus();
     else if (target === "rounds") this.rounds.focus();
     else if (target === "minutes") this.minutes.focus();
+    else if (target === "root") this.rootCli.focus();
     else if (target !== "repo") this.rows[target].cli.focus();
   }
 }

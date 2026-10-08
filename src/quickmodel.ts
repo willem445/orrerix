@@ -47,6 +47,22 @@ export const QUICK_STEP_CLIS: Record<QuickStep, readonly string[]> = {
 };
 
 /** The review-round bound: the review driver's own `1..=3`. */
+/** The two ways to run a quick task (#3679).
+ *
+ *  - `steps`: orrerix relays between a planner, a worker and a reviewer itself.
+ *  - `describe`: ONE agent is given the task and decides for itself whether to
+ *    plan, who works and who reviews; the panes it opens are its helpers. */
+export type QuickMode = "steps" | "describe";
+
+export const QUICK_MODES: readonly QuickMode[] = ["steps", "describe"];
+
+/** The CLIs that can host the agent a described run is given to. Every CLI:
+ *  that pane is not clamped — it is a full working pane, like an
+ *  orchestrator's — so no CLI is ruled out by a deny tier it cannot enforce.
+ *  A mirror of the engine's `cli_can_host(_, Role::Quick)`, pinned beside the
+ *  step lists in `test/quickmodel.test.ts`. */
+export const QUICK_ROOT_CLIS: readonly string[] = ["claude", "copilot", "gemini", "opencode", "pi", "codex"];
+
 export const QUICK_ROUNDS = { min: 1, max: 3, default: 3 } as const;
 
 /** The run's overall time bound, in minutes: the review driver's own
@@ -68,6 +84,10 @@ export interface QuickStepValues {
 export interface QuickFormValues {
   repo: string;
   task: string;
+  mode: QuickMode;
+  /** The CLI and model of the one agent a described run is given to. Read
+   *  only in `describe` mode. */
+  root: { cli: string; model: string };
   planStep: boolean;
   reviewStep: boolean;
   base: string;
@@ -85,6 +105,8 @@ export interface QuickFormValues {
 export interface QuickStartRequest {
   repo: string;
   task: string;
+  mode: QuickMode;
+  root: { cli: string; model: string; instructions: string };
   plan_step: boolean;
   review_step: boolean;
   base: string;
@@ -100,15 +122,27 @@ export interface QuickStartRequest {
 }
 
 /** Which field to focus when the plan is refused. */
-export type QuickFocus = "repo" | "task" | "rounds" | "minutes" | QuickStep;
+export type QuickFocus = "repo" | "task" | "rounds" | "minutes" | "root" | QuickStep;
 
 export type QuickPlan =
   | { ok: true; request: QuickStartRequest }
   | { ok: false; error: string; focus: QuickFocus };
 
 /** Whether `step` runs under these values. Work always does. */
-export function quickStepOn(values: Pick<QuickFormValues, "planStep" | "reviewStep">, step: QuickStep): boolean {
+export function quickStepOn(
+  values: Pick<QuickFormValues, "planStep" | "reviewStep"> & { mode?: QuickMode },
+  step: QuickStep
+): boolean {
+  // In a described run the three rows are not steps the human switched on:
+  // they are the helpers the agent MAY open, and it may open any of them. So
+  // all three are "on" — each one's CLI has to be able to host its role.
+  if (values.mode === "describe") return true;
   return step === "work" || (step === "plan" ? values.planStep : values.reviewStep);
+}
+
+/** The root CLIs this build's launcher can actually offer. */
+export function quickRootCliOptions(known: readonly string[]): string[] {
+  return known.filter((cli) => QUICK_ROOT_CLIS.includes(cli));
 }
 
 /** The CLIs the form offers for `step`, out of the ones this build knows —
@@ -153,16 +187,29 @@ export function planQuickStart(values: QuickFormValues): QuickPlan {
   if (!task) {
     return { ok: false, error: "Describe the task — that is the one thing a quick task needs.", focus: "task" };
   }
+  const described = values.mode === "describe";
+  if (described && !QUICK_ROOT_CLIS.includes(values.root.cli)) {
+    return {
+      ok: false,
+      error: values.root.cli
+        ? `${values.root.cli} cannot run a described task — pick one of: ${QUICK_ROOT_CLIS.join(", ")}.`
+        : "Pick the CLI the task runs on.",
+      focus: "root",
+    };
+  }
   for (const step of QUICK_STEPS) {
     if (!quickStepOn(values, step)) continue;
     const cli = values.steps[step].cli;
     if (!QUICK_STEP_CLIS[step].includes(cli)) {
       const label = QUICK_STEP_LABEL[step].toLowerCase();
+      const what = described ? `be the ${label} helper` : `run the ${label} step`;
       return {
         ok: false,
         error: cli
-          ? `${cli} cannot run the ${label} step — pick one of: ${QUICK_STEP_CLIS[step].join(", ")}.`
-          : `Pick a CLI for the ${label} step.`,
+          ? `${cli} cannot ${what} — pick one of: ${QUICK_STEP_CLIS[step].join(", ")}.`
+          : described
+            ? `Pick a CLI for the ${label} helper.`
+            : `Pick a CLI for the ${label} step.`,
         focus: step,
       };
     }
@@ -170,7 +217,9 @@ export function planQuickStart(values: QuickFormValues): QuickPlan {
   // A run with no review step never reads the round bound, so a blank field
   // there is not a reason to refuse it.
   let rounds: number = QUICK_ROUNDS.default;
-  if (values.reviewStep) {
+  // A described run quotes the bound to its agent whether or not it reviews,
+  // so the box is read in that mode regardless of the review checkbox.
+  if (values.reviewStep || described) {
     const r = boundedInt(values.rounds, QUICK_ROUNDS, "Review rounds");
     if (!r.ok) return { ok: false, error: r.error, focus: "rounds" };
     rounds = r.value;
@@ -183,15 +232,27 @@ export function planQuickStart(values: QuickFormValues): QuickPlan {
     model: values.steps[step].model.trim(),
     // A step that is off sends no instructions: the form may still be holding
     // text for it, and text for a pane that will never open is not a request.
-    instructions: quickStepOn(values, step) ? values.steps[step].instructions.trim() : "",
+    // …and instructions belong to the steps mode alone. In a described run
+    // the task is the only text the human gives: the helpers run on their
+    // roles' own instructions, and the agent that opens them says what it
+    // wants of each.
+    instructions: !described && quickStepOn(values, step) ? values.steps[step].instructions.trim() : "",
   });
   return {
     ok: true,
     request: {
       repo,
       task,
-      plan_step: values.planStep,
-      review_step: values.reviewStep,
+      mode: described ? "describe" : "steps",
+      root: {
+        cli: described ? values.root.cli : "",
+        model: described ? values.root.model.trim() : "",
+        instructions: "",
+      },
+      // The two step switches are the steps mode's. A described run records
+      // neither: whether to plan or review is its agent's call.
+      plan_step: !described && values.planStep,
+      review_step: !described && values.reviewStep,
       base: values.base.trim(),
       max_review_rounds: rounds,
       drive_timeout_minutes: minutes.value,

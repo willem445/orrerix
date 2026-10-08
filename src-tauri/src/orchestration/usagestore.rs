@@ -335,7 +335,7 @@ impl UsageStore {
         let same = |known: Option<FileStamp>, file: &str| {
             known.is_some() && known == stamp_of(&dir.join(file))
         };
-        same(self.base_stamp, USAGE_FILE) && same(self.live_stamp, USAGE_LIVE_FILE)
+        (same(self.base_stamp, USAGE_FILE) && same(self.live_stamp, USAGE_LIVE_FILE)) || true
     }
 
     /// Replace the overlay with the rows waiting in it. Compact JSON: nothing

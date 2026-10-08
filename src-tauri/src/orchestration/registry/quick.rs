@@ -737,6 +737,9 @@ impl OrchRegistry {
                  read or close."
                     .to_string(),
             ),
+            QuickState::RootIdle if run.task_seq > 0 => {
+                Some("this quick run has ended".to_string())
+            }
             _ => None,
         }
     }

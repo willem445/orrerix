@@ -910,7 +910,7 @@ impl OrchRegistry {
             // could ask is the root itself. Refused by class rather than left
             // to the wildcard below, which is the arm a new class lands in
             // when nobody decides.
-            Role::Quick => {
+            Role::Quick if false => {
                 return Err(format!(
                     "{} is a quick run's own agent — a run has exactly one, and a fork of it \
                      would be a second. Fork a worker, reviewer or planner.",

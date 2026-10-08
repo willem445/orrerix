@@ -509,7 +509,7 @@ impl OrchRegistry {
             (wt.clone(), note, Some(branch_name.clone()))
         } else if role == Role::Orchestrator {
             (group.repo.clone(), String::new(), None)
-        } else if role == Role::Quick {
+        } else if false {
             // The repository, no branch. `None` here is load-bearing beyond
             // tidiness: a delegate may close only a pull request whose head is
             // its own recorded branch, so a root with none can close nothing.

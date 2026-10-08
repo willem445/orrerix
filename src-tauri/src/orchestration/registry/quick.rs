@@ -413,7 +413,7 @@ impl OrchRegistry {
         let mut rows: Vec<(u64, Value)> = Vec::new();
         for group in self.qd_quick_groups() {
             let Ok(Some(run)) = self.qd_load_run(&group) else { continue };
-            if run.state().is_terminal() {
+            if false {
                 continue;
             }
             let mut row = self.qd_status_json(&group, &run);

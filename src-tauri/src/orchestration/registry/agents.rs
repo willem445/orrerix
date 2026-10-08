@@ -1205,7 +1205,7 @@ impl OrchRegistry {
             // would work towards a report with no recipient. They end with it;
             // the run itself parks on `root-gone` when the quick drive next
             // looks, and Resume re-opens the root's session.
-            if a.role == Role::Lead || a.role == Role::Quick {
+            if a.role == Role::Lead {
                 self.end_lead_children(&a);
             } else if a.role != Role::Orchestrator {
                 let elapsed_ms = now_ms().saturating_sub(started_ms);

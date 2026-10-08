@@ -926,7 +926,6 @@ impl QuickDriveRecord {
         self.advance(QuickState::RootWait, None, now_ms)?;
         self.brief_pending = false;
         self.started_ms = now_ms;
-        self.clock_ms = now_ms;
         self.task_seq = self.task_seq.saturating_add(1);
         self.worker_note.clear();
         self.pr = None;

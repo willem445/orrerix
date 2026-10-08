@@ -1153,6 +1153,18 @@ fn no_registry_construction_bypasses_the_test_agent_dir_overrides() {
         // the helper ever stops applying one, that test fails in its own binary
         // and this row's premise is gone with it.
         ("todo.rs", 1),           // relaunch_registry (#3263 S2) — proof test in that file
+        // #3679, the quick drive. Its own binary for the `reviewdrive/helpers.rs`
+        // row's two reasons (helpers do not cross integration-test targets, and
+        // CLAUDE.md constraint 4 makes the target KIND what matters), and
+        // therefore its own helper.
+        //
+        // **The proof this row names**, so it can go stale rather than merely be
+        // trusted: `tests/quickdrive/guards.rs`'s own
+        // `its_registry_helper_applies_every_override_this_allowlist_row_assumes`
+        // asserts the helper really does apply all four agent/hook dir
+        // overrides — the property #464 is about. If it ever stops applying one,
+        // that test fails in its own binary and this row's premise is gone.
+        ("quickdrive/helpers.rs", 1), // relaunch_registry (#3679) — proof test in guards.rs
     ];
     let mut files = Vec::new();
     collect_rs_files(tests_dir, &mut files);

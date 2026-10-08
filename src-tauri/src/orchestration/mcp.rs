@@ -1206,7 +1206,7 @@ fn message_orchestrator_tool() -> Value {
     tool("message_orchestrator",
         "Send a free-form message to the orchestrator. It arrives in that pane as `[orrerix] message from <your agent id>: …` — an attribution line you cannot forge and cannot suppress, so the orchestrator always knows who is speaking. Control characters are stripped and an `[orrerix]` span in your text is neutralized. \
          \
-         IF YOU ARE THE MANAGER, this is your one outbound channel and the whole of your authority, so two things about it are not style. QUOTE THE HUMAN VERBATIM when you relay what they said, and mark plainly where their words stop and your summary starts — the orchestrator has no other way to tell a direction from your reading of one. And RELAY ONLY WHAT THEY CONFIRMED: a brief they have not read back and agreed to is a draft, and a preference you inferred is not a decision. A relayed \"the human is happy with this\" moves nothing on GitHub — starting work and merging it are gated by their own hand there, and neither you nor the orchestrator may move that gate.",
+         IF YOU ARE THE MANAGER, this is your one outbound channel and the whole of your authority, so two things about it are not style. QUOTE THE HUMAN VERBATIM when you relay what they said, and mark plainly where their words stop and your summary starts — the orchestrator has no other way to tell a direction from your reading of one. And RELAY ONLY WHAT THEY CONFIRMED: a brief they have not read back and agreed to is a draft, and a preference you inferred is not a decision. A relayed \"the human is happy with this\" moves nothing on GitHub — starting work and merging it are gated by their own hand there, and neither you nor the orchestrator may move that gate. \n         \n         IN A QUICK RUN (a group with no orchestrator, started from the launcher's Quick task) there is nobody to deliver this to: the message is recorded for the human and the run is held until they resume or stop it, so send one only when you cannot carry on without an answer.",
         json!({ "text": { "type": "string" } }), &["text"])
 }
 
@@ -1958,7 +1958,7 @@ fn tool_defs(
     } else {
         tools.extend([
             tool("report",
-                "Report to the orchestrator — decision-grade, not a narrative: it is a router whose next action depends on one bit plus a reference, and every paragraph beyond that is context it pays for on every future turn. Post your FULL detail to GitHub first (PR body/comment, issue comment — the system of record); this tool is the notification, not the record. Prefer the structured shape: `outcome` (done | blocked | approved | request_changes | progress — approved/request_changes are for a reviewer's report after `review_verdict`, and both count as this agent's turn being over, same as done), `ref` (the PR/issue this is about, e.g. \"#123\"), `detail_url` (the GitHub comment/PR where the full detail lives), and `note` — a short pointer (~1-2 lines), hard-capped at 500 characters and truncated WITH a stated marker if you go over, so the cap is enforced, not merely asked for. The legacy shape (`status` + free-text `summary`, no cap) still works — nothing breaks — but is soft-deprecated: write new reports the structured way. Give exactly one of `status`/`outcome` and one of `summary`/`note`. WHAT REACHES THE ORCHESTRATOR'S PANE: only a report that needs an orchestrator ACTION. `done` and `blocked` do (route the next step, drive the PR, merge, ask the human) and are typed into that pane. `progress` never does — it is recorded in the audit log and appended as a note on your board task, where the human sees it and the orchestrator reads it on demand (`get_task`), and nothing is typed into any pane. So do not use `progress` to get someone's attention, and do not send a 'starting' report at all: the orchestrator wrote your brief, so it already knows. When something genuinely needs the orchestrator NOW and is not a status change, that is `message_orchestrator`, which always lands.",
+                "Report to the orchestrator — decision-grade, not a narrative: it is a router whose next action depends on one bit plus a reference, and every paragraph beyond that is context it pays for on every future turn. Post your FULL detail to GitHub first (PR body/comment, issue comment — the system of record); this tool is the notification, not the record. Prefer the structured shape: `outcome` (done | blocked | approved | request_changes | progress — approved/request_changes are for a reviewer's report after `review_verdict`, and both count as this agent's turn being over, same as done), `ref` (the PR/issue this is about, e.g. \"#123\"), `detail_url` (the GitHub comment/PR where the full detail lives), and `note` — a short pointer (~1-2 lines), hard-capped at 500 characters and truncated WITH a stated marker if you go over, so the cap is enforced, not merely asked for. The legacy shape (`status` + free-text `summary`, no cap) still works — nothing breaks — but is soft-deprecated: write new reports the structured way. Give exactly one of `status`/`outcome` and one of `summary`/`note`. WHAT REACHES THE ORCHESTRATOR'S PANE: only a report that needs an orchestrator ACTION. `done` and `blocked` do (route the next step, drive the PR, merge, ask the human) and are typed into that pane. `progress` never does — it is recorded in the audit log and appended as a note on your board task, where the human sees it and the orchestrator reads it on demand (`get_task`), and nothing is typed into any pane. So do not use `progress` to get someone's attention, and do not send a 'starting' report at all: the orchestrator wrote your brief, so it already knows. When something genuinely needs the orchestrator NOW and is not a status change, that is `message_orchestrator`, which always lands. IN A QUICK RUN (a group with no orchestrator, started from the launcher's Quick task) the report goes to the RUN instead: it is what hands the turn to the next step, it is typed into no other pane as-is, and `summary` may be given BESIDE `note` — there it carries the plan (a planner) or the findings (a reviewer's request_changes) in full.",
                 json!({
                     "status": { "type": "string", "enum": ["progress", "done", "blocked"], "description": "Legacy — soft-deprecated. Prefer `outcome`." },
                     "summary": { "type": "string", "description": "Legacy free text, uncapped — soft-deprecated. Prefer `note`." },
@@ -4653,6 +4653,23 @@ fn call_tool(reg: &OrchRegistry, caller: &Caller, name: &str, args: &Value) -> R
             } else {
                 None
             };
+            // #3679: **a pane of a QUICK run reports to that run** — the third
+            // owner on this ladder, and asked last. A quick group has no
+            // orchestrator pane at all, and both drivers above require the
+            // advanced orchestrator a quick group is minted without, so the
+            // three sets are disjoint by construction rather than by this
+            // order. Keyed on the agent id orrerix minted, like the two above
+            // it; `None` for every caller outside a quick group, at the cost
+            // of one `stat`. The bodies are `qdtick.rs`'s.
+            let qd = if pd_planner.is_none() && pd_slice.is_none() {
+                reg.qd_owner(&caller.group, &caller.agent_id)
+            } else {
+                None
+            };
+            // What a quick run told its caller. It replaces this tool's
+            // ordinary answer: "reported to orchestrator" would be false in a
+            // group that has none.
+            let mut quick_answer: Option<String> = None;
             match reg.rd_owner(&caller.group, &caller.agent_id) {
                 Some((pr, pane)) => {
                     // **WHICH side of the drive reported decides what the signal
@@ -4812,6 +4829,25 @@ fn call_tool(reg: &OrchRegistry, caller: &Caller, name: &str, args: &Value) -> R
                         event,
                     );
                 }
+                // #3679: consumed by the QUICK run. `summary` carries the body
+                // — the plan from a planner, the findings from a reviewer — and
+                // the one-line `note` rides beside it. Whether this pane holds
+                // the turn is `qd_consume_report`'s to decide, and it answers
+                // what really happened either way.
+                None if qd.is_some() => {
+                    if let Some(owner) = qd {
+                        quick_answer = Some(reg.qd_consume_report(
+                            &caller.group,
+                            &caller.agent_id,
+                            owner,
+                            status,
+                            outcome,
+                            note.or(summary).unwrap_or_default(),
+                            summary.unwrap_or_default(),
+                            arg_str(args, "ref").unwrap_or_default(),
+                        ));
+                    }
+                }
                 // #3367 item 2: **a worker's `done` may START a drive** where
                 // the repo opted into `driver.auto_drive_on_done`. Asked here,
                 // in the arm that would otherwise deliver, and nowhere else: a
@@ -4876,6 +4912,9 @@ fn call_tool(reg: &OrchRegistry, caller: &Caller, name: &str, args: &Value) -> R
             // count is stated because it went stale once already: the third
             // answer's comment still said "three" after the fourth arrived
             // (rev-std round 3).
+            if let Some(answer) = quick_answer {
+                return Ok(answer);
+            }
             if auto_started {
                 return Ok("your report(done) started a review drive on that PR \
                            (driver.auto_drive_on_done). It was NOT typed into the \
@@ -5220,6 +5259,21 @@ fn call_tool(reg: &OrchRegistry, caller: &Caller, name: &str, args: &Value) -> R
             // (report already does this via set_agent_idle).
             reg.note_agent_activity(&caller.agent_id);
             // #576 residual: same relay variant, same reason as `report` above.
+            //
+            // #3679: **in a quick group there is no orchestrator to deliver
+            // to.** The message is recorded for the human and the run parks on
+            // `held(messaged)` — the review driver's "noticed, never
+            // intercepted" below cannot apply where the recipient does not
+            // exist. Asked first and answered here, so nothing further down can
+            // try to resolve a root this group never had.
+            if let Some(owner) = reg.qd_owner(&caller.group, &caller.agent_id) {
+                return Ok(reg.qd_consume_message(
+                    &caller.group,
+                    &caller.agent_id,
+                    owner,
+                    text,
+                ));
+            }
             //
             // #1778 §7: **`message_orchestrator` is never intercepted**, and
             // that is the load-bearing exemption rather than an oversight. It is

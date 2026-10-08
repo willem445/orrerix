@@ -18,6 +18,8 @@ pub(super) use delivery::*;
 mod groups;
 mod spawn;
 pub use spawn::*;
+mod quick;
+pub use quick::*;
 mod channels;
 mod merge;
 mod questions;
@@ -441,6 +443,19 @@ pub struct OrchRegistry {
     pub(super) pd_signals: Arc<TrackedMutex<HashMap<(GroupId, u64), PdSignal>>>,
     /// Groups whose persisted plan drives have been reconciled this process.
     pub(super) pd_reconciled: Arc<TrackedMutex<HashSet<GroupId>>>,
+    /// #3679: serialises the read-modify-write of a `quick_drive.json`.
+    ///
+    /// **Ranked, and a leaf** (`lockorder::QUICK_DRIVE`): the load-modify-store
+    /// it spans is file I/O and nothing else. Unlike `rd_state_lock` it is
+    /// never held across a spawn or a delivery — one group is stepped by one
+    /// caller at a time through `QdClaim` instead, which is what a lock held
+    /// across the spawn would otherwise be for. See `qdtick::QdClaim`.
+    pub(super) qd_state_lock: TrackedMutex<()>,
+    /// #3679: everything the quick drive keeps in memory — pending signals,
+    /// which groups have a working run, which a step is running for. One
+    /// ranked leaf (`lockorder::QUICK_MEM`): every access is a lookup or an
+    /// insert, and nothing is ever held across anything.
+    pub(super) qd_mem: TrackedMutex<QdMem>,
     /// #560: each pane's open hold EPISODE — when it began, and what has
     /// already been said about it. Keyed by `pty_id`, in memory only (see
     /// [`HoldEpisode`] for the restart argument).
@@ -1364,6 +1379,8 @@ impl OrchRegistry {
             pd_service_ms: Arc::new(TrackedMutex::new("pd_service_ms", HashMap::new())),
             pd_signals: Arc::new(TrackedMutex::new("pd_signals", HashMap::new())),
             pd_reconciled: Arc::new(TrackedMutex::new("pd_reconciled", HashSet::new())),
+            qd_state_lock: TrackedMutex::new_ranked("qd_state_lock", lockorder::QUICK_DRIVE, ()),
+            qd_mem: TrackedMutex::new_ranked("qd_mem", lockorder::QUICK_MEM, QdMem::default()),
             queue_draining: Arc::new(queuestate::DrainerRegistry::new()),
             drainer_gen: Arc::new(AtomicU64::new(0)),
             queue_still_notified: Arc::new(TrackedMutex::new("queue_still_notified", HashSet::new())),

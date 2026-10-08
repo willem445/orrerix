@@ -85,6 +85,7 @@ stub_commands!(
     orch_solo_prepare, orch_solo_bind, orch_confirm_solo_copilot_autopilot, orch_solo_adopt,
     orch_fork_agent, orch_fork_solo_result,
     orch_lead_prepare, orch_lead_bind,
+    orch_quick_start, orch_quick_status, orch_quick_control,
     probe_agent_cli,
     list_cli_models,
     open_in_editor,
@@ -171,11 +172,11 @@ fn generate_handler_matches_app_commands() {
 }
 
 #[test]
-fn app_commands_len_is_176() {
+fn app_commands_len_is_179() {
     assert_eq!(
         loomux_lib::command_manifest::APP_COMMANDS.len(),
-        176,
-        "APP_COMMANDS drifted from the expected count of 176 (120 per the #363 plan's audited \
+        179,
+        "APP_COMMANDS drifted from the expected count of 179 (120 per the #363 plan's audited \
          count, +1 for orch_confirm_solo_copilot_autopilot added in #364, +2 for \
          orch_set_advanced_orchestrator/orch_workflow_status added in #316/#355, +3 for \
          orch_set_compact_nudge_minutes/orch_set_compact_nudge_roles/ \
@@ -236,13 +237,15 @@ fn app_commands_len_is_176() {
          human's To-Do store, added in #3263 slice S3, +2 for orch_fork_agent/orch_fork_solo_result \
          — the human's fork of a delegate's session into a new agent pane, and the frontend's \
          ack for a lead's self-fork, added in #3318 F2, +1 for orch_request_compact — the \
-         cache-age chip's human Compact now, added in #3407 — \
+         cache-age chip's human Compact now, added in #3407, +3 for \
+         orch_quick_start/orch_quick_status/orch_quick_control — the quick task's start, its \
+         status read and its one control door, added in #3679 — \
          if this is an intentional addition/removal, update this tripwire's count too"
     );
 }
 
 #[test]
-fn main_has_all_176_and_zero_permission_denies_dangerous_spread() {
+fn main_has_all_179_and_zero_permission_denies_dangerous_spread() {
     // Catches drift in *this test file* before it can mask a real gap: the
     // stub list above must match APP_COMMANDS exactly.
     let mut stub_names: Vec<&str> = STUB_COMMAND_NAMES.to_vec();

@@ -408,7 +408,7 @@ impl OrchRegistry {
     /// hand-back: `deliver_prompt` can refuse for reasons that say nothing
     /// about the drive (a pane that died between the lookup and the write),
     /// and the spawn is the path that already existed.
-    pub(super) fn rd_reuse_pane(
+    pub(in crate::orchestration) fn rd_reuse_pane(
         &self,
         group: &GroupId,
         on_behalf_of: &str,

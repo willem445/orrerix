@@ -837,6 +837,13 @@ impl OrchRegistry {
         // budget nobody can check. Its serviced group is not reported: nothing
         // routes on it, and `GhPollTick` is a shape the frontend reads.
         self.pd_driver_tick(now);
+        // #3679: the QUICK drive, a SEVENTH step. On this loop because "one
+        // tick loop, one order" is the rule; it makes no `gh` call at all, so
+        // it takes nothing the two drivers above could have used, and it
+        // looks only at groups whose run is in a working state — a finished
+        // or parked run costs this wake nothing. Not reported, for the plan
+        // driver's reason: nothing routes on it.
+        self.qd_driver_tick(now);
         GhPollTick { fired, intake_scanned, mq_serviced, rd_serviced }
     }
 

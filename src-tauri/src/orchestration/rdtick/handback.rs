@@ -316,7 +316,7 @@ impl OrchRegistry {
     /// the log to "this session had no live pane" — which is exactly the
     /// indistinguishability #2089 added `rd-reuse-declined` to remove, one arm
     /// over.
-    fn rd_take_over_pane(
+    pub(in crate::orchestration) fn rd_take_over_pane(
         &self,
         group: &GroupId,
         on_behalf_of: &str,
@@ -415,7 +415,7 @@ impl OrchRegistry {
     /// is — [`rd_resume_cwd`](Self::rd_resume_cwd) resolves the workspace the
     /// session already had. Passing `false` there says "this spawn does not cut
     /// anything" rather than relying on a later branch to ignore a `true`.
-    pub(super) fn rd_spawn(
+    pub(in crate::orchestration) fn rd_spawn(
         &self,
         group: &GroupId,
         role: Role,

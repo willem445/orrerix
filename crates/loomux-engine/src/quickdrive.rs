@@ -212,8 +212,8 @@ pub enum QuickHeld {
     ReviewerGone,
     /// The "describe it" root's pane exited before it reported.
     RootGone,
-    /// The next pane could not be opened because the group's live-agent cap or
-    /// spawn-rate backstop refused it.
+    /// The next pane could not be opened because the group is at its
+    /// live-agent cap.
     CapRefused,
     /// The next pane could not be opened or re-opened for any other reason —
     /// a CLI that cannot host the role, a session that no longer resumes.
@@ -325,8 +325,7 @@ impl QuickHeld {
             QuickHeld::ReviewerGone => "the reviewer's pane closed before it reported",
             QuickHeld::RootGone => "the pane running the task closed before it reported",
             QuickHeld::CapRefused => {
-                "the next pane could not be opened: the group's live-agent or spawn-rate limit \
-                 refused it"
+                "the next pane could not be opened: the group is at its live-agent limit"
             }
             QuickHeld::Unresumable => "the next pane could not be opened",
             QuickHeld::ProviderLimit => {
@@ -717,6 +716,21 @@ pub struct QuickDriveRecord {
     /// a turn nobody has been given is not a turn to judge.
     #[serde(default)]
     pub brief_pending: bool,
+    /// The hold the pending brief is being delivered AFTER — set by
+    /// [`resume`](Self::resume) and cleared when the brief lands, so the pane
+    /// that is handed the same brief a second time is told why.
+    #[serde(default)]
+    pub resumed_from: Option<QuickHeld>,
+    /// The pending brief is the human's forced hand-off rather than the other
+    /// side's report. Set by [`force_handoff`](Self::force_handoff), cleared
+    /// when the brief lands.
+    #[serde(default)]
+    pub forced: bool,
+    /// The id of the open needs-you item this run raised, so the next thing
+    /// that happens to the run can take it back instead of leaving a second
+    /// item beside it. Empty when none is open.
+    #[serde(default)]
+    pub notice_item: String,
     /// Fields written by a newer build, preserved verbatim.
     #[serde(flatten)]
     pub extra: BTreeMap<String, Value>,
@@ -762,6 +776,9 @@ impl QuickDriveRecord {
             notes: Vec::new(),
             progress_answered: false,
             brief_pending: true,
+            resumed_from: None,
+            forced: false,
+            notice_item: String::new(),
             extra: BTreeMap::new(),
         }
     }
@@ -855,6 +872,10 @@ impl QuickDriveRecord {
             self.brief_pending = to.is_live();
         }
         self.progress_answered = false;
+        // Both describe the brief of the turn that just ended. `resume` and
+        // `force_handoff` set them again AFTER this returns.
+        self.resumed_from = None;
+        self.forced = false;
         self.state = to;
         self.state_since_ms = now_ms;
         Ok(())
@@ -915,6 +936,7 @@ impl QuickDriveRecord {
             self.review_rounds = 0;
         }
         self.clock_ms = now_ms;
+        self.resumed_from = was;
         Ok(to)
     }
 
@@ -936,7 +958,25 @@ impl QuickDriveRecord {
             _ => return Err(QuickInvalidTransition { from, to: from }),
         };
         self.advance(to, None, now_ms)?;
+        self.forced = true;
         Ok(to)
+    }
+
+    /// The pending brief landed in `agent`'s pane: record the pane, start the
+    /// state's clock, and clear everything that was only true of a brief still
+    /// to deliver.
+    ///
+    /// **The state clock starts HERE, not at the arc.** Opening a pane can take
+    /// most of a minute, and a bound that had already been running while there
+    /// was nobody to hold the turn would charge the pane for time it did not
+    /// have.
+    pub fn brief_delivered(&mut self, side: QuickSide, agent: &str, session: &str, now_ms: u64) {
+        self.pane_mut(side).record(agent, session);
+        self.brief_pending = false;
+        self.resumed_from = None;
+        self.forced = false;
+        self.notes.clear();
+        self.state_since_ms = now_ms;
     }
 
     /// Queue one human note for the next brief, dropping the oldest past
@@ -1761,6 +1801,26 @@ mod tests {
         assert_eq!(r.force_handoff(T0 + 2), Ok(QuickState::FixWait));
         assert_eq!((r.review_rounds, r.reviews_total), (0, 0));
         assert_eq!(r.force_handoff(T0 + 3), Ok(QuickState::ReviewWait));
+        assert!(r.forced);
+    }
+
+    #[test]
+    fn a_delivered_brief_records_the_pane_starts_the_clock_and_clears_its_own_markers() {
+        let mut r = run(false, true);
+        r.advance(QuickState::Held, Some(QuickHeld::WorkerBlocked), T0 + 1).unwrap();
+        r.add_note("try the other parser");
+        r.resume(T0 + 2).unwrap();
+        assert_eq!(r.resumed_from, Some(QuickHeld::WorkerBlocked));
+        assert!(r.brief_pending);
+        r.brief_delivered(QuickSide::Worker, "w-1", "s-1", T0 + 50);
+        assert_eq!(r.worker.agent, "w-1");
+        assert_eq!(r.state_since_ms, T0 + 50, "the turn's clock starts when the brief lands");
+        assert!(!r.brief_pending && r.resumed_from.is_none() && !r.forced);
+        assert!(r.notes.is_empty(), "the brief carried the notes, so they are spent");
+        // A later arc does not inherit a marker from the turn before it.
+        r.force_handoff(T0 + 60).unwrap();
+        r.advance(QuickState::Held, Some(QuickHeld::Messaged), T0 + 61).unwrap();
+        assert!(!r.forced);
     }
 
     #[test]

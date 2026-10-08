@@ -144,6 +144,31 @@ pub const USAGE: LockRank = LockRank::new(840);
 /// and the caller delivers it afterwards.
 pub const TRIAGE_DEFER: LockRank = LockRank::new(850);
 
+/// `qd_state_lock` — the quick drive's read-modify-write of one group's
+/// `quick_drive.json` (#3679).
+///
+/// Inner of every registry map, because the load-modify-store it spans is
+/// pure file I/O and takes none of them: a step reads a pane's status
+/// (`agents`) and the provider-limit map BEFORE it takes this lock, and the
+/// edit it runs under it is handed the record and nothing else. Outer of
+/// `AUDIT` alone, though every audit row the quick drive writes is written
+/// after the lock is released.
+///
+/// **Never held across a spawn or a delivery** — the difference from
+/// `rd_state_lock`, which is unranked because it is. One caller steps one
+/// group at a time through `qdtick::QdClaim`, an in-memory claim, so nothing
+/// has to be held while a pane opens.
+pub const QUICK_DRIVE: LockRank = LockRank::new(860);
+
+/// `qd_mem` — the quick drive's in-memory maps (#3679): pending signals,
+/// the working-run set, the in-flight claims.
+///
+/// A leaf: every access is a lookup or an insert, released before anything
+/// else is taken. Ranked beside `QUICK_DRIVE` rather than sharing its rank
+/// because the two are different fields, and a shared rank means "the same
+/// field from two registries".
+pub const QUICK_MEM: LockRank = LockRank::new(870);
+
 /// `AUDIT_LOCK` — the audit append. The innermost leaf.
 ///
 /// Four of the file leaves above name it explicitly as the one lock they
@@ -178,5 +203,7 @@ pub const ALL: &[(&str, LockRank)] = &[
     ("mailbox_lock", MAILBOX),
     ("usage_lock", USAGE),
     ("triage_defer_lock", TRIAGE_DEFER),
+    ("qd_state_lock", QUICK_DRIVE),
+    ("qd_mem", QUICK_MEM),
     ("audit", AUDIT),
 ];

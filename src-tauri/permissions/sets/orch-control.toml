@@ -61,6 +61,8 @@ permissions = [
     "allow-orch-solo-bind",
     "allow-orch-lead-prepare",
     "allow-orch-lead-bind",
+    "allow-orch-quick-start",
+    "allow-orch-quick-control",
     "allow-orch-confirm-solo-copilot-autopilot",
     "allow-orch-solo-adopt",
     "allow-orch-fork-agent",

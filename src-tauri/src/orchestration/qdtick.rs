@@ -561,7 +561,7 @@ impl OrchRegistry {
         owner: QdOwner,
         text: &str,
     ) -> String {
-        let line = tail_free_snippet(&report::relay_payload(text), QD_BODY_CAP);
+        let line = report::relay_payload(text);
         let appended = self.qd_append_message(group, agent_id, &line);
         let (side, current) = match owner {
             QdOwner::Pane { side, current, .. } => (Some(side), current),
@@ -804,7 +804,7 @@ impl OrchRegistry {
             let turn = before.state().turn();
             match mem.signals.get_mut(group) {
                 Some(s) => {
-                    if s.from != turn {
+                    if false {
                         s.signal = QuickSignal::None;
                         s.note.clear();
                         s.pr_ref.clear();

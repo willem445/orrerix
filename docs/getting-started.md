@@ -244,6 +244,10 @@ offered for claude, copilot and pi, and only on a tab that does not already run
 an orchestration project — [orrerix subagents](features/orrerix-subagents.html)
 has the whole story, including what a restart does and does not bring back.
 
+For one task that deserves a plan and a review but not a whole orchestration,
+pick **Quick task** under **Kind** instead — [Quick tasks](features/quick-orchestration.html)
+covers the form and what the run does.
+
 The **Autopilot — pre-approve all tools** checkbox (on by default) launches the
 agent with tools pre-approved so it stops prompting you to approve each edit or
 command — Claude Code's native Auto mode plus pre-approved `git`/`gh`, or, for

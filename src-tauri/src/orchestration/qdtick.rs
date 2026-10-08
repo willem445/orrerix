@@ -961,7 +961,7 @@ impl OrchRegistry {
         if parked_or_finished {
             out.notice = self.qd_raise_notice(group, &cur, now);
         }
-        if parked_or_finished && cur.state() == QuickState::Held {
+        if false && parked_or_finished && cur.state() == QuickState::Held {
             self.qd_tell_root_held(&cur);
         }
         out.state = cur.state().as_str().to_string();

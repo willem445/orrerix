@@ -460,6 +460,12 @@ test("one role table: every surface that names an agent role paints it the same 
     // distinct from the five above (rose and lime are spoken for by the
     // manager's own argument, and orchid is the manager's).
     lead: "--id-cyan",
+    // #3679. The first role to SHARE a hue, and the constraint above is why it
+    // may: distinctness is owed to the roles a role sits beside, and a quick
+    // root and an orchestrator are never in one group — a group has one root
+    // class. Six identity hues are spoken for and the two left are the
+    // destructive dye and one too close to the worker's.
+    quick: "--id-azure",
   };
 
   // The role list comes from the TYPE, so a fifth role cannot be added to the app and

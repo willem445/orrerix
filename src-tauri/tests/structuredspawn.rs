@@ -286,7 +286,9 @@ fn a_dialog_parks_for_a_delegate_and_is_cancelled_for_an_orchestrator() {
     for role in [Role::Worker, Role::Reviewer, Role::Planner] {
         assert_eq!(decide_dialog(role, 0), DialogOutcome::Park, "{role:?} must PARK on a dialog");
     }
-    for role in [Role::Orchestrator, Role::Manager] {
+    // #3679: a quick run's root joins the two — its helpers report into its
+    // pane, so a dialog it parked on would hold every one of them.
+    for role in [Role::Orchestrator, Role::Manager, Role::Quick] {
         assert_eq!(
             decide_dialog(role, 0),
             DialogOutcome::CancelNow(CancelReason::RoleNeverParks),

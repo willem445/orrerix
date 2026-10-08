@@ -1128,6 +1128,11 @@ export const quickStart = (req: QuickStartRequest): Promise<{ group_id: string; 
 export const quickStatus = (groupId: string): Promise<QuickStatus> =>
   invoke<QuickStatus>("orch_quick_status", { groupId });
 
+/** Every quick run that has not ended, newest first, each with its `repo` —
+ *  what the launcher's Quick task form lists so a run can be resumed or
+ *  stopped when no pane of it is left. A pure read backend-side. */
+export const quickList = (): Promise<QuickStatus[]> => invoke<QuickStatus[]>("orch_quick_list");
+
 /** The words `orch_quick_control` takes. `step` opens whatever pane the run is
  *  owed; the other four are the human's own verbs. */
 export type QuickAction = "step" | "stop" | "resume" | "handoff" | "note";
@@ -2335,6 +2340,9 @@ export interface GroupSummary {
      *  where its 1 lives and `roles.orchestrator` is 0 — a panel reading only
      *  the latter would report an empty group with a pane plainly running. */
     lead: number;
+    /** #3679. The root of a described quick run, for the lead's reason: its
+     *  group has no orchestrator and no lead, so this is where its 1 lives. */
+    quick: number;
   };
   /** Whether the roster this group is RUNNING declares a manager block at all
    *  (#1433). Beside `roles.manager`, which counts LIVE ones, because the

@@ -235,6 +235,12 @@ pub(crate) fn live_agents(reg: &OrchRegistry, group: &GroupId) -> Vec<String> {
     out
 }
 
+/// A user-facing sentence is ONE paragraph: no line break, and no run of
+/// spaces a collapsed line-continuation leaves behind (CLAUDE.md, #1426 B2).
+pub(crate) fn is_one_paragraph(s: &str) -> bool {
+    !s.contains('\n') && !s.contains("          ")
+}
+
 /// Line endings normalised — `tests/reviewdrive/tick.rs`'s `lf`, for its
 /// reason: the templates are `include_str!`'d, and a worktree cut before
 /// `.gitattributes` pinned them LF still has them CRLF on disk.
@@ -282,4 +288,16 @@ pub(crate) fn reviewing_with(
     });
     assert_eq!((side.as_str(), how.as_str()), ("reviewer", "opened"), "{out:?}");
     (group, worker, reviewer)
+}
+
+/// The names `tools/list` shows `agent` — its listed surface, as its own CLI
+/// would read it.
+pub(crate) fn listed_tools(reg: &OrchRegistry, agent: &str) -> Vec<String> {
+    dispatch(reg, &caller(reg, agent), "tools/list", &Value::Null)
+        .unwrap_or_else(|e| panic!("{agent} could not list its tools: {e:?}"))["tools"]
+        .as_array()
+        .expect("tools/list answers an array")
+        .iter()
+        .map(|t| t["name"].as_str().unwrap_or_default().to_string())
+        .collect()
 }

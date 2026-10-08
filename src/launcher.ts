@@ -115,7 +115,7 @@ import {
   setCustomCommand,
   setDefaultAgent,
 } from "./agents";
-import { leadPrepare, soloPrepare } from "./orchestration";
+import { leadPrepare, quickControl, quickList, soloPrepare } from "./orchestration";
 import { isLeadCli, isSoloMcpCli } from "./panerestore";
 
 export interface AgentLaunchSpec {
@@ -195,6 +195,10 @@ export type WelcomeResult =
    *  validated by `planQuickStart`. The caller starts the run, binds this tab to
    *  its group and asks for the first step — the form opens no pane itself. */
   | { kind: "quick"; request: QuickStartRequest }
+  /** Resume a quick run that has no pane left (#3679), picked from the form's
+   *  list of unfinished runs. The host binds this form's tab to the run's
+   *  group and resumes it there, so the pane the run re-opens lands here. */
+  | { kind: "quick-resume"; groupId: string }
   /** A file-explorer pane (#214): `root` is a directory this form has already
    *  confirmed exists, so the caller converts the setup pane in place. */
   | { kind: "files"; name: string; root: string }
@@ -1104,6 +1108,17 @@ export class WelcomeForm {
       defaultCli: orchCliFor(getDefaultAgent().id).id,
       presets: new QuickPresetsStore({ load: loadQuickPresets, save: saveQuickPresets }),
       onError: (msg) => this.showError(msg),
+      runs: {
+        list: quickList,
+        stop: (group) => quickControl(group, "stop"),
+        // Through the same latch a submit takes: a resume IS this form's one
+        // result, and a second click while the first is in flight must not
+        // bind the tab twice.
+        resume: (groupId) => {
+          if (!this.latch.begin()) return;
+          this.fire({ kind: "quick-resume", groupId });
+        },
+      },
     });
 
     this.errorEl = document.createElement("div");

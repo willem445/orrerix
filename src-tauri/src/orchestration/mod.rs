@@ -505,7 +505,7 @@ pub use loomux_engine::quickdrive;
 mod qdtick;
 pub use qdtick::{
     QdDriveReport, QdMem, QdOwner, QdSignal, QD_BODY_CAP, QUICK_FIX_TPL, QUICK_MARKER,
-    QUICK_PLAN_TPL, QUICK_REVIEW_TPL, QUICK_WORK_TPL,
+    QUICK_PLAN_TPL, QUICK_REVIEW_TPL, QUICK_ROOT_TPL, QUICK_WORK_TPL,
 };
 
 use serde::{Deserialize, Serialize};

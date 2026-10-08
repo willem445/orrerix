@@ -253,3 +253,69 @@ fn the_control_door_refuses_an_unknown_action_and_a_group_that_is_not_a_quick_ru
     // The control: the same action on the quick group is accepted.
     assert!(control(&reg, &group, "step").is_ok());
 }
+
+// ── the runs that have not ended (#3679) ─────────────────────────────────────
+
+/// **The list names every run that has not ended, newest first, each with its
+/// repository** — and a run that has ended is not on it. It is read off the
+/// records on disk, so it is the way back to a run nothing on screen points at.
+#[test]
+fn the_list_of_unfinished_runs_is_newest_first_and_drops_a_run_that_ended() {
+    let dir = tempfile::tempdir().unwrap();
+    let reg = relaunch_registry(dir.path());
+    let (repo_a, repo_b) = (Repo::new(), Repo::new());
+    let first = start(&reg, &repo_a);
+    let started = reg.quick_start_at(request(&repo_b), T0 + MIN).expect("a second run starts");
+    let second = GroupId::parse(started["group_id"].as_str().unwrap()).unwrap();
+    assert_ne!(first, second, "the fixture: two runs, two groups");
+
+    let list = reg.quick_list();
+    let rows = list.as_array().expect("a list");
+    let ids: Vec<&str> = rows.iter().map(|r| r["group_id"].as_str().unwrap()).collect();
+    assert_eq!(ids, vec![second.as_str(), first.as_str()], "newest first");
+    assert_eq!(rows[0]["repo"].as_str().unwrap().replace('\\', "/"), repo_b.path());
+    assert_eq!(rows[1]["repo"].as_str().unwrap().replace('\\', "/"), repo_a.path());
+    assert_eq!(rows[1]["state"], json!("work-wait"), "a row is the run's own status: {}", rows[1]);
+
+    reg.quick_control(&first, "stop", None).expect("the first run stops");
+    let after = reg.quick_list();
+    let ids: Vec<&str> = after.as_array().unwrap().iter().map(|r| r["group_id"].as_str().unwrap()).collect();
+    assert_eq!(ids, vec![second.as_str()], "an ended run is not one to resume or stop");
+}
+
+/// **A run with no pane left is resumed and stopped by nothing but its id from
+/// that list.** Resume and Stop are on a pane's menu; this is the run whose
+/// every pane is gone, which is the one case a menu cannot reach.
+#[test]
+fn a_run_with_no_pane_left_is_resumed_and_then_stopped_from_the_list() {
+    let dir = tempfile::tempdir().unwrap();
+    let reg = relaunch_registry(dir.path());
+    let repo = Repo::new();
+    let (group, worker) = working(&reg, &repo);
+    reg.mark_dead(&worker, Some(1));
+    step(&reg, &group, T0 + 2);
+    assert_eq!(held_reason(&reg, &group), "worker-gone");
+    assert!(live_agents(&reg, &group).is_empty(), "the fixture's premise: no pane is left");
+
+    let list = reg.quick_list();
+    let row = list
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|r| r["group_id"] == json!(group.as_str()))
+        .expect("the parked run is listed")
+        .clone();
+    assert_eq!(row["state"], json!("held"));
+    assert_eq!(row["held_reason"], json!("worker-gone"));
+
+    // Everything below is done with the id read off that row.
+    let id = GroupId::parse(row["group_id"].as_str().unwrap()).unwrap();
+    let resumed = reg.quick_resume_at(&id, T0 + 3).expect("the run resumes");
+    assert_eq!(resumed["state"], json!("work-wait"), "{resumed}");
+    let reopened = live_agents(&reg, &id);
+    assert_eq!(reopened.len(), 1, "one pane is open again");
+    assert_ne!(reopened[0], worker);
+
+    reg.quick_control(&id, "stop", None).expect("and it can be stopped the same way");
+    assert!(reg.quick_list().as_array().unwrap().is_empty(), "after which nothing is left to list");
+}

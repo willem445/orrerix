@@ -1774,6 +1774,12 @@ body.dragging-pane, body.dragging-pane * { cursor: grabbing !important; }
 .session-badge.orch-role.planner { background: color-mix(in srgb, var(--id-amber) 16%, transparent); color: var(--id-amber); }
 .session-badge.orch-role.manager { background: color-mix(in srgb, var(--id-orchid) 16%, transparent); color: var(--id-orchid); }
 .session-badge.orch-role.lead { background: color-mix(in srgb, var(--id-cyan) 16%, transparent); color: var(--id-cyan); }
+/* #3679. A quick run's root shares the orchestrator's azure rather than taking
+   an eighth hue. The rule a role hue answers to is distinctness from the roles
+   it sits BESIDE, and these two never share a group: a group has one root
+   class. Both are the pane orrerix opened for the rest of the group to report
+   to, which is what the hue says. The tag (QUICK / ORCH) tells them apart. */
+.session-badge.orch-role.quick { background: color-mix(in srgb, var(--id-azure) 16%, transparent); color: var(--id-azure); }
 /* #1: the PR chip, shown only once the task board records one for this
    session's work — a distinct accent from the role chips so it reads as
    "external reference", not another identity badge. */
@@ -2642,6 +2648,14 @@ button.orch-item:active { transform: translateX(2px) scale(0.995); }
 .quick-step-row > .model-picker { flex: 1; min-width: 0; }
 .quick-presets > .dlg-select { flex: 1; min-width: 0; }
 .quick-presets > .dlg-btn { flex: none; }
+.quick-modes { display: flex; flex-direction: column; gap: 4px; }
+.quick-modes > label { display: flex; align-items: center; gap: 6px; font-size: var(--text-s); }
+.quick-runs { display: flex; flex-direction: column; gap: 6px; }
+.quick-run { display: flex; align-items: center; gap: 8px; }
+.quick-run > .dlg-btn { flex: none; }
+.quick-run-text { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 1px; }
+.quick-run-task { font-size: var(--text-s); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.quick-run-meta { font-size: var(--text-xs); color: var(--ink-dim); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .model-picker select, .model-picker input { width: 100%; }
 /* #993: the facts the CLI itself reported about the selected model, plus the
    context window. Hidden outright when there is nothing to say — an empty line
@@ -4693,6 +4707,7 @@ button.orch-item:active { transform: translateX(2px) scale(0.995); }
    left that is distinct from the five role hues above (rose and lime are
    spoken for by the manager's own argument, and orchid is the manager's). */
 .group-role.role-lead { background: color-mix(in srgb, var(--id-cyan) 16%, transparent); color: var(--id-cyan); }
+.group-role.role-quick { background: color-mix(in srgb, var(--id-azure) 16%, transparent); color: var(--id-azure); }
 /* "manager declared · not open" (#1433): a state of affairs the human should
    see, not an alarm — the pane may be closed because they closed it. The
    manager's own identity color rather than the attention palette, for the
@@ -5683,6 +5698,9 @@ button.orch-item:active { transform: translateX(2px) scale(0.995); }
    stroke, never the neutral fall-through. (A lead is never a workflow BLOCK —
    this rule exists for table completeness, matching the manager's.) */
 .wf-node-lead { stroke: var(--id-cyan); }
+/* #3679. Table completeness, like the lead's: a quick root is never a workflow
+   block, and a class the union declares still gets a stroke. */
+.wf-node-quick { stroke: var(--id-azure); }
 .wf-node-unknown, .wf-node-ghost { stroke: var(--state-danger); stroke-dasharray: 4 3; }
 .wf-node-title { fill: var(--ink); font-size: 12.5px; font-weight: 600; }
 .wf-node-sub { fill: var(--ink-dim); font-size: 11px; }
@@ -7517,6 +7535,7 @@ button.wf-finding:hover { background: var(--surface-2); }
 .tdp-dot.role-planner { background: var(--id-amber); }
 .tdp-dot.role-manager { background: var(--id-orchid); }
 .tdp-dot.role-lead { background: var(--id-cyan); }
+.tdp-dot.role-quick { background: var(--id-azure); }
 
 .tdp-byline {
   font-size: var(--text-xs);

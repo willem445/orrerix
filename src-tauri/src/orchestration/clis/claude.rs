@@ -318,7 +318,8 @@ pub(in crate::orchestration) fn claude_cached_version() -> Option<String> {
 /// different question. The orchestrator is `Containment::None` (denies
 /// nothing today) and still gets this deny; a liaison-hinted reviewer is
 /// `Containment::NoEdits` (#891) and gets both denials in the SAME
-/// `--disallowedTools` list. A worker, a planner, and a non-liaison reviewer
+/// `--disallowedTools` list. A quick run's root (#3679) is denied it too, for
+/// the orchestrator's reason. A worker, a planner, and a non-liaison reviewer
 /// never get this one: a human standing at a DELEGATE's own pane, answering
 /// its dialog in person, never stalls anyone else, so the dialog stays
 /// reachable exactly where holding it is harmless.
@@ -331,7 +332,12 @@ pub(in crate::orchestration) fn claude_cached_version() -> Option<String> {
 /// question that would return `true` for one — no error, no special case:
 /// the #891 principle that nothing may depend on a liaison existing.
 pub fn claude_denies_interactive_question(role: Role, role_hint: Option<&str>) -> bool {
-    role == Role::Orchestrator || role_hint == Some("liaison")
+    // #3679: a quick root too, for the orchestrator's reason exactly. Its
+    // helpers' reports are typed into its pane, and a blocking modal holds
+    // that pane while they queue behind it — with nobody in the pane to
+    // answer, since orrerix opened it. A root that needs the human says so
+    // with `report(outcome=blocked)`, which holds the run and notifies them.
+    role == Role::Orchestrator || role == Role::Quick || role_hint == Some("liaison")
 }
 
 /// The generic Claude PreCompact / SessionStart(compact) hook body (#417),

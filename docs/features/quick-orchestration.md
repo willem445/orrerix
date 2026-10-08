@@ -20,10 +20,16 @@ nav_order: 15
 ---
 
 A **quick task** sits between a single agent pane and a full orchestration. You
-hand orrerix one task, and it runs up to three steps for you — **plan**, **work**,
-**review** — passing the work between them until the reviewer approves or a limit
-is reached. There is no orchestrator pane, no task board and no issue queue, and
-you do not need a `.orrerix/workflow.yml`.
+hand orrerix one task and it is planned, done and reviewed for you, until the
+work is approved or a limit is reached. There is no orchestrator pane, no task
+board and no issue queue, and you do not need a `.orrerix/workflow.yml`.
+
+There are two ways to run one, and you pick under **How**:
+
+- **Steps.** You say which steps you want — **plan**, **work**, **review** — and
+  orrerix passes the work between them itself. Most of this page describes it.
+- **Describe it.** You describe the task to one agent, and it decides whether
+  to plan and review and opens its own helpers. See [Describe it](#describe-it).
 
 It never merges, tags, closes or labels anything, and it needs no GitHub issue or
 pull request. When the task ends, its panes stay open for you to read, and
@@ -36,6 +42,7 @@ Open a new pane and pick **Quick task** under **Kind**.
 | Field | What it does |
 | --- | --- |
 | **Repository** | Where the work happens. Required. |
+| **How** | **Steps** or **Describe it**. The rest of this table is the Steps form. |
 | **Task** | What you want done, in your own words. Required. |
 | **Plan first** | Off by default. A read-only planner writes a plan, and the worker follows it. |
 | **Review the work** | On by default. A reviewer reads the work and approves it or asks for changes. |
@@ -51,7 +58,8 @@ Leave an instructions box empty and that step runs on its role's own
 instructions. What you type is *added* to them; it does not replace them.
 
 Press **Create**. The first pane opens in the tab you are in — the planner if
-you asked for a plan, otherwise the worker.
+you asked for a plan, otherwise the worker. If it cannot be opened, the form
+comes back with the reason and the run is stopped.
 
 ### Which CLI can run which step
 
@@ -159,12 +167,62 @@ in the boxes; picking a preset fills them; **Delete** removes the selected one.
 Presets are yours, not a repository's. They are kept with orrerix's own settings
 and offered in every repository. Nothing in a repository can add or change one.
 
+## Describe it
+
+Pick **Describe it** under **How** when you would rather say what you want than
+decide the steps yourself.
+
+| Field | What it does |
+| --- | --- |
+| **Task** | What you want done. This is everything the agent is told. |
+| **Runs on** | The CLI and model of the agent that is given the task. Any CLI. |
+| **Plan / Work / Review helper** | What each kind of helper runs on, if the agent opens one. |
+| **Review rounds** | How many times the agent may send work back after a review. |
+| **Time bound** | How long the whole run may take. |
+
+There are no steps to switch on and no instruction boxes. The agent reads the
+task and decides: a small change gets a worker and nothing else; a larger one
+may get a planner first and a reviewer after.
+
+One pane opens — the agent's — with a `quick · running` chip. It opens helper
+panes as it needs them, and they report back to it, not to you. It does not do
+the work in its own pane: it is in your checkout, and the work happens in a
+worker's worktree.
+
+The run ends when the agent reports. You get one needs-you item with what it
+said: where the work is, and what it left open. If it cannot go on it says why,
+the run is held, and you can **Resume** it once you have answered in its pane.
+
+What the agent can and cannot do:
+
+- It can open a worker, a reviewer or a planner, and nothing else.
+- It cannot merge, tag, close or label anything, and it has no task board.
+- It cannot be closed by one of its helpers. If you close its pane, its helpers
+  are closed with it and the run is held.
+- **Stop quick run** tells it to stop and closes nothing.
+- When the run is held — at its time bound, for example — the agent is told,
+  and it cannot open any more helpers until you resume the run.
+
+## Runs that have not ended
+
+Open the Quick task form and, if any run has not ended, they are listed at the
+top under **Unfinished runs**: the task, the repository, and where the run
+stands.
+
+- **Resume here** re-opens a held run's pane in the tab you are in.
+- **Stop** ends the run. Nothing is closed or deleted.
+
+This is how you reach a run whose panes are all gone — closed, or lost when you
+quit orrerix. Closing a run's tab does not end the run: it is held, and it is on
+this list.
+
 ## After a restart
 
 If you close orrerix while a run is working, its panes go with it. The next time
 orrerix starts, the run is held with the reason `restart`, and nothing is
 re-opened until you say so. **Resume** re-opens the session that was working and
-gives it its instructions again.
+gives it its instructions again. With its panes gone, you resume it from
+**Unfinished runs** in the Quick task form.
 
 One case cannot be resumed: a pane that was closed before its CLI had reported a
 session to orrerix. There is no session to re-open, and the run says so when you
@@ -174,8 +232,8 @@ press Resume.
 
 - **One task per run.** A quick task has no queue. Start another for the next
   task.
-- **Resume and Stop are on a pane's menu.** If you close every pane of a run,
-  it is held and there is no pane left to resume or stop it from.
+- **A described run counts no review rounds itself.** The agent is told the
+  limit and keeps to it; the time bound is the one orrerix enforces.
 - **No token budget.** A run is bounded by its review rounds and its time bound,
   not by spend.
 - **A pull request is found only if the worker names it.** orrerix does not

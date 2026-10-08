@@ -519,6 +519,17 @@ pub const MANAGER_TPL: &str = include_str!("templates/manager.md");
 /// file in a lead group for a `{{WORKFLOW}}` fragment to describe.
 #[doc(hidden)]
 pub const LEAD_TPL: &str = include_str!("templates/lead.md");
+/// The **quick root's** role instructions (#3679) — the contract of the one
+/// agent a described quick run is given to: decide whether to plan and review,
+/// open the helpers, relay between them, end the run with `report`, and never
+/// merge, tag, close or label anything.
+///
+/// Pinned in `GOLDENS` and `LIVE` like `lead.md`, and not in `PRE222`: the
+/// class did not exist before #222, so there is no earlier reading for a
+/// fixture to protect. It carries no `{{WORKFLOW}}` and no `{{BLOCK_NOTE}}` — a
+/// quick group reads no workflow file, and a fixture's block takes no persona.
+#[doc(hidden)]
+pub const QUICK_TPL: &str = include_str!("templates/quick.md");
 /// Workflow-aware fragments (#222), substituted into the role templates above as
 /// `{{WORKFLOW}}` (orchestrator) and `{{BLOCK_NOTE}}` (worker/reviewer/planner).
 ///
@@ -570,5 +581,8 @@ pub(crate) fn role_template(role: Role) -> &'static str {
         // function whose failure mode would be a process abort rather than an
         // error. See [`LEAD_TPL`] for when it joined the golden pin, and why.
         Role::Lead => LEAD_TPL,
+        // #3679. Reached for the same reason as the lead's: every block in a
+        // roster is rendered, and a described run's roster has a quick block.
+        Role::Quick => QUICK_TPL,
     }
 }

@@ -682,7 +682,11 @@ export class SessionBrowser {
         chip.title =
           role.role === "orchestrator"
             ? `Orchestrator of group ${role.group_id}${role.group_live ? " (running)" : " — click to restore the whole orchestration"}`
-            : `${role.role} "${role.agent_name}" of group ${role.group_id}${role.group_live ? " — click to rejoin its group" : " (group not running)"}`;
+            : role.role === "quick"
+              ? // #3679: a quick run's own agent is not rejoined by hand — its run
+                // re-opens it — so the tooltip says where that is done.
+                `The agent of a quick run in group ${role.group_id} — resume the run from the Quick task form, or from its pane menu`
+              : `${role.role} "${role.agent_name}" of group ${role.group_id}${role.group_live ? " — click to rejoin its group" : " (group not running)"}`;
         top.insertBefore(chip, title);
       }
 

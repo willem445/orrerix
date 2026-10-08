@@ -77,11 +77,26 @@ pub struct QuickStartRequest {
     pub idle_kill_minutes: u32,
     #[serde(default)]
     pub max_spawns_per_hour: u32,
+    /// How the run is driven (#3679): `"steps"` — orrerix relays between a
+    /// planner, a worker and a reviewer itself — or `"describe"`, where one
+    /// agent is given the task and opens its own helpers. Empty is `steps`, so
+    /// a caller written before the second mode existed means what it meant.
+    /// Any other word is refused rather than read as one of the two.
+    #[serde(default)]
+    pub mode: String,
+    /// The CLI and model of a described run's one agent. Read only in
+    /// `describe` mode; its `instructions` are ignored, because that agent's
+    /// role template is its contract and the task is the human's whole input.
+    #[serde(default)]
+    pub root: QuickStepConfig,
 }
 
 /// The live-agent cap a quick group gets when the launcher names none: one
-/// pane per step. A run never needs more — exactly one pane holds the turn —
-/// and a cap this low is what bounds a run that somehow opened more.
+/// pane per kind of delegate. A steps run never needs more, since exactly one
+/// of its panes holds the turn at a time; in a described run it is how many
+/// helpers the root may have open at once, and the root itself is a fixture
+/// and is not counted. A cap this low is what bounds a run that asked for
+/// more.
 pub const QUICK_MAX_AGENTS_DEFAULT: u32 = 3;
 
 /// Every action `orch_quick_control` accepts. Closed: an unknown word is
@@ -126,6 +141,15 @@ impl OrchRegistry {
             return Err("a quick task needs a description of what to do".into());
         }
         validate_group_repo(&req.repo)?;
+        let described = match req.mode.trim() {
+            "" | "steps" => false,
+            "describe" => true,
+            other => {
+                return Err(format!(
+                    "unknown quick-task mode {other:?} — one of: steps, describe"
+                ))
+            }
+        };
 
         // The group's default CLI is the work step's: the worker is the one
         // pane every run has.
@@ -136,10 +160,13 @@ impl OrchRegistry {
         // Refused HERE, before anything is created, with the sentence that
         // knows why — the same containment check a spawn makes, asked at the
         // moment the human can still change the form.
+        // In a described run the three are not steps the human switched on:
+        // they are the helpers the agent MAY open, and it may open any of
+        // them, so each one's CLI has to be able to host its class.
         let steps = [
             (true, "work", &req.work, Role::Worker),
-            (req.plan_step, "plan", &req.plan, Role::Planner),
-            (req.review_step, "review", &req.review, Role::Reviewer),
+            (described || req.plan_step, "plan", &req.plan, Role::Planner),
+            (described || req.review_step, "review", &req.review, Role::Reviewer),
         ];
         for (on, step, cfg, role) in steps {
             if !on {
@@ -159,12 +186,46 @@ impl OrchRegistry {
                 .map_err(|e| format!("the {step} step cannot run on {cli}: {e}"))?;
         }
 
+        let root_cli = match req.root.cli.trim() {
+            "" => group_cli.clone(),
+            cli => cli.to_string(),
+        };
+        if described {
+            if !SUPPORTED_CLIS.contains(&root_cli.as_str()) {
+                return Err(format!(
+                    "unsupported CLI {root_cli:?} for the task's agent — supported: {}",
+                    SUPPORTED_CLIS.join(", ")
+                ));
+            }
+            // Asked like the three above, though today every CLI can host this
+            // class: it is not clamped, so no deny tier rules a CLI out. The
+            // check is here so that a class that gains a tier later is refused
+            // at the form rather than at the spawn.
+            cli_can_host(&root_cli, Role::Quick)
+                .map_err(|e| format!("the task's agent cannot run on {root_cli}: {e}"))?;
+        }
         let mut blocks = workflow::default_roster(&[
             (Role::Worker, req.work.cli.as_str(), req.work.model.as_str()),
             (Role::Reviewer, req.review.cli.as_str(), req.review.model.as_str()),
             (Role::Planner, req.plan.cli.as_str(), req.plan.model.as_str()),
         ]);
+        if described {
+            // The root's own block. This is the ONE place a quick block is
+            // minted: no workflow file can declare the kind and `spawn_agent`
+            // cannot name it, so a roster carries one only because a human
+            // started a described run from the launcher.
+            blocks.extend(workflow::default_roster(&[(
+                Role::Quick,
+                root_cli.as_str(),
+                req.root.model.as_str(),
+            )]));
+        }
         for b in &mut blocks {
+            // A described run takes no per-step instructions: the task is the
+            // human's whole input, and each helper runs on its role's own.
+            if described {
+                break;
+            }
             let text = match b.kind {
                 Role::Worker => &req.work.instructions,
                 Role::Reviewer => &req.review.instructions,
@@ -184,8 +245,10 @@ impl OrchRegistry {
             auto_ops: req.auto_ops,
             idle_kill_minutes: req.idle_kill_minutes,
             max_spawns_per_hour: req.max_spawns_per_hour,
-            // The watchdog's notice goes to the group's root, and this group
-            // has none — a stall here is the run's own bounds to report.
+            // The watchdog's notice is addressed to an ORCHESTRATOR, and no
+            // quick group has one — a steps run has no root at all, and a
+            // described run's root is not an orchestrator. A stall here is
+            // the run's own bounds to report, in either mode.
             watchdog_stall_minutes: 0,
             ..Guardrails::default()
         };
@@ -197,14 +260,21 @@ impl OrchRegistry {
         // worktree is then cut from whatever `git_worktree_add_sync` resolves
         // as the default, exactly as every other spawn's is, and the review
         // brief resolves a NAME for it when it is rendered.
-        let rec = QuickDriveRecord::new(
-            &task,
-            req.plan_step,
-            req.review_step,
-            req.base.trim(),
-            &limits,
-            now,
-        );
+        let rec = if described {
+            let mut rec = QuickDriveRecord::new_described(&task, req.base.trim(), &limits, now);
+            rec.root_cli = root_cli.clone();
+            rec.root_model = req.root.model.trim().to_string();
+            rec
+        } else {
+            QuickDriveRecord::new(
+                &task,
+                req.plan_step,
+                req.review_step,
+                req.base.trim(),
+                &limits,
+                now,
+            )
+        };
 
         // Held across the mint AND the record write, for
         // `create_orchestration_group`'s reason: a group id is chosen by
@@ -240,6 +310,7 @@ impl OrchRegistry {
         }
         self.qd_audit(&group.id, act::STARTED, json!({
             "plan_step": rec.plan_step, "review_step": rec.review_step,
+            "described": rec.described,
             "max_review_rounds": rec.max_review_rounds,
             "drive_timeout_minutes": rec.drive_timeout_minutes,
             "base": rec.base, "task_chars": rec.task.chars().count(),
@@ -325,6 +396,43 @@ impl OrchRegistry {
         }
     }
 
+    /// **Every quick run that has not ended**, newest first — what the
+    /// launcher's Quick task form lists so a run can be resumed or stopped
+    /// without a pane (#3679).
+    ///
+    /// Resume and Stop live on a pane's menu, and a run can outlive every one
+    /// of its panes: close them, or quit and reopen the app, and the run is
+    /// still on disk, parked, with nothing on screen that leads to it. So the
+    /// list is read off the records themselves rather than off anything a
+    /// human can close or dismiss — which is why it is a list here and not a
+    /// button on the run's needs-you item.
+    ///
+    /// **A pure read**, like [`quick_status`](Self::quick_status): it parks
+    /// nothing, so a run an earlier process left working reads as working
+    /// until the tick's start-up scan or a control verb reconciles it. Each
+    /// row is that run's status with its group's repository beside it.
+    pub fn quick_list(&self) -> Value {
+        let mut rows: Vec<(u64, Value)> = Vec::new();
+        for group in self.qd_quick_groups() {
+            let Ok(Some(run)) = self.qd_load_run(&group) else { continue };
+            if run.state().is_terminal() {
+                continue;
+            }
+            let mut row = self.qd_status_json(&group, &run);
+            let repo = self
+                .group(&group)
+                .map(|g| g.repo)
+                .or_else(|| self.load_group_file(&group).map(|(repo, _)| repo))
+                .unwrap_or_default();
+            if let Some(o) = row.as_object_mut() {
+                o.insert("repo".to_string(), json!(repo));
+            }
+            rows.push((run.started_ms, row));
+        }
+        rows.sort_by(|a, b| b.0.cmp(&a.0));
+        Value::Array(rows.into_iter().map(|(_, row)| row).collect())
+    }
+
     fn qd_status_json(&self, group: &GroupId, r: &QuickDriveRecord) -> Value {
         let pane = |side: quickdrive::QuickSide| {
             let p = r.pane(side);
@@ -368,10 +476,12 @@ impl OrchRegistry {
             "can_handoff": can_handoff,
             "notes_pending": r.notes.len(),
             "plan_path": plan.is_file().then(|| plan.to_string_lossy().to_string()),
+            "described": r.described,
             "panes": {
                 "planner": pane(quickdrive::QuickSide::Planner),
                 "worker": pane(quickdrive::QuickSide::Worker),
                 "reviewer": pane(quickdrive::QuickSide::Reviewer),
+                "root": pane(quickdrive::QuickSide::Root),
             },
         })
     }
@@ -415,6 +525,26 @@ impl OrchRegistry {
         self.qd_audit(group, act::CANCELLED, json!({
             "from": from.as_str(), "panes_left_running": left, "killed": Vec::<String>::new(),
         }));
+        // A steps run's panes each finished a turn or were waiting for one, so
+        // a stop leaves nothing in motion. A described run's root is still
+        // deciding what to open next, and it is not told anything by the
+        // record changing — so it is told here, once, best-effort. Nothing is
+        // killed: the panes are the human's to read or close.
+        if rec.described {
+            let root = rec.pane(quickdrive::QuickSide::Root).agent.clone();
+            if self.agent(&root).is_some_and(|a| a.status != AgentStatus::Dead) {
+                let _ = self.deliver_prompt(
+                    &root,
+                    &format!(
+                        "{} the human stopped this quick run. Stop here: open no further \
+                         helpers and send no further work. Your report is no longer needed.",
+                        brand::NOTICE_MARKER
+                    ),
+                    brand::AUDIT_ACTOR,
+                    Delivery::MidSession,
+                );
+            }
+        }
         Ok(self.quick_status(group))
     }
 
@@ -492,6 +622,22 @@ impl OrchRegistry {
             .load_group_file(group)
             .ok_or("this quick run's group record is missing, so it cannot be resumed")?;
         validate_group_repo(&repo)?;
+        // A described run's roster had a quick block, and it is not in what
+        // was just read: `group.json` is read back through the workflow
+        // vocabulary, which has no word for that kind — deliberately, since
+        // that absence is what stops a file declaring one. So the block is
+        // rebuilt here from the run's own record, for this group and for a
+        // run that says it is described, and by nothing else.
+        let mut guardrails = guardrails;
+        if let Ok(Some(run)) = self.qd_load_run(group) {
+            if run.described && guardrails.block(Role::Quick.as_str()).is_none() {
+                guardrails.blocks.extend(workflow::default_roster(&[(
+                    Role::Quick,
+                    run.root_cli.as_str(),
+                    run.root_model.as_str(),
+                )]));
+            }
+        }
         let info = GroupInfo { id: group.clone(), repo, guardrails: guardrails.clamped() };
         self.groups.lock_safe().insert(group.clone(), info.clone());
         // Deliberately NOT declared as a root (#1042). `create_group_ex`
@@ -505,6 +651,51 @@ impl OrchRegistry {
             "repo": info.repo, "max_agents": info.guardrails.max_agents, "by": "quick-resume",
         }));
         Ok(())
+    }
+
+    /// A live root pane in `group`, if there is one — the backstop behind "a
+    /// quick run has exactly one root" (#3679). Read by the hand-over before
+    /// it opens a root, so a second cannot be opened beside a live first.
+    pub(in crate::orchestration) fn qd_live_root(&self, group: &GroupId) -> Option<String> {
+        self.agents
+            .lock_safe()
+            .values()
+            .find(|a| &a.group == group && a.status != AgentStatus::Dead && a.role.is_root())
+            .map(|a| a.id.clone())
+    }
+
+    /// Why a described run's root may not open another helper right now, or
+    /// `None` when it may (#3712 review).
+    ///
+    /// The root is unclamped and is never reaped, and the argument for that is
+    /// that its run's bounds bound it. A bound that only changed a record
+    /// would bind nothing: `spawn_agent` and `fork_session` read no run
+    /// state, so a root whose run was held at its time bound — or had ended —
+    /// could go on opening helpers for as long as it liked. So both ask here
+    /// first. A run that is held refuses until the human resumes it; a run
+    /// that is over refuses for good.
+    ///
+    /// `send_prompt` and `get_output` are not gated: a held root may still
+    /// read what its helpers have done and tell one to stop, and the human who
+    /// resumes the run finds the same panes it left.
+    pub(in crate::orchestration) fn qd_root_spawn_refusal(&self, group: &GroupId) -> Option<String> {
+        let run = self.qd_load_run(group).ok().flatten()?;
+        if !run.described {
+            return None;
+        }
+        match run.state() {
+            QuickState::Held => Some(format!(
+                "this quick run is held ({}) — open no further helpers until the human \
+                 resumes it. They have been told why.",
+                run.held_reason.map(|h| h.as_str()).unwrap_or("held")
+            )),
+            s if s.is_terminal() => Some(
+                "this quick run has ended — open nothing further. Its panes are the human's to \
+                 read or close."
+                    .to_string(),
+            ),
+            _ => None,
+        }
     }
 
     // ---------- force a hand-off ----------

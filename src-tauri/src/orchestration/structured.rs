@@ -264,7 +264,9 @@ impl UiSettlement {
 /// Both raise a needs-you item either way, so the human sees what was asked in
 /// both cases.
 pub fn parks_on_dialog(role: super::Role) -> bool {
-    !matches!(role, super::Role::Orchestrator | super::Role::Manager)
+    // #3679: a quick root does not park either — it is the pane its helpers
+    // report into, so a dialog it parked on would hold every one of them.
+    !matches!(role, super::Role::Orchestrator | super::Role::Manager | super::Role::Quick)
 }
 
 /// The launch spec for a pi pane, from the same inputs the PTY arm reads.

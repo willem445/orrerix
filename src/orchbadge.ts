@@ -17,7 +17,7 @@ import { IDENTITY } from "./theme.ts";
  *  by the launcher toggle alone and `kind: lead` in a workflow file stays
  *  "unknown kind is rejected" — so it can never enter `ORCH_ROLES` or
  *  `ROSTER_ROLES` either. */
-export type OrchRole = "orchestrator" | "worker" | "reviewer" | "planner" | "manager" | "lead";
+export type OrchRole = "orchestrator" | "worker" | "reviewer" | "planner" | "manager" | "lead" | "quick";
 
 // Per-group identity: a stable accent color keyed off the order groups first
 // appear. Color is the group-pairing cue ("this orchestrator ↔ its workers");
@@ -78,6 +78,9 @@ const ROLE_LABELS: Record<OrchRole, string> = {
   // #2519. Same rule as `manager`: the chip spells the agent-id prefix
   // (`lead-3`) the backend's `Role::Lead` mints.
   lead: "LEAD",
+  // #3679. The root of a described quick run. Same rule again: the chip spells
+  // the agent-id prefix (`quick-3`) the backend's `Role::Quick` mints.
+  quick: "QUICK",
 };
 
 /** The short chip text for a role ("REV"). The one source for it: the pane badge

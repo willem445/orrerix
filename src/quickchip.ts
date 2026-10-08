@@ -72,6 +72,10 @@ export interface QuickStatus {
   can_handoff?: boolean;
   turn?: { side: string; agent: string } | null;
   panes?: Record<string, { agent: string; live: boolean }>;
+  /** Whether this is a described run: one agent was given the task. */
+  described?: boolean;
+  /** Only on a row of the unfinished-runs list: the run's repository. */
+  repo?: string;
 }
 
 /** How a chip is tinted: something is being done, the run is waiting on the
@@ -98,6 +102,77 @@ const isQuickState = (s: string | undefined): s is QuickState =>
 export function quickIsWorking(status: QuickStatus | null): boolean {
   if (!status?.exists || !isQuickState(status.state)) return false;
   return status.state !== "held" && status.state !== "satisfied" && status.state !== "cancelled";
+}
+
+/** How long the backend waits for a new pane to bind before it gives the
+ *  spawn up, in seconds. A mirror of `BIND_TIMEOUT` in
+ *  `src-tauri/src/orchestration/tuning.rs`, pinned against that file by
+ *  `test/quickchip.test.ts`. */
+export const QUICK_BIND_TIMEOUT_S = 20;
+
+/** How often the launcher re-asks while a run's first pane is opening. */
+export const QUICK_OPENING_WAIT_MS = 500;
+
+/** How many times it re-asks before it stops waiting.
+ *
+ *  **It has to outlast the bind deadline, and it did not.** A pane that never
+ *  binds is not a failure the backend knows about until `BIND_TIMEOUT` has
+ *  passed: until then the step that is opening it holds the group and every
+ *  answer is `busy`. A budget shorter than that deadline — it was ten seconds
+ *  against twenty — gives up while the answer is still "opening", so the form
+ *  said "still opening" and the failure that arrived ten seconds later was
+ *  shown nowhere. Ten seconds past the deadline leaves room for the step to
+ *  park the run and for one more ask to read why. */
+export const QUICK_OPENING_TRIES = Math.ceil(((QUICK_BIND_TIMEOUT_S + 10) * 1000) / QUICK_OPENING_WAIT_MS);
+
+/** One row of the launcher's list of runs that have not ended. */
+export interface QuickRunRow {
+  group: string;
+  /** The task, on one line. */
+  task: string;
+  /** The repository's folder name. */
+  repo: string;
+  /** Where the run stands, in the chip's own words. */
+  label: string;
+  /** Why a held run is held — the engine's sentence — or "". */
+  why: string;
+  /** Whether Resume applies: only a held run can be resumed. */
+  canResume: boolean;
+}
+
+/** The last segment of a path, whichever separator it uses. */
+function folderName(path: string): string {
+  const parts = path.split(/[\\/]+/).filter(Boolean);
+  return parts[parts.length - 1] ?? "";
+}
+
+/** The rows of the launcher's unfinished-runs list (#3679).
+ *
+ *  Resume and Stop are on a pane's menu, and a run can outlive every pane it
+ *  had — so this list is the way back to one. It is built from what the
+ *  backend read off the run records, and it drops anything that is not a run
+ *  still worth acting on: a group with no run, a state this build does not
+ *  know, and a run that has ended.
+ *
+ *  **Resume is offered only where it applies.** A working run is not resumed —
+ *  it has a pane holding the turn, or it is about to be parked for not having
+ *  one — so its row carries Stop alone. */
+export function quickRunRows(list: readonly QuickStatus[]): QuickRunRow[] {
+  const rows: QuickRunRow[] = [];
+  for (const status of list) {
+    const view = quickChipView(status, null);
+    if (!view || quickIsOver(status)) continue;
+    const task = (status.task ?? "").split(/\s+/).filter(Boolean).join(" ");
+    rows.push({
+      group: status.group_id,
+      task: task.length > 90 ? `${task.slice(0, 89)}…` : task,
+      repo: folderName(status.repo ?? ""),
+      label: view.label,
+      why: status.state === "held" ? (status.held_line ?? "") : "",
+      canResume: status.state === "held",
+    });
+  }
+  return rows;
 }
 
 /** What the launcher makes of the status its first `step` answered. */

@@ -532,6 +532,18 @@ impl OrchRegistry {
                         are not its owner. Close the pane instead"
                 .into());
         }
+        // #3679, the same hole for the same reason: `kill_agent` is on the
+        // quick root's surface so it can end a helper, and nothing below tells
+        // a pane from its opener. A root that killed itself — or a helper that
+        // killed the root — would end the run with no report, and take every
+        // other helper with it (`on_pty_exit`). The run ends by the root's
+        // `report`, by its bounds, or by the human.
+        if a.role == Role::Quick {
+            return Err("refusing to kill a quick run's own agent; it ends the run by reporting, \
+                        and a helper is not its owner. The human stops the run from the pane \
+                        menu or the Quick task form"
+                .into());
+        }
         // Checked BEFORE the app handle and before the stamp: with no pty
         // there is nothing to kill, so there is nothing to attribute either.
         // #2850 S3b: a structured pane is killed through its own ladder —
@@ -1188,7 +1200,12 @@ impl OrchRegistry {
             // `deliver_to_orchestrator` resolves the group’s root, and the root is
             // the pane that just died. Sending it anyway would be a delivery
             // attempt whose only possible outcome is a dropped notice.
-            if a.role == Role::Lead {
+            // #3679: a quick root is the same case. Its helpers report to it
+            // and to nothing else, so helpers left running after it has gone
+            // would work towards a report with no recipient. They end with it;
+            // the run itself parks on `root-gone` when the quick drive next
+            // looks, and Resume re-opens the root's session.
+            if a.role == Role::Lead || a.role == Role::Quick {
                 self.end_lead_children(&a);
             } else if a.role != Role::Orchestrator {
                 let elapsed_ms = now_ms().saturating_sub(started_ms);

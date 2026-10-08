@@ -53,6 +53,10 @@ pub const QUICK_PLAN_TPL: &str = include_str!("templates/quick-plan.md");
 pub const QUICK_WORK_TPL: &str = include_str!("templates/quick-work.md");
 pub const QUICK_REVIEW_TPL: &str = include_str!("templates/quick-review.md");
 pub const QUICK_FIX_TPL: &str = include_str!("templates/quick-fix.md");
+/// The first message of a DESCRIBED run's root (#3679 way 2): the task, the
+/// run's limits and how to end it. The root's standing contract is its role
+/// template (`templates/quick.md`); this is the part that differs per run.
+pub const QUICK_ROOT_TPL: &str = include_str!("templates/quick-root.md");
 
 /// The marker file that says a group was minted for a quick run.
 ///
@@ -159,7 +163,9 @@ fn qd_carry_notes(
         if step.held == Some(QuickHeld::ReviewLimit) {
             rec.held_note = signal.note.clone();
         }
-    } else if matches!(from, QuickState::WorkWait | QuickState::FixWait) && step.held.is_none() {
+    } else if matches!(from, QuickState::WorkWait | QuickState::FixWait | QuickState::RootWait)
+        && step.held.is_none()
+    {
         rec.worker_note = signal.note.clone();
         if let Some(pr) = pr_number(&signal.pr_ref).filter(|_| !signal.pr_ref.is_empty()) {
             rec.pr = Some(pr);
@@ -426,6 +432,24 @@ impl OrchRegistry {
             return None;
         }
         let run = self.qd_load_run(group).ok().flatten();
+        // A DESCRIBED run (#3679 way 2) has one side: its root. The panes the
+        // root opens are its helpers, not sides of the run — their reports and
+        // messages are the root's to read, so they are not intercepted here and
+        // take the ordinary relay to the group's root, exactly as a lead's
+        // helpers' do. The one caller that must never fall through is a quick
+        // root the record does not name (a second one, a stale one): the
+        // relay's target is the group's root, which would be itself.
+        if let Some(r) = run.as_ref().filter(|r| r.described) {
+            return match r.owner_of(agent_id) {
+                Some((side, current)) => {
+                    Some(QdOwner::Pane { side, current, holds_turn: r.holds_turn(agent_id) })
+                }
+                None if self.agent(agent_id).is_some_and(|a| a.role == Role::Quick) => {
+                    Some(QdOwner::Stranger)
+                }
+                None => None,
+            };
+        }
         Some(match run.as_ref().and_then(|r| r.owner_of(agent_id).map(|o| (r, o))) {
             Some((r, (side, current))) => {
                 QdOwner::Pane { side, current, holds_turn: r.holds_turn(agent_id) }
@@ -584,14 +608,35 @@ impl OrchRegistry {
                 sig.message = qd_fact(&format!("{agent_id}: {line}"));
             }
             self.qd_kick(group);
-            return "recorded. This is a quick run with no orchestrator, so nobody can answer \
-                    in another pane: the run is being held and the human is shown your message. \
-                    Carry on only if you can without the answer."
-                .to_string();
+            // The hold notice carries the message whether or not the file
+            // took it, so the human is still shown it — but "recorded" would
+            // be a claim about a file that was not written.
+            return match &appended {
+                Ok(()) => "recorded. This is a quick run with no orchestrator, so nobody can \
+                           answer in another pane: the run is being held and the human is shown \
+                           your message. Carry on only if you can without the answer."
+                    .to_string(),
+                Err(e) => format!(
+                    "NOT saved to the run's messages file ({e}). This is a quick run with no \
+                     orchestrator, so nobody can answer in another pane: the run is being held \
+                     and the human is shown this message in the hold notice only. Carry on only \
+                     if you can without the answer."
+                ),
+            };
         }
-        "recorded for the human. This is a quick run with no orchestrator, and the run is not \
-         waiting on this pane, so nothing else happens — tell the human in this pane."
-            .to_string()
+        match &appended {
+            Ok(()) => "recorded for the human. This is a quick run with no orchestrator, and the \
+                       run is not waiting on this pane, so nothing else happens — tell the human \
+                       in this pane."
+                .to_string(),
+            // Nothing else carries a message from a pane the run is not
+            // waiting on, so here "not saved" means nobody will read it.
+            Err(e) => format!(
+                "NOT saved ({e}), so nobody will read this message: this is a quick run with no \
+                 orchestrator and the run is not waiting on this pane. Tell the human in this \
+                 pane."
+            ),
+        }
     }
 
     /// Write one of the run's documents atomically, sanitized. `Lines::Keep`:
@@ -916,6 +961,9 @@ impl OrchRegistry {
         if parked_or_finished {
             out.notice = self.qd_raise_notice(group, &cur, now);
         }
+        if parked_or_finished && cur.state() == QuickState::Held {
+            self.qd_tell_root_held(&cur);
+        }
         out.state = cur.state().as_str().to_string();
         out
     }
@@ -1031,11 +1079,7 @@ impl OrchRegistry {
             QuickSide::Planner => (Role::Planner, "quick: plan"),
             QuickSide::Worker => (Role::Worker, "quick: work"),
             QuickSide::Reviewer => (Role::Reviewer, "quick: review"),
-            QuickSide::Root => {
-                return Err("a quick run with a single agent running the task is not part of \
-                            this build"
-                    .to_string());
-            }
+            QuickSide::Root => (Role::Quick, "quick: task"),
         };
         // The built-in roster names each block after its class.
         let block = role.as_str();
@@ -1075,7 +1119,10 @@ impl OrchRegistry {
                 // workspace through `resolve_worker_resume_cwd`, which is for
                 // the two roles that must never land in the main clone and
                 // says a planner resume must not call it (#3681 review W5).
-                QuickSide::Planner => self.spawn_agent_bound(
+                //
+                // A described run's root (#3679) is the same case for the same
+                // reason: it ran in the repository, with no worktree.
+                QuickSide::Planner | QuickSide::Root => self.spawn_agent_bound(
                     group,
                     role,
                     Some(block.to_string()),
@@ -1173,9 +1220,33 @@ impl OrchRegistry {
                     None,
                 )?
             }
-            // Refused at the top of this function; answered again here rather
-            // than asserted, because this path must never be able to panic.
-            QuickSide::Root => return Err("no such pane in this build".to_string()),
+            // The root of a described run (#3679): the repository, no
+            // worktree, and exactly one — `qd_live_root` is the backstop on
+            // that, for the reason `lead_prepare` has one: a group with two
+            // roots delivers a helper's report to whichever a map iteration
+            // returns first.
+            QuickSide::Root => {
+                if let Some(other) = self.qd_live_root(group) {
+                    return Err(format!(
+                        "this run's group already has a live root pane ({other}) — a quick \
+                         run has exactly one"
+                    ));
+                }
+                self.spawn_agent_bound(
+                    group,
+                    role,
+                    Some(block.to_string()),
+                    name,
+                    text,
+                    false,
+                    None,
+                    None,
+                    None,
+                    None,
+                    None,
+                    None,
+                )?
+            }
         };
         Ok(QdHandOver {
             session: a.session_id.clone().unwrap_or_default(),
@@ -1351,10 +1422,25 @@ impl OrchRegistry {
                 )
             }
             // Nothing holds the turn in these, so there is no brief to render.
-            QuickState::RootWait
-            | QuickState::Held
-            | QuickState::Satisfied
-            | QuickState::Cancelled => String::new(),
+            QuickState::RootWait => {
+                let base = if rec.base.trim().is_empty() {
+                    "the repository's default branch".to_string()
+                } else {
+                    qd_fact(&rec.base)
+                };
+                let minutes = rec.drive_timeout_minutes.to_string();
+                render_template(
+                    QUICK_ROOT_TPL,
+                    &[
+                        ("TASK", &task),
+                        ("NOTES", &notes),
+                        ("BASE", &base),
+                        ("MAX_ROUNDS", &max),
+                        ("MINUTES", &minutes),
+                    ],
+                )
+            }
+            QuickState::Held | QuickState::Satisfied | QuickState::Cancelled => String::new(),
         };
         match rec.resumed_from {
             Some(reason) => format!(
@@ -1406,6 +1492,21 @@ impl OrchRegistry {
         let pr = rec.pr.map(|n| format!(" (PR #{n})")).unwrap_or_default();
         let place = if branch.is_empty() { String::new() } else { format!("{branch}{pr}.") };
         let text = match rec.state() {
+            // A described run: the root's own note is the account of it, and
+            // the branch is whatever that note says — the record names no
+            // worker, because the root's helpers are not sides of the run.
+            QuickState::Satisfied if rec.described => {
+                let note = if rec.worker_note.trim().is_empty() {
+                    String::new()
+                } else {
+                    format!(" It said: {}", qd_fact(&rec.worker_note))
+                };
+                let pr = rec.pr.map(|n| format!(" (PR #{n})")).unwrap_or_default();
+                format!(
+                    "Quick run finished — its agent reported done: \"{task}\".{pr}{note} Nothing \
+                     was merged; its panes are still open for you to read or close."
+                )
+            }
             QuickState::Satisfied if rec.review_step => {
                 let reviews = rec.reviews_total;
                 let note = if rec.review_note.trim().is_empty() {
@@ -1448,7 +1549,8 @@ impl OrchRegistry {
                 };
                 format!(
                     "Quick run held ({}): \"{task}\". {}{detail}.{messages}{place} Resume it or \
-                     stop it from the menu of any of its panes.",
+                     stop it from the menu of any of its panes, or from Unfinished runs in the \
+                     launcher's Quick task form.",
                     reason.as_str(),
                     capitalized(reason.notice_line()),
                 )
@@ -1569,13 +1671,70 @@ impl OrchRegistry {
         if !first {
             return;
         }
-        let Ok(entries) = fs::read_dir(&self.root) else { return };
-        for e in entries.flatten() {
-            let Ok(found) = GroupId::parse(&e.file_name().to_string_lossy()) else { continue };
-            if self.is_quick_group(&found) {
-                self.qd_reconcile(&found, now);
-            }
+        for found in self.qd_quick_groups() {
+            self.qd_reconcile(&found, now);
         }
+    }
+
+    /// Every quick group on disk, by reading the orchestration root.
+    ///
+    /// One reader for the two callers that need the whole set rather than
+    /// what this process happens to hold in memory: the start-up scan above,
+    /// and the launcher's list of unfinished runs
+    /// ([`quick_list`](Self::quick_list)), which exists precisely for runs no
+    /// pane and no tab points at any more. A name that does not parse as a
+    /// `GroupId` is skipped rather than joined.
+    pub(super) fn qd_quick_groups(&self) -> Vec<GroupId> {
+        let Ok(entries) = fs::read_dir(&self.root) else { return Vec::new() };
+        let mut out: Vec<GroupId> = entries
+            .flatten()
+            .filter_map(|e| GroupId::parse(&e.file_name().to_string_lossy()).ok())
+            .filter(|g| self.is_quick_group(g))
+            .collect();
+        out.sort_by(|a, b| a.as_str().cmp(b.as_str()));
+        out
+    }
+
+    /// **Tell a described run's root that the run has been held** — once per
+    /// hold, best-effort, into its own pane.
+    ///
+    /// In a steps run a hold needs no announcement: every pane is between
+    /// turns or waiting for one, and the pane that would have gone next is
+    /// simply not briefed. A described run's root is not waiting for orrerix
+    /// to hand it anything. It is mid-decision, its helpers are still
+    /// reporting to it, and a record changing on disk tells it nothing — so
+    /// without this line a run "held at its time bound" went on opening and
+    /// driving helpers until the root next tried to report (#3712 review).
+    /// Stop already told the root for this reason; a hold is the same case.
+    ///
+    /// The line is the instruction. The enforcement is beside it:
+    /// `qd_root_spawn_refusal` refuses the root a new helper while the run is
+    /// held or over, which is what makes the time bound a bound.
+    ///
+    /// A hold whose root is not alive — its pane closed, or the app restarted
+    /// — has nobody to tell, and says nothing.
+    pub(super) fn qd_tell_root_held(&self, rec: &QuickDriveRecord) {
+        if !rec.described {
+            return;
+        }
+        let root = rec.pane(QuickSide::Root).agent.clone();
+        if !self.agent(&root).is_some_and(|a| a.status != AgentStatus::Dead) {
+            return;
+        }
+        let reason = rec.held_reason.unwrap_or(QuickHeld::Unresumable);
+        let line = format!(
+            "{} this quick run is now HELD ({}): {}. Open no further helpers and send no \
+             further work — spawn_agent is refused while the run is held. Wait: the human has \
+             been told, and will resume the run or stop it.",
+            brand::NOTICE_MARKER,
+            reason.as_str(),
+            reason.notice_line(),
+        );
+        // Best-effort, like Stop's line: a root that cannot be typed into is
+        // still refused new helpers, which is the half that does not depend
+        // on it reading anything. The delivery audits itself as a `prompt`
+        // row, so the group's log shows the line and who it was for.
+        let _ = self.deliver_prompt(&root, &line, brand::AUDIT_ACTOR, Delivery::MidSession);
     }
 }
 

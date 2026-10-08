@@ -178,6 +178,40 @@ pub enum Role {
     /// The root of its group: a lead group has no orchestrator, and a lead pane
     /// is what a child's `report` is typed into ([`Role::is_root`]).
     Lead,
+    /// The **quick root** (#3679): the one agent a DESCRIBED quick run is given
+    /// to. It decides for itself whether the task wants a plan and a review,
+    /// opens the worker, reviewer and planner panes it needs, reads what they
+    /// report, and ends the run with its own `report`.
+    ///
+    /// **A class of its own, and neither of the two it resembles.** It is not
+    /// a [`Role::Lead`]: a lead is a pane the HUMAN launched and drives, so it
+    /// takes no first message, never reports, and may open workers only; the
+    /// quick root is opened by orrerix with the task as its first message, may
+    /// open the three delegate classes, and its `report` is the run's end. It
+    /// is not a [`Role::Orchestrator`] with tools stripped by a hint either —
+    /// that would make capability a function of data, which #222 forbids, and
+    /// an orchestrator holds exactly what a quick run must not: a board, a
+    /// merge queue, verdicts, issue comments, the human-question tools. What a
+    /// quick root may call is an enumerated surface, listed and re-checked.
+    ///
+    /// It shares two things with the other two, and both are predicates rather
+    /// than arms so they cannot be forgotten at one site: it is the ROOT of its
+    /// group ([`Role::is_root`] — a delegate's `report` is typed into it), and
+    /// it is a FIXTURE ([`Role::is_fixture`] — never reaped, never counted
+    /// against the cap it spends on its own delegates, never LISTED to an
+    /// agent as a block it could spawn, and never given a repo-authored
+    /// persona). That listing is cosmetic: what REFUSES a spawn of the root's
+    /// own block is the quick root's spawn rule in `src-tauri`, which admits
+    /// three classes and nothing else.
+    ///
+    /// **Never nameable by a workflow file, and that is the no-nesting
+    /// enforcement**, exactly as for a lead:
+    /// [`workflow::kind_from_str`](crate::workflow::kind_from_str) has no
+    /// `quick` arm, so `kind: quick` in a `.orrerix/workflow.yml` is an unknown
+    /// kind, and `spawn_agent`, which parses its `kind` through the same
+    /// function, cannot mint one. A quick root is minted by one path: the quick
+    /// drive opening the pane of a run a human started from the launcher.
+    Quick,
 }
 
 impl Role {
@@ -197,6 +231,9 @@ impl Role {
             // Same reasoning, and the word is already short: `lead-1` beside
             // the `w-N` children it opened.
             Role::Lead => "lead",
+            // `quick-1`: the word, like `lead`, because the pane is one of a
+            // kind in its group and the badge reads the prefix as its tag.
+            Role::Quick => "quick",
             // Solo panes mint their id as `solo-N` directly (see
             // `OrchRegistry::solo_prepare`), never through `block.prefix()` —
             // they have no block. Never reached in practice.
@@ -218,6 +255,7 @@ impl Role {
             Role::Manager => "manager",
             Role::Solo => "solo",
             Role::Lead => "lead",
+            Role::Quick => "quick",
         }
     }
     /// The **deny tier** this class launches its CLI under — the single place
@@ -266,6 +304,19 @@ impl Role {
             // group's live-agent cap and the spawn-rate backstop, not a deny
             // tier.
             Role::Lead => Containment::None,
+            // #3679. `None`, for the orchestrator's reason. The quick root's job
+            // is an orchestrator's in miniature — open delegates, read their
+            // reports, decide what is next — and nothing about that is a file
+            // edit a deny tier could usefully forbid: it has no worktree of
+            // its own and its instructions send the work to a worker. What
+            // bounds it is not a tier but the three things a tier cannot
+            // express: the enumerated tool surface (no board, no merge queue,
+            // no verdict, no issue comment), the delegate classes it may open,
+            // and the run's own time bound. It also means every CLI can host
+            // it (`cli_can_host` is a question about the tier), which is why a
+            // described run is not limited to the CLIs that can be held
+            // read-only.
+            Role::Quick => Containment::None,
         }
     }
     /// The capability that used to be spelled `role == Role::Planner` inline at
@@ -296,7 +347,7 @@ impl Role {
     /// by the review driver (`release_driven_pane`), never spawnable by
     /// `spawn_agent` (`workflow::is_spawnable_block`) and never repo-personable
     /// (`workflow::persona_allowed`). Seven copies is seven places for the
-    /// eighth class to be forgotten in six of them — and a class forgotten in
+    /// next class to be forgotten in six of them — and a class forgotten in
     /// `idle_reap_candidates` alone is a human's own pane closed under them
     /// while they were reading it.
     ///
@@ -316,10 +367,21 @@ impl Role {
     /// orchestration group at all, so every guardrail above is evaluated
     /// against a group it is not a member of.
     ///
-    /// Pinned as a SET (`the_fixture_classes_are_exactly_these_three`) so a
+    /// `Role::Quick` (#3679) is the fourth, and the one fixture orrerix opens
+    /// without a human at that pane: it is the root of a run the human started,
+    /// so reaping it ends the run from underneath its own delegates, counting
+    /// it spends a cap slot the run budgeted for a worker, and a
+    /// repo-personable one is a repo-authored root, which the class exists to
+    /// rule out. (This predicate also keeps the root's block out of the list
+    /// of blocks an agent is shown as spawnable; it is not what refuses a
+    /// spawn of it — `spawn_agent`'s class rule is.) It is bounded instead by
+    /// its run's bounds, which a fixture's exemptions do not touch: a run that
+    /// is held or over tells its root and refuses it new helpers.
+    ///
+    /// Pinned as a SET (`the_fixture_classes_are_exactly_these_four`) so a
     /// later class is a deliberate addition rather than a default.
     pub fn is_fixture(self) -> bool {
-        matches!(self, Role::Orchestrator | Role::Manager | Role::Lead)
+        matches!(self, Role::Orchestrator | Role::Manager | Role::Lead | Role::Quick)
     }
 
     /// **Whether this class is the ROOT of its group** — the one agent a
@@ -341,8 +403,12 @@ impl Role {
     /// predicates must stay separate rather than one being derived from the
     /// other. Nothing here weakens the manager's guarantee: that check keys on
     /// `Role::Manager` and on the `Delivery` kind, and neither moves.
+    ///
+    /// `Role::Quick` (#3679) is the third root: a described quick run's group
+    /// has no orchestrator and no lead, and the delegates its root opens report
+    /// to it.
     pub fn is_root(self) -> bool {
-        matches!(self, Role::Orchestrator | Role::Lead)
+        matches!(self, Role::Orchestrator | Role::Lead | Role::Quick)
     }
 
     /// Every capability class, for the set assertions that pin the predicates
@@ -350,13 +416,13 @@ impl Role {
     ///
     /// Hand-listed and therefore capable of going stale — so the one thing it
     /// must not do is go stale **silently**. [`Role::all_index`] below is a
-    /// non-exhaustive-match tripwire that makes an eighth variant a compile
+    /// non-exhaustive-match tripwire that makes a new variant a compile
     /// error until this array grows with it, which is what lets a test read
     /// `ALL` and honestly claim to have covered every class. Exactly the idiom
     /// [`Delivery::ALL`] already uses, and for the same reason: without it,
     /// `is_fixture`'s and `is_root`'s set pins would be lists of the classes
     /// somebody remembered.
-    pub const ALL: [Role; 7] = [
+    pub const ALL: [Role; 8] = [
         Role::Orchestrator,
         Role::Worker,
         Role::Reviewer,
@@ -364,6 +430,7 @@ impl Role {
         Role::Manager,
         Role::Solo,
         Role::Lead,
+        Role::Quick,
     ];
 
     /// This variant's position in [`Role::ALL`] — a compile-time completeness
@@ -371,7 +438,7 @@ impl Role {
     ///
     /// The `match` is exhaustive, so **adding a variant without an arm here
     /// does not compile**; adding the arm forces an index, and the only correct
-    /// one is past the end of a seven-element array, so `ALL` must grow too.
+    /// one is past the end of the array as it stands, so `ALL` must grow too.
     /// `the_all_list_holds_every_capability_class_exactly_once` walks `ALL` and
     /// asserts each row reports its own position, which catches the remaining
     /// mistake — an arm given a duplicate or wrong index to make it compile.
@@ -384,6 +451,7 @@ impl Role {
             Role::Manager => 4,
             Role::Solo => 5,
             Role::Lead => 6,
+            Role::Quick => 7,
         }
     }
 }
@@ -1531,7 +1599,12 @@ pub fn default_model(cli: &str, role: Role) -> &'static str {
         // conversation with the human — eliciting requirements, spotting the
         // ambiguity nobody stated — so conversational quality is the product
         // here rather than a nicety. A block pins its own `model:` to disagree.
-        Role::Orchestrator | Role::Planner | Role::Manager => "opus",
+        //
+        // #3679: the quick root is in it for the orchestrator's reason — what
+        // it produces is decisions about other panes' work, and it is opened by
+        // orrerix, so unlike a lead it needs a default here. (A lead's is empty
+        // below because the human picked its model in their own launcher.)
+        Role::Orchestrator | Role::Planner | Role::Manager | Role::Quick => "opus",
         Role::Worker | Role::Reviewer => "sonnet",
         // A solo pane's model is whatever the human picked in the launcher —
         // loomux never spawns or models it. Never reached.
@@ -1608,6 +1681,10 @@ pub fn role_instructions_file(role: Role) -> &'static str {
         // are written under in the group dir, and — like every other arm here —
         // the name a kickoff or re-grounding notice tells the pane to read.
         Role::Lead => "lead.md",
+        // #3679. Its bytes are `orchestration::QUICK_TPL`. Reached — a quick
+        // root is spawned through the ordinary spawn path, which writes this
+        // file and names it in the kickoff — so never an `unreachable!`.
+        Role::Quick => "quick.md",
     }
 }
 
@@ -1900,7 +1977,7 @@ mod tests {
     /// carries between app launches, what `list_agents`/`session_roles` hand
     /// the webview, and what the frontend matches on to decide a roster row's
     /// badge. Changing one is a breaking change to a state file, not a rename.
-    const WIRE_NAMES: [(Role, &str); 7] = [
+    const WIRE_NAMES: [(Role, &str); 8] = [
         (Role::Orchestrator, "orchestrator"),
         (Role::Worker, "worker"),
         (Role::Reviewer, "reviewer"),
@@ -1908,6 +1985,7 @@ mod tests {
         (Role::Manager, "manager"),
         (Role::Solo, "solo"),
         (Role::Lead, "lead"),
+        (Role::Quick, "quick"),
     ];
 
     /// `Role`'s serde form is `rename_all = "lowercase"`, and this states it
@@ -1975,7 +2053,7 @@ mod tests {
     /// on purpose (deriving it from `as_str` would pin `Serialize` to whatever
     /// `as_str` says), and a hand-written table is exactly the thing a new
     /// variant can be forgotten in — so its LENGTH is checked against `ALL`,
-    /// whose length the compiler enforces. Before this, an eighth class could
+    /// whose length the compiler enforces. Before this, a new class could
     /// have been added with no wire-name test at all and nothing would have
     /// said so.
     #[test]
@@ -1983,7 +2061,7 @@ mod tests {
         for (i, r) in Role::ALL.iter().enumerate() {
             assert_eq!(r.all_index(), i, "{r:?} is not where ALL says it is");
         }
-        assert_eq!(Role::ALL.len(), 7);
+        assert_eq!(Role::ALL.len(), 8);
         assert_eq!(
             WIRE_NAMES.len(),
             Role::ALL.len(),
@@ -2011,11 +2089,11 @@ mod tests {
     /// `counts_against_max_agents(Solo)` is deliberately `true` and
     /// `manager_lifecycle.rs` pins that separately.
     #[test]
-    fn the_fixture_classes_are_exactly_these_three() {
+    fn the_fixture_classes_are_exactly_these_four() {
         let fixtures: Vec<Role> = Role::ALL.into_iter().filter(|r| r.is_fixture()).collect();
         assert_eq!(
             fixtures,
-            vec![Role::Orchestrator, Role::Manager, Role::Lead],
+            vec![Role::Orchestrator, Role::Manager, Role::Lead, Role::Quick],
             "is_fixture is the shared exemption rule for the dock, the cap, the reaper, the \
              watchdog, the review driver, spawn_agent and persona ownership — see its doc"
         );
@@ -2037,13 +2115,13 @@ mod tests {
     /// `exactly_three_delivery_kinds_may_enter_a_manager_pane`); this is the
     /// pin that stops the *lookup* from ever handing it a delivery to refuse.
     #[test]
-    fn a_group_has_exactly_two_possible_roots_and_a_manager_is_not_one() {
+    fn a_group_has_exactly_three_possible_roots_and_a_manager_is_not_one() {
         let roots: Vec<Role> = Role::ALL.into_iter().filter(|r| r.is_root()).collect();
         assert_eq!(
             roots,
-            vec![Role::Orchestrator, Role::Lead],
+            vec![Role::Orchestrator, Role::Lead, Role::Quick],
             "the root is what deliver_relayed_to_root looks a group up by — an orchestration \
-             group's orchestrator, or a lead group's lead"
+             group's orchestrator, a lead group's lead, or a described quick run's root"
         );
         assert!(
             !Role::Manager.is_root(),

@@ -639,6 +639,29 @@ pub struct QuickDriveRecord {
     pub plan_step: bool,
     /// Whether this run has a review step.
     pub review_step: bool,
+    /// Whether this is a DESCRIBED run (#3679 way 2): one root pane was given
+    /// the task and decides for itself whether to plan, who works and who
+    /// reviews. The run then has exactly one working state, `root-wait`, and
+    /// the panes the root opens are its delegates rather than sides of the run
+    /// — their reports go to the root's pane and the record never names them.
+    ///
+    /// A field of its own rather than read off the state, because a run that
+    /// has parked or ended is no longer IN `root-wait`, and what the run was
+    /// is exactly what the question "is this pane one of the run's sides?"
+    /// still has to answer then. Defaulted, so a record written before way 2
+    /// existed reads as a steps run, which is what every such record is.
+    #[serde(default)]
+    pub described: bool,
+    /// The CLI and model a described run's root was started on.
+    ///
+    /// The roster carries them too, as the root's block — but a block whose
+    /// kind no workflow file can name is dropped when `group.json` is read
+    /// back, which is what a restart does. Resume has to re-open the root on
+    /// the CLI that owns its session, so the run keeps its own copy.
+    #[serde(default)]
+    pub root_cli: String,
+    #[serde(default)]
+    pub root_model: String,
     /// The ref the worker's branch was cut from, which the review brief diffs
     /// against. Empty means the repo's default branch.
     #[serde(default)]
@@ -755,6 +778,9 @@ impl QuickDriveRecord {
             held_from: None,
             plan_step,
             review_step,
+            described: false,
+            root_cli: String::new(),
+            root_model: String::new(),
             base: base.trim().to_string(),
             max_review_rounds: limits.drive.max_review_rounds,
             drive_timeout_minutes: limits.drive.drive_timeout_minutes as u32,
@@ -781,6 +807,24 @@ impl QuickDriveRecord {
             notice_item: String::new(),
             extra: BTreeMap::new(),
         }
+    }
+
+    /// A fresh DESCRIBED run (#3679 way 2): in `root-wait`, with the root's
+    /// first message — the task — still to deliver.
+    ///
+    /// It has no plan step and no review step of its own: whether the task is
+    /// planned or reviewed is the root's decision, made in its pane. The round
+    /// bound is carried anyway, because the root's instructions quote it.
+    pub fn new_described(
+        task: &str,
+        base: &str,
+        limits: &QuickLimits,
+        now_ms: u64,
+    ) -> QuickDriveRecord {
+        let mut rec = QuickDriveRecord::new(task, false, false, base, limits, now_ms);
+        rec.state = QuickState::RootWait;
+        rec.described = true;
+        rec
     }
 
     /// This run's state. The field is private so that every write goes through
@@ -1963,5 +2007,78 @@ mod tests {
         assert_eq!(back, file);
         assert!(back.has_unfinished_run());
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    // ── a described run (way 2) ────────────────────────────────────────────
+
+    /// **A described run has one working state and one pane that can move
+    /// it.** It starts in `root-wait` with its first message pending, the root
+    /// holds the turn, and no plan or review step is recorded — those are the
+    /// root's decisions, not the record's.
+    #[test]
+    fn a_described_run_starts_in_root_wait_with_the_root_holding_the_turn() {
+        let rec = QuickDriveRecord::new_described("add a flag", "main", &QuickLimits::default(), T0);
+        assert_eq!(rec.state(), QuickState::RootWait);
+        assert!(rec.described);
+        assert!(rec.brief_pending, "its first message is still to deliver");
+        assert_eq!(rec.state().turn(), Some(QuickSide::Root));
+        assert!(!rec.plan_step && !rec.review_step);
+        // The control: a steps run is not one.
+        let steps = QuickDriveRecord::new("add a flag", false, true, "main", &QuickLimits::default(), T0);
+        assert!(!steps.described);
+        assert_ne!(steps.state(), QuickState::RootWait);
+    }
+
+    /// **The root's `done` ends the run, and nothing else it can say does.**
+    /// `blocked` parks it on the root's own reason, and a dead root parks it
+    /// too; `approved` is a reviewer's word and a root saying it has finished.
+    #[test]
+    fn the_roots_done_ends_a_described_run_and_blocked_parks_it() {
+        let delivered = || {
+            let mut rec = QuickDriveRecord::new_described("add a flag", "main", &QuickLimits::default(), T0);
+            rec.brief_delivered(QuickSide::Root, "quick-1", "s-root", T0);
+            rec
+        };
+        let facts = |signal| QuickFacts { now_ms: T0 + 1, signal, pane_alive: true, messaged: false, provider_limited: false };
+
+        let rec = delivered();
+        assert!(decide(&rec, &facts(QuickSignal::None), &rec.limits()).is_none(), "a quiet root moves nothing");
+        let done = decide(&rec, &facts(QuickSignal::Done), &rec.limits()).expect("done decides");
+        assert_eq!((done.to, done.held), (QuickState::Satisfied, None));
+        assert!(!done.spends_round && !done.reviewed, "no review round is the record's to count");
+
+        let blocked = decide(&rec, &facts(QuickSignal::Blocked), &rec.limits()).expect("blocked decides");
+        assert_eq!((blocked.to, blocked.held), (QuickState::Held, Some(QuickHeld::RootBlocked)));
+
+        let dead = QuickFacts { pane_alive: false, ..facts(QuickSignal::None) };
+        let gone = decide(&rec, &dead, &rec.limits()).expect("a dead root decides");
+        assert_eq!(gone.held, Some(QuickHeld::RootGone));
+
+        // A root is not a reviewer: its report is read as done or blocked, and
+        // the outcome word cannot make it anything else.
+        assert_eq!(QuickSignal::from_report(QuickSide::Root, "done", Some("approved")), QuickSignal::Done);
+        assert_eq!(QuickSignal::from_report(QuickSide::Root, "done", Some("request_changes")), QuickSignal::Done);
+        assert_eq!(QuickSignal::from_report(QuickSide::Root, "blocked", None), QuickSignal::Blocked);
+    }
+
+    /// **A parked described run resumes to `root-wait`**, and the marker
+    /// survives the hold and the end — which is the reason it is a field.
+    #[test]
+    fn a_described_run_keeps_its_marker_through_a_hold_and_resumes_to_the_root() {
+        let mut rec = QuickDriveRecord::new_described("add a flag", "main", &QuickLimits::default(), T0);
+        rec.brief_delivered(QuickSide::Root, "quick-1", "s-root", T0);
+        rec.take(&QuickStep::held(QuickHeld::Restart), T0 + 1).expect("a working run can park");
+        assert_eq!(rec.state(), QuickState::Held);
+        assert!(rec.described, "still a described run while parked");
+        assert_eq!(rec.resume_target(), QuickState::RootWait);
+        rec.resume(T0 + 2).expect("a held run resumes");
+        assert_eq!(rec.state(), QuickState::RootWait);
+        assert!(rec.brief_pending, "the root is owed its message again");
+
+        // And the record written before the field existed reads as a steps run.
+        let mut v = serde_json::to_value(&rec).unwrap();
+        v.as_object_mut().unwrap().remove("described");
+        let old: QuickDriveRecord = serde_json::from_value(v).expect("the field is optional on read");
+        assert!(!old.described);
     }
 }

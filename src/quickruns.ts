@@ -112,6 +112,26 @@ export class QuickRuns {
     this.retime();
   }
 
+  /** Keep only the runs `keep` answers true for — how a run whose tab was
+   *  closed stops being polled (#3679).
+   *
+   *  A run is shown on its panes, and its panes are in the tab its group is
+   *  bound to. Close that tab and there is nothing left in this window to
+   *  paint the status onto, so asking for it every few seconds is a poll with
+   *  no reader. The run itself is not ended by this: it parks when the engine
+   *  sees the pane that held the turn is gone, and it is listed in the
+   *  launcher's Quick task form to resume or stop. */
+  retain(keep: (group: string) => boolean): void {
+    let dropped = false;
+    for (const group of [...this.statuses.keys()]) {
+      if (!keep(group)) {
+        this.statuses.delete(group);
+        dropped = true;
+      }
+    }
+    if (dropped) this.retime();
+  }
+
   /** Want the poll exactly while something is working. */
   private retime(): void {
     if ([...this.statuses.values()].some(quickIsWorking)) this.gate.enable();

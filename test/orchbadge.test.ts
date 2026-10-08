@@ -9,7 +9,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { badgeFor, agentSeq, forgetGroupMeta, metaForGroup, resetGroupMeta, roleLabel } from "../src/orchbadge.ts";
 
-type Role = "orchestrator" | "worker" | "reviewer" | "planner" | "manager" | "lead";
+type Role = "orchestrator" | "worker" | "reviewer" | "planner" | "manager" | "lead" | "quick";
 const req = (group_id: string, agent_id: string, role: Role) => ({ group_id, agent_id, role });
 
 test.beforeEach(() => resetGroupMeta());
@@ -88,6 +88,7 @@ test("every role has a tag of its own, and it is the agent-id prefix uppercased"
     ["plan", "planner"],
     ["mgr", "manager"],
     ["lead", "lead"],
+    ["quick", "quick"],
   ] as const) {
     assert.equal(roleLabel(role), prefix.toUpperCase(), `${role}'s tag must be ${prefix} uppercased`);
   }

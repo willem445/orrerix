@@ -8,11 +8,13 @@ import { readFileSync } from "node:fs";
 
 import {
   QUICK_MINUTES,
+  QUICK_ROOT_CLIS,
   QUICK_ROUNDS,
   QUICK_STEPS,
   QUICK_STEP_CLIS,
   QUICK_STEP_ROLE,
   planQuickStart,
+  quickRootCliOptions,
   quickStepCli,
   quickStepCliOptions,
   quickStepOn,
@@ -30,6 +32,8 @@ function form(over: Partial<QuickFormValues> = {}): QuickFormValues {
   return {
     repo: "C:/src/widgets",
     task: "  add a --json flag to the list command  ",
+    mode: "steps",
+    root: { cli: "claude", model: " opus " },
     planStep: false,
     reviewStep: true,
     base: " main ",
@@ -54,6 +58,10 @@ test("a submit builds exactly the orch_quick_start payload", () => {
   assert.deepEqual(plan.request, {
     repo: "C:/src/widgets",
     task: "add a --json flag to the list command",
+    // A steps run names no agent of its own: what the form is holding for the
+    // other mode is not sent.
+    mode: "steps",
+    root: { cli: "", model: "", instructions: "" },
     plan_step: false,
     review_step: true,
     base: "main",
@@ -219,6 +227,14 @@ test("QUICK_STEP_CLIS is exactly what the engine's cli_can_host allows (#3679)",
   // pass by accident.
   assert.ok(QUICK_STEP_CLIS.plan.length < QUICK_STEP_CLIS.review.length);
   assert.ok(QUICK_STEP_CLIS.review.length < QUICK_STEP_CLIS.work.length);
+
+  // The agent a described run is given to (#3679): its class is in the same
+  // table, and the list of CLIs that can host it is derived the same way.
+  assert.ok(wants.has("quick"), "the engine names a containment for the quick root's class");
+  const rootWant = ranks.get(wants.get("quick")!)!;
+  const rootAllowed = caps.filter(([, max]) => rootWant <= ranks.get(max)!).map(([cli]) => cli);
+  assert.deepEqual([...QUICK_ROOT_CLIS].sort(), rootAllowed.sort(), "the root offers exactly the CLIs the engine can hold to its class");
+  assert.deepEqual([...QUICK_ROOT_CLIS].sort(), [...engineClis].sort(), "which today is every CLI: the class is not clamped");
 });
 
 // ── the launcher's own planner and preview, for this kind ───────────────────
@@ -255,4 +271,58 @@ test("the setup card names no agent for a quick task — it launches up to three
   // The control: the same picker state on the Agent kind DOES draw a mark, so
   // the null above is this kind's rule and not a preview that draws nothing.
   assert.notEqual(preview("agent"), null);
+});
+
+// ── describe mode (#3679 way 2) ─────────────────────────────────────────────
+
+test("a described run sends the task, the agent it runs on, and no instructions", () => {
+  const plan = planQuickStart(form({ mode: "describe", planStep: true, reviewStep: false }));
+  assert.ok(plan.ok);
+  assert.equal(plan.request.mode, "describe");
+  assert.deepEqual(plan.request.root, { cli: "claude", model: "opus", instructions: "" });
+  // The two switches are the steps mode's. A described run records neither —
+  // whether to plan or review is its agent's call — whatever the form still holds.
+  assert.equal(plan.request.plan_step, false);
+  assert.equal(plan.request.review_step, false);
+  // The three rows are sent as the helpers' CLIs and models, with no text: in
+  // this mode the task is the only thing the human says.
+  assert.deepEqual(plan.request.plan, { cli: "claude", model: "", instructions: "" });
+  assert.deepEqual(plan.request.work, { cli: "codex", model: "gpt-5", instructions: "" });
+  assert.deepEqual(plan.request.review, { cli: "pi", model: "", instructions: "" });
+  assert.equal(plan.request.task, "add a --json flag to the list command");
+});
+
+test("a described run checks every helper's CLI, because its agent may open any of them", () => {
+  // In steps mode an OFF step on a CLI that cannot host it is fine: that pane
+  // never opens. In describe mode there is no off — codex cannot be held to a
+  // reviewer's class, and the agent may ask for a reviewer.
+  const steps = form({ reviewStep: false, steps: { ...form().steps, review: { cli: "codex", model: "", instructions: "" } } });
+  assert.ok(planQuickStart(steps).ok, "the control: the same row is accepted while its step is off");
+  const described = planQuickStart({ ...steps, mode: "describe" });
+  assert.equal(described.ok, false);
+  assert.equal(!described.ok && described.focus, "review");
+  assert.match(!described.ok ? described.error : "", /codex cannot be the review helper/);
+
+  const noRoot = planQuickStart(form({ mode: "describe", root: { cli: "", model: "" } }));
+  assert.equal(!noRoot.ok && noRoot.focus, "root");
+  assert.match(!noRoot.ok ? noRoot.error : "", /Pick the CLI the task runs on/);
+  const badRoot = planQuickStart(form({ mode: "describe", root: { cli: "emacs", model: "" } }));
+  assert.match(!badRoot.ok ? badRoot.error : "", /emacs cannot run a described task/);
+  // …and a steps run does not read the root row at all.
+  assert.ok(planQuickStart(form({ root: { cli: "emacs", model: "" } })).ok);
+});
+
+test("a described run reads the round bound even with the review switch off", () => {
+  // Its agent is told the bound either way, so a blank box is a refusal here
+  // where in steps mode, with no review step, it is not read.
+  assert.ok(planQuickStart(form({ reviewStep: false, rounds: null })).ok, "the control");
+  const described = planQuickStart(form({ mode: "describe", reviewStep: false, rounds: null }));
+  assert.equal(!described.ok && described.focus, "rounds");
+  const ok = planQuickStart(form({ mode: "describe", reviewStep: false, rounds: 2 }));
+  assert.equal(ok.ok && ok.request.max_review_rounds, 2);
+});
+
+test("the root's CLI picker offers only what this build's launcher has a row for", () => {
+  assert.deepEqual(quickRootCliOptions(["claude", "codex", "vim"]), ["claude", "codex"]);
+  assert.deepEqual(quickRootCliOptions([]), []);
 });

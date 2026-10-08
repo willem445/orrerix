@@ -142,9 +142,10 @@ Structurally the two are kept apart by two predicates that differ by exactly one
 class. `Role::is_fixture` (never docked, capped, reaped, nagged or released)
 covers orchestrator, manager and lead; `Role::is_root` — the lookup
 `deliver_relayed_to_root` performs to find a report's recipient — covers
-orchestrator and lead and **excludes the manager**. Folding either into the
+orchestrator, lead and (since #3679) a quick run's root, and **excludes the
+manager**. Folding either into the
 other, or deriving one from the other, is what would make a manager pane a
-report target, so `a_group_has_exactly_two_possible_roots_and_a_manager_is_not_one`
+report target, so `a_group_has_exactly_three_possible_roots_and_a_manager_is_not_one`
 asserts both sets and asserts that they differ. Nothing in #2519 touches this
 section's operands: the refusal still reads `Role::Manager` and
 `Delivery::permitted_into_manager_pane`, and the permitted set is still the

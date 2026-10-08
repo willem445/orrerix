@@ -1011,6 +1011,11 @@ fn role_named(variant: &str) -> Option<Role> {
         // re-bless. Its CHILDREN are ordinary workers and are already named
         // there. See docs/design/lead-pane.md.
         "Lead" => Role::Lead,
+        // #3679. Classified, with the lead's two answers: not declarable
+        // (`kind_from_str` has no `quick` arm) and not counted (a fixture). Its
+        // helpers are ordinary workers, reviewers and planners, already named
+        // in the parenthetical. See docs/design/quick-orchestration.md.
+        "Quick" => Role::Quick,
         _ => return None,
     })
 }
@@ -1151,6 +1156,19 @@ fn the_counting_pin_is_blind_to_a_class_no_workflow_file_can_name_and_that_is_bo
         "a lead is the seat, not a helper — `Role::is_fixture`. If it ever started counting, \
          the sentence above about it being outside this population for two reasons is down to \
          one, and the guardrail table in docs/design/lead-pane.md is wrong"
+    );
+    // #3679: `Role::Quick` is the THIRD undeclarable class, outside the pin's
+    // population for the same two reasons, each asserted for the same reason.
+    assert_eq!(
+        workflow::kind_from_str("quick"),
+        None,
+        "a quick root is minted by the quick drive alone; a `quick` arm would make it \
+         declarable in a workflow file AND spawnable by an agent"
+    );
+    assert!(
+        !counts_against_max_agents(Role::Quick),
+        "a quick root is the run's own seat — `Role::is_fixture` — and the cap it would spend \
+         is the one the run budgeted for its helpers"
     );
 
     // THE BOUND on that blindness: a class the workflow file cannot name also

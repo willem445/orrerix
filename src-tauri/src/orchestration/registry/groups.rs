@@ -667,8 +667,8 @@ impl OrchRegistry {
             .filter(|a| a.group == group && a.status != AgentStatus::Dead)
             .cloned()
             .collect();
-        let (mut orch, mut worker, mut reviewer, mut planner, mut manager, mut lead) =
-            (0u32, 0u32, 0u32, 0u32, 0u32, 0u32);
+        let (mut orch, mut worker, mut reviewer, mut planner, mut manager, mut lead, mut quick) =
+            (0u32, 0u32, 0u32, 0u32, 0u32, 0u32, 0u32);
         let mut earliest: Option<u64> = None;
         // Production bug fix (PR #329 round 7): same override this group's
         // escalation threshold uses (`agent_context_percents`) — one shared
@@ -694,6 +694,10 @@ impl OrchRegistry {
                     // would tell the lifecycle panel a lead group has zero
                     // agents in it while a pane is plainly running.
                     Role::Lead => lead += 1,
+                    // #3679: the root of a described quick run, tallied for the
+                    // lead's reason — it is a pane plainly running in a real
+                    // group.
+                    Role::Quick => quick += 1,
                 }
                 earliest = Some(earliest.map_or(a.started_ms, |e| e.min(a.started_ms)));
                 let declared = g.as_ref().and_then(|g| g.guardrails.blocks.iter().find(|b| b.id == a.block));
@@ -793,7 +797,7 @@ impl OrchRegistry {
             "live_delegates": live.iter().filter(|a| counts_against_max_agents(a.role)).count(),
             "paused": self.is_paused(group),
             "uptime_ms": earliest.map(|e| now.saturating_sub(e)),
-            "roles": { "orchestrator": orch, "worker": worker, "reviewer": reviewer, "planner": planner, "manager": manager, "lead": lead },
+            "roles": { "orchestrator": orch, "worker": worker, "reviewer": reviewer, "planner": planner, "manager": manager, "lead": lead, "quick": quick },
             // Whether the roster this group is RUNNING declares a manager block
             // at all (#1433, #1161 M5). Beside `roles.manager`, which counts LIVE
             // ones, because the panel's question is the difference between the

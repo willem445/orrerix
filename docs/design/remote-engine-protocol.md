@@ -185,7 +185,8 @@ That is a fact about the transport. Nobody issued it, nothing checks it, and it
 cannot be revoked. Reproduce the same command surface over a socket and it
 evaporates: every peer that can open a connection becomes "the webview".
 
-And the surface is worse than one identifier. Today's 152 commands
+And the surface is worse than one identifier. The manifest's commands — 182 at
+#3679, counted in §5.4 —
 (`src-tauri/src/command_manifest.rs`, the ACL manifest's single source of truth)
 include, by design:
 
@@ -485,7 +486,7 @@ over the same list, and a reviewer already knows how to read it.
 That mechanism is not optional bookkeeping, and this repo's own artifacts are the
 evidence. The plan-408 census counted 134 commands; `APP_COMMANDS` listed **141**
 when this section was written, **146** as of #1042 slice B, **147** as of
-#996, **150** as of #1151 slice A, and **152** once that slice rebased onto the two commands #1152 added. Twelve arrived across those first two intervals, and under a
+#996, **150** as of #1151 slice A, **152** once that slice rebased onto the two commands #1152 added, and **182** at #3679 — by which time §5.4's table had fallen 29 behind without anything saying so. Twelve arrived across those first two intervals, and under a
 hand-maintained allowlist that
 nobody re-derived, every one would have been silently wire-reachable or silently
 broken. The count is dated rather than restated as a bare "today", because that
@@ -528,7 +529,7 @@ not.
 > is the cheap half and the enforcement is the expensive half.** Deciding
 > `orch_grant_merge` is owner-tier costs a table cell today; discovering it was
 > never marked, after a year of commands landing without anyone asking, costs an
-> audit of all 152 of them. The roster ships in v1 (§5.1); the tier column is the
+> audit of every one of them. The roster ships in v1 (§5.1); the tier column is the
 > hardening track reading from a table that was kept current all along.
 
 Three tiers, ordered: **viewer** ⊂ **operator** ⊂ **owner**.
@@ -554,15 +555,16 @@ are where the 64-vs-66 drift above lives).
 | `spawn_pty`, `kill_pty`, `write_pty`, `resize_pty` | 4 | wire | operator | `spawn_pty` executes by design — the single most dangerous name on the wire. `write_pty`'s `human` flag is **derived from the connection session's caller class**, never read from the frame (§6.3) |
 | `dir_info`, `change_dir` | 2 | wire | viewer / operator | path arguments root-scoped (#1042) |
 | `pty_backend_info`, `discover_git_bash`, `discover_ssh` | 3 | wire | viewer | answered with **server** facts; the client must not report its own shell discovery for a server pane |
+| **sshagent** (1) | 1 | **disabled** | — | `ssh_add_identity` loads a passphrase-protected key into the ssh-agent of the machine that opens the SSH panes, by running `ssh-add` beside a caller-supplied `ssh` path. Remotely that is a credential loaded into the daemon user's agent, which every later pane and agent then inherits (H9), through a binary directory the peer chose. Off the roster in v1 and advertised as absent, like `admit_root`; it re-enters as an owner command once the server resolves the path itself |
 | **sessions** (3) | 3 | wire | viewer / operator | agent-CLI store scans are server-side; `record_*_launch_posture` is operator |
 | **git** (22) | 6 | wire | viewer | the reads: `git_repo_root`, `git_log`, `git_status`, `git_diff`, `git_branches`, `git_worktree_list` |
 | | 16 | wire | operator | every write: stage/unstage/commit/commit_files/checkout/discard/worktree_add/fetch/push/pull/tag/branch_create/cherry_pick/revert/merge/rebase. `repo` is root-scoped (#1042). #925 routed exactly two arms through `safe_resolve` — `git_discard(untracked)` and `git_diff(untracked)`; `git_stage`/`git_unstage` `paths` still reach the git CLI directly and are contained by git own outside-repository refusal, not by #925. Note H9: these push as whoever the daemon is |
 | **gh** (11) | 7 | wire | viewer | `gh_auth_status`, `gh_label_vocabulary`, `gh_issue_list`, `gh_issue_view`, `gh_pr_list`, `gh_pr_view`, `gh_activity`. `gh_label_vocabulary` reads the repo's label set (it is what stops the issues view hardcoding a vocabulary), so it is a read of the **server's** repo like the rest of this row |
 | | 4 | wire | operator | `gh_issue_create`, `gh_issue_set_labels`, `gh_issue_comment`, `gh_pr_comment` — these write to GitHub as the daemon's credential (H9) |
 | **gitwatch** (2) | 2 | wire | viewer | |
-| **orchestration** (78) | 22 | wire | viewer | reads: `orch_tasks`, `orch_audit`, `orch_merge_queue`, `orch_autonomy`, `orch_group_usage`, `orch_group_summary`, `orch_group_view`, `orch_strip_view`, `orch_workflow_status`, `orch_workflow_preview`, `orch_group_watches`, `orch_lock_state`, `orch_group_paused`, `orch_notify_enabled`, `orch_spawn_expanded`, `orch_session_roles`, `orch_channel_list`, `orch_channel_for_pane`, `orch_questions_list`, `orch_needs_you_list`, `agent_autopilot_flags`, `agent_cli_knobs` — **all filtered by caller visibility** (§6.4) |
-| | 41 | wire | operator | group lifecycle, binding, steering, task CRUD (including `orch_clear_done_tasks`/`orch_restore_cleared_tasks`, the non-destructive clear-completed archive and its undo — board writes, so operator like the rest of task CRUD), `orch_request_changes`, attention acks, spawn/solo flow, channel connect/disconnect/set-sender, `orch_needs_you_clear`, and the `orch_set_*` knobs that are **not** autonomy raises. `orch_needs_you_clear` is operator and not owner because it stamps a per-group **view** watermark: it hides already-settled rows, mutates no record, and by construction cannot reach an open one — so the worst a peer holding it can do is hide history a human had left on screen |
-| | 14 | wire | **owner** | `orch_approve_task`, `orch_approve_tasks`, `orch_grant_merge`, `orch_grant_release`, `orch_set_autonomous`, `orch_set_auto_merge`, `orch_set_auto_release`, `orch_set_full_autonomy`, `orch_set_dangerous_mode`, `orch_set_autonomy_budget`, `orch_question_answer`, `orch_question_dismiss`, `orch_needs_you_resolve`, `orch_needs_you_dismiss`. The two `*_dismiss` commands (#2137) are owner for `orch_question_answer`'s **second** reason below — human-connection-only, since each hard-codes its own trusted source rather than taking one. They are not clear-completed's operator case: a dismissal settles an OPEN row a human has not dealt with, which is exactly what that command cannot reach |
+| **orchestration** (96) | 28 | wire | viewer | reads: `orch_tasks`, `orch_audit`, `orch_merge_queue`, `orch_autonomy`, `orch_group_usage`, `orch_group_summary`, `orch_group_view`, `orch_strip_view`, `orch_workflow_status`, `orch_workflow_preview`, `orch_group_watches`, `orch_lock_state`, `orch_group_paused`, `orch_notify_enabled`, `orch_spawn_expanded`, `orch_session_roles`, `orch_channel_list`, `orch_channel_for_pane`, `orch_questions_list`, `orch_needs_you_list`, `agent_autopilot_flags`, `agent_cli_knobs`, and six placed at #3679: `orch_list_recorded` (the recorded groups, `orch_session_roles`' sibling), `orch_workflow_list` (takes a `repo`, root-scoped like `orch_workflow_preview`), `orch_workflow_switch_preview`, `orch_mailbox_status`, `orch_quick_status` and `orch_quick_list` (a quick run's status, and the runs that have not ended — both pure reads that park nothing) — **all filtered by caller visibility** (§6.4) |
+| | 51 | wire | operator | group lifecycle, binding, steering, task CRUD (including `orch_clear_done_tasks`/`orch_restore_cleared_tasks`, the non-destructive clear-completed archive and its undo — board writes, so operator like the rest of task CRUD), `orch_request_changes`, attention acks, spawn/solo flow, channel connect/disconnect/set-sender, `orch_needs_you_clear`, and the `orch_set_*` knobs that are **not** autonomy raises. `orch_needs_you_clear` is operator and not owner because it stamps a per-group **view** watermark: it hides already-settled rows, mutates no record, and by construction cannot reach an open one — so the worst a peer holding it can do is hide history a human had left on screen. Ten placed at #3679: `orch_lead_prepare`, `orch_lead_bind`, `orch_fork_agent`, `orch_fork_solo_result` (the client's ack that a lead's fork opened, so it has to cross) and `orch_request_compact` — spawn, binding and steering like the rest of the row; `orch_quick_start` and `orch_quick_control` — one tier for all five of its verbs, and its `resume` re-grants only the bounds `orch_quick_start` set, which is not an autonomy raise; `todo_apply` — the human's own list, by task CRUD's precedent; and two that are READS and are operator anyway, for the reason `orch_needs_you_list` once was: `orch_usage_series` appends one `poll-read-failed` audit row when a read is refused for size, and `todo_snapshot` renames a corrupt store aside. A viewer "cannot write a file", so each stays here until that write moves — and `todo_snapshot` has a second open question, since the store is the human's rather than a group's and §6.4's per-group filter does not reach it |
+| | 16 | wire | **owner** | `orch_approve_task`, `orch_approve_tasks`, `orch_grant_merge`, `orch_grant_release`, `orch_set_autonomous`, `orch_set_auto_merge`, `orch_set_auto_release`, `orch_set_full_autonomy`, `orch_set_dangerous_mode`, `orch_set_autonomy_budget`, `orch_question_answer`, `orch_question_dismiss`, `orch_needs_you_resolve`, `orch_needs_you_dismiss`. The two `*_dismiss` commands (#2137) are owner for `orch_question_answer`'s **second** reason below — human-connection-only, since each hard-codes its own trusted source rather than taking one. They are not clear-completed's operator case: a dismissal settles an OPEN row a human has not dealt with, which is exactly what that command cannot reach. Two placed at #3679, both for that same second reason: `orch_answer_pane_ui` settles a dialog an agent is waiting on and stamps the answer as the human's, and `orch_apply_workflow` is "never agent-triggered" by its own doc, bound by `expect_digest` to the bytes the human read, and can swap in a workflow with a weaker merge gate. **Open, and not changed here:** `orch_set_advanced_orchestrator` sits in the operator row as one of the knobs "that are not autonomy raises", and turning it OFF clears the reviewer merge gate for the session — the same question `orch_apply_workflow` raises, answered the other way. One of the two rows is wrong |
 | | 1 | **retargeted** | viewer | `orch_open_ref` — the server resolves the ref to a URL (its `open_external_url` helper is the local half today) and returns it; the **client** opens it in the human's browser |
 | **cliprobe** (1) | 1 | wire | viewer | `probe_agent_cli` probes the **server's** CLIs |
 | **modelwire** (1) | 1 | wire | viewer | `list_cli_models` (#993) reads what the **server's** startup sweep found for a CLI. Operator under #993, when the command itself spawned the agent CLI and a viewer clicking `detect` could have spent the operator's credits. #1020 removed that: the command is a memo LOOKUP that cannot spawn anything, the sweep is the only spawn site and runs on the server's own schedule with no client able to trigger it, so the answer is now a read like `probe_agent_cli`'s. **The underlying cost claim is still unverified** (docs/design/model-catalog.md §Credit safety) — what changed is that no client gesture reaches it. Restoring a client-triggered ask would make this operator again |
@@ -574,20 +576,33 @@ are where the 64-vs-66 drift above lives).
 | | 3 | **disabled** | — | `fm_open`, `fm_open_with`, `fm_reveal` — `ShellExecuteW`/`xdg-open` on the server |
 | **filehash** (1) | 1 | wire | operator | |
 | **rootreg** (1) | 1 | **disabled** | — | `admit_root` is the display-side door of the declared-root registry (#1042 slice B): off the roster and advertised as absent, exactly like `open_in_editor` and `fm_open`, so a remote peer may **use** a declared root and can never **mint** one. That absence *is* the enforcement — argued in `rootreg.rs`'s module doc and in `groupid-and-path-roots.md`'s "the admit tier". It exists at all because `pickDirectory` is a client-side dialog the engine never sees. An authenticated remote admit path would re-enter here as `wire`/**owner** behind auth — a capability *added* later, which is §1.1 H3's rule |
-| **obs** (1) | 1 | **client-local** | — | `take_startup_notice` is about the client's own launch |
-| **uistate** (6) | 4 | **client-local** | — | `load/save_ui_tabs`, `load/save_settings` — client UI state, plus the `engine_id` binding of §4.3 |
+| **obs** (2) | 2 | **client-local** | — | `take_startup_notice` is about the client's own launch; `liveness_stamp` records that the client's own webview thread is alive, so a daemon's self-watch runs on its watchdog alone |
+| **uistate** (12) | 10 | **client-local** | — | `load/save_ui_tabs`, `load/save_settings` — client UI state, plus the `engine_id` binding of §4.3. Six placed at #3679, the same kind of thing: `load/save_board_prefs` (a board's collapse and filter state; keyed by engine group ids, so it needs that binding too), `load/save_session_log` (the names and notes the human gave sessions — the engine never reads it) and `load/save_quick_presets` (instruction presets the launcher fills a form from; the engine sees only the text inside a start request). None of the three is the SSH-profile case below: the engine reads none of them |
 | | 2 | wire | operator | `load/save_ssh_profiles` — **named consequence:** in remote mode an SSH pane is opened *by the engine*, so the hosts it can reach and the identity files it names are the server's, not the client's. The profile store follows the panes. The no-secrets invariant of `sshprofile.ts` is what makes this survivable |
 | **voice** (3) | 3 | **client-local** | — | mic capture and whisper are client hardware; the transcript rides `write_pty` like any other keystrokes |
 
-Totals, **derived from `APP_COMMANDS` at the commit this line was last touched
-and not since** (#1151 slice A, rebased): **138 wire**, **8 client-local** (`take_startup_notice`,
-the four `uistate` UI-state commands, the three `voice_*`), **5 disabled**
-(`open_in_editor`, `fm_open`, `fm_open_with`, `fm_reveal`, `admit_root`), **1
-retargeted** (`orch_open_ref`) = **152**, the total `app_commands_len_is_<N>`
-pins.
+Totals, **counted by `scripts/command-roster.cjs`, which parses this table and
+`APP_COMMANDS` and compares them** (#3679): **160 wire**, **15 client-local**
+(`take_startup_notice`, `liveness_stamp`, the ten `uistate` UI-state commands,
+the three `voice_*`), **6 disabled** (`open_in_editor`, `fm_open`,
+`fm_open_with`, `fm_reveal`, `admit_root`, `ssh_add_identity`), **1 retargeted**
+(`orch_open_ref`) = **182**, the total `app_commands_len_is_<N>` pins.
 
-> **The table now partitions `APP_COMMANDS` exactly, and that is precisely the
-> part nothing enforces.** The five rows this note spent two revisions missing
+**That script is the count-level half of what this section said nothing
+enforced.** `test/commandroster.test.ts` runs it: a family whose manifest
+entries no longer equal the sum of its rows here, a family with no row, a
+header that disagrees with its own rows, and class totals that disagree with
+the table each fail by name. It was written because the table had fallen 29
+commands behind — 152 stated, 156 in its own rows, 181 in the manifest — with
+one whole family (`sshagent`) carrying no row. What it cannot check is that a
+NAMED command sits in the right row: several rows summarise rather than list,
+so a per-command disposition is not parseable from this table. That half is
+still slice C's roster test, and the paragraphs below about it still stand.
+
+> **The table partitions `APP_COMMANDS` exactly, and until #3679 that was
+> precisely the part nothing enforced** — its counts are checked by
+> `scripts/command-roster.cjs` now; which row a NAMED command sits in still is
+> not. The five rows this note spent two revisions missing
 > are placed: `gh_label_vocabulary`, `orch_questions_list`,
 > `orch_question_answer` and `orch_set_full_autonomy` sit in their families' rows
 > above, and `admit_root` — the last one, and the reason these totals were still
@@ -619,26 +634,27 @@ pins.
 > They are placed above — board writes, operator like the rest of task CRUD —
 > because the branch that rebased onto them is the one whose table claims to
 > partition `APP_COMMANDS`, and a claim you carry is a claim you own.
-> **Slice C still owns the enforcement.** C2's roster test
-> is what makes a sixth unplaced command fail CI instead of sitting here
-> unnoticed; until it ships, the paragraph below is the only thing between this
-> table and its next drift.
+> **Slice C still owns the per-command enforcement.** C2's roster test is what
+> makes a command placed in the WRONG row fail CI. A command with no row at all
+> already fails: `test/commandroster.test.ts` counts both sides.
 
 The authoritative per-command list is the generated roster the C2 test pins —
 this table is the *argument* for it, not a second copy to drift. Which is the
 whole point of §5.1: a table in a design note is exactly the artifact that goes
 stale, so the note argues and the test enforces.
 
-**And until C2 ships, nothing enforces it, which is why this table has now gone
-stale four times** (#1018 rounds 1–2, then #996). "The note argues and the test
-enforces" describes the end state, not today: the roster test is part of C2, so
-between now and then these numbers are exactly the unpinned kind §5's own opening
-paragraphs warn about. A command added to `APP_COMMANDS` in the meantime does not
-fail anything here — it silently leaves a name with no disposition, which is how
+**Until #3679 nothing enforced even the counts, which is why this table went
+stale five times** (#1018 rounds 1–2, #996, and then 29 commands' worth found at
+#3679). "The note argues and the test enforces" still describes the end state
+for the DISPOSITIONS: the roster test is part of C2, so which tier a command is
+given is exactly the unpinned kind §5's own opening paragraphs warn about. What a
+command added to `APP_COMMANDS` can no longer do is leave a name with no
+disposition at all without failing something — which is how
 `gh_label_vocabulary`, `orch_set_full_autonomy`, `orch_questions_list`,
 `orch_question_answer` and `admit_root` all reached this file unplaced.
-**Re-derive these counts from `APP_COMMANDS` when you touch them; never bump them
-relatively, and do not derive them by hand.** A relative bump is what carried the
+**Re-derive these counts from `APP_COMMANDS` when you touch them — `node
+scripts/command-roster.cjs` prints both sides — never bump them relatively, and
+do not derive them by hand.** A relative bump is what carried the
 error through two separate reviews, and hand arithmetic over 26 rows is what
 carried it through a third; the fourth pass parsed both sides — `APP_COMMANDS`'s
 family comments and this table's `n` column — and diffed them, which is the

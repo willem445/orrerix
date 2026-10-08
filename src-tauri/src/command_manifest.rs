@@ -72,10 +72,10 @@ pub const APP_COMMANDS: &[&str] = &[
     // gitwatch (2)
     "git_watch",
     "git_unwatch",
-    // orchestration (94 — re-derived at #3263 S3 as 89, +2 for #3318 F2's
-    // orch_fork_agent and orch_fork_solo_result, +3 for #3679's
-    // orch_quick_start/status/control; the parenthetical had read 75 since
-    // long before, while the group held 87)
+    // orchestration (96 — COUNTED, by `scripts/command-roster.cjs`, which
+    // compares this number with the entries under it and with the protocol
+    // note's roster table; `test/commandroster.test.ts` runs it. The
+    // parenthetical was hand-kept before that and read 94 over 95 entries.)
     "agent_autopilot_flags",
     "agent_cli_knobs",
     "create_orchestration",
@@ -162,10 +162,12 @@ pub const APP_COMMANDS: &[&str] = &[
     "orch_solo_bind",
     "orch_lead_prepare",
     "orch_lead_bind",
-    // #3679: the quick task — start a run, read it, act on it.
+    // #3679: the quick task — start a run, read it, act on it, and list the
+    // runs that have not ended.
     "orch_quick_start",
     "orch_quick_status",
     "orch_quick_control",
+    "orch_quick_list",
     "orch_confirm_solo_copilot_autopilot",
     "orch_solo_adopt",
     // #3318 F2: fork a delegate's session into a new agent pane.
@@ -205,7 +207,7 @@ pub const APP_COMMANDS: &[&str] = &[
     "fm_hash_start",
     // rootreg (1)
     "admit_root",
-    // obs (1)
+    // obs (2)
     "take_startup_notice",
     "liveness_stamp",
     // uistate (12)

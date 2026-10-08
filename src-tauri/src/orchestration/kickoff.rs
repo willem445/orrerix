@@ -31,6 +31,12 @@ pub const PLANNER_READONLY_NOTE: &str = "You explore the codebase read-only to p
 #[doc(hidden)]
 pub const MANAGER_WORKSPACE_NOTE: &str = "You work in the repository itself — the human's own checkout, read-only. Read it freely so your questions are grounded in what is actually there; you never create branches, worktrees, commits, or PRs, and loomux denies your CLI's file-editing tools.";
 
+/// The workspace line a quick root's kickoff carries (#3679). It runs in the
+/// repository itself and is not clamped, so the line says what the class's
+/// instructions say and no deny tier enforces: the work happens in a helper's
+/// worktree, not here.
+pub const QUICK_ROOT_WORKSPACE_NOTE: &str = "You are in the repository itself — the human's own checkout. Read it freely, but do not edit files, commit or switch branches here: the work is done by the helpers you open, each in a worktree of its own.";
+
 /// The **non-overridable orrerix mechanics core** for a capability class
 /// (harvested from PR #105, issue #51).
 ///
@@ -332,6 +338,49 @@ bounds a runaway loop, and an idle helper is reaped on the group's timeout. None
 that applies to this pane: it is never reaped, never nagged and never counted — and you \
 cannot kill it, from here or from a helper. Closing it is the human's gesture, and it \
 ends the group."
+            .to_string(),
+        // #3679. Reached for the lead's reason — this runs for every block in a
+        // roster — so it is a contract and never an `unreachable!`.
+        //
+        // **Keep this arm in lockstep with `templates/quick.md`.** A quick block
+        // takes no persona (it is a fixture), so nothing replaces the template
+        // today; this is what a `mode: replace` reading would be left with if
+        // one ever did, and what `copilot_agent_body` embeds.
+        Role::Quick => "\
+These orrerix mechanics are guaranteed by the app and are NOT optional:
+\
+- **You were given one task, and you are the ROOT of this group.** There is no \
+orchestrator above you and no `message_orchestrator`: your helpers report to you, and \
+your own `report` is read by orrerix as the END of the run and typed into no pane.
+\
+- **`spawn_agent` opens a helper as a real orrerix pane**: `kind: \"worker\"`, \
+`\"reviewer\"` or `\"planner\"`, and nothing else — every other kind, and a second \
+agent like you, is refused with the reason. A helper starts cold and knows only what \
+you write in `task`. Helpers' worktrees share the repository, so a reviewer reads a \
+worker's commits without any push.
+\
+- Drive and read a helper with `send_prompt`, `get_output`, `list_agents`, \
+`kill_agent`, `focus_agent`, `rename_agent`, `fork_session`, and `group_usage` for \
+what the run has cost. These tools never need approval.
+\
+- **A helper's `report(\"done\"|\"blocked\")` is typed into THIS pane**, prefixed \
+`[orrerix]` and naming the helper. A `progress` report is recorded, not delivered. A \
+helper whose pane closes without reporting sends you nothing; `list_agents` shows it.
+\
+- **End the run with `report`**: `outcome: \"done\"` with where the work is and what \
+is left open, or `outcome: \"blocked\"` with the one thing the human has to decide — \
+the run is then held and they can resume it. Never use your CLI's own question dialog: \
+nobody is in this pane to answer it.
+\
+- You have no task board, no merge queue, no verdicts and no issue comments, and you \
+never merge, tag, publish, close or label anything. Do not edit files in this pane: it \
+is the human's own checkout, and the work belongs in a worker's worktree.
+\
+- Your helpers count against the live-agent cap and the spawn-rate limit the human set, \
+and the run has a time bound; when it is reached the run is held. **When the run is \
+held you are told here, and `spawn_agent` is refused until the human resumes it.** You \
+cannot be killed by a helper or by yourself, and if your pane closes your helpers are \
+closed with it."
             .to_string(),
     };
     // A role_hint (#250/#324/#891) addendum — the same non-overridable treatment as

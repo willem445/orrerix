@@ -52,6 +52,23 @@ pub async fn orch_quick_status(app: AppHandle, group_id: String) -> Result<Value
     run_blocking(move || Ok(reg.quick_status(&group))).await
 }
 
+/// Every quick run that has not ended, newest first — the launcher's list of
+/// runs to resume or stop when no pane is left to do it from. See
+/// [`OrchRegistry::quick_list`].
+///
+/// It takes no group: the point of the list is the runs nothing on screen
+/// names. Each row carries its own `group_id`, which is what the control verb
+/// is then given.
+///
+/// **Reentrancy.** A pure read — one directory listing and one record load per
+/// quick group, each under that record's state lock and released before the
+/// next. It writes nothing and holds nothing across groups.
+#[tauri::command]
+pub async fn orch_quick_list(app: AppHandle) -> Result<Value, String> {
+    let reg = reg_of(&app);
+    run_blocking(move || Ok(reg.quick_list())).await
+}
+
 /// Act on a quick run: `action` is one of [`QUICK_ACTIONS`] — `step`, `stop`,
 /// `resume`, `handoff`, `note` (which takes `text`). Returns the run's status
 /// afterwards, or for `note` whether it was typed into a pane.

@@ -66,7 +66,7 @@ export const ORCH_CLIS: OrchCli[] = [
     // Reasoning-heavy roles (orchestrator, planner) default to the strong
     // tier; executing roles (worker, reviewer) to the mid tier. `lead` copies
     // the orchestrator's tier (#2519 — the human-driven class).
-    defaults: { orchestrator: "opus", worker: "sonnet", reviewer: "sonnet", planner: "opus", manager: "opus", lead: "opus" },
+    defaults: { orchestrator: "opus", worker: "sonnet", reviewer: "sonnet", planner: "opus", manager: "opus", lead: "opus", quick: "opus" },
   },
   {
     // The one row that carries a FULL vendor catalog rather than a shortcut, and
@@ -140,7 +140,7 @@ export const ORCH_CLIS: OrchCli[] = [
       "grok-4.6",
       "mai-code-1.1-flash",
     ],
-    defaults: { orchestrator: "auto", worker: "auto", reviewer: "auto", planner: "auto", manager: "auto", lead: "auto" },
+    defaults: { orchestrator: "auto", worker: "auto", reviewer: "auto", planner: "auto", manager: "auto", lead: "auto", quick: "auto" },
   },
   {
     // #722. Model ids here are `provider_id/model_id` — the `/` is part of the
@@ -176,6 +176,8 @@ export const ORCH_CLIS: OrchCli[] = [
       planner: INHERIT_MODEL,
       manager: INHERIT_MODEL,
       lead: INHERIT_MODEL,
+
+      quick: INHERIT_MODEL,
     },
   },
   {
@@ -206,6 +208,8 @@ export const ORCH_CLIS: OrchCli[] = [
       planner: INHERIT_MODEL,
       manager: INHERIT_MODEL,
       lead: INHERIT_MODEL,
+
+      quick: INHERIT_MODEL,
     },
   },
   {
@@ -260,6 +264,8 @@ export const ORCH_CLIS: OrchCli[] = [
       // orchestrator default, which is the rule that doc states for `lead` —
       // and on codex every role inherits anyway.
       lead: INHERIT_MODEL,
+
+      quick: INHERIT_MODEL,
     },
   },
 ];

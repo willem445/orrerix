@@ -266,15 +266,24 @@ fn a_message_is_cut_and_the_messages_file_stops_growing() {
 
     let (is_error, answer) = send();
     assert!(!is_error, "{answer}");
+    assert!(answer.starts_with("recorded."), "the control: a saved message is called recorded: {answer}");
     let one = std::fs::metadata(&messages).expect("the control: the first message was saved").len();
     assert!(one > QD_BODY_CAP as u64 / 2, "most of a body cap was written: {one}");
     assert!(one < QD_BODY_CAP as u64 + 200, "one message is cut to the cap, not written whole: {one}");
 
     // Eighty more: 1.6 MB asked for against a 1 MiB ceiling.
+    let mut at_the_cap = String::new();
     for _ in 0..80 {
         let (is_error, answer) = send();
         assert!(!is_error, "a full file is not a tool error: {answer}");
+        at_the_cap = answer;
     }
+    // The caller is told the truth about the file: "recorded" would be a claim
+    // about a write that did not happen (#3681's deferred item).
+    assert!(at_the_cap.starts_with("NOT saved"), "{at_the_cap}");
+    assert!(at_the_cap.contains("messages file is full"), "and why: {at_the_cap}");
+    assert!(!at_the_cap.contains("recorded"), "{at_the_cap}");
+    assert!(is_one_paragraph(&at_the_cap), "{at_the_cap:?}");
     let total = std::fs::metadata(&messages).unwrap().len();
     assert!(total >= 1024 * 1024, "the control: the file did reach its ceiling: {total}");
     assert!(total < 1024 * 1024 + QD_BODY_CAP as u64 + 200, "and stopped one message past it at most: {total}");
@@ -283,4 +292,15 @@ fn a_message_is_cut_and_the_messages_file_stops_growing() {
     assert!(rows.iter().any(|d| d["saved"] == json!(true)), "the control: some were kept");
     let last = rows.last().expect("the calls were audited");
     assert_eq!(last["saved"], json!(false), "and the audit says which were not: {last}");
+
+    // The other answer, from a pane the run is no longer waiting on: once the
+    // run has parked on that first message, nothing but the file would have
+    // carried this one — so here "not saved" means nobody will read it.
+    step(&reg, &group, T0 + 2);
+    assert_eq!(held_reason(&reg, &group), "messaged");
+    let (is_error, parked) = send();
+    assert!(!is_error, "{parked}");
+    assert!(parked.starts_with("NOT saved"), "{parked}");
+    assert!(parked.contains("nobody will read this message"), "{parked}");
+    assert!(is_one_paragraph(&parked), "{parked:?}");
 }

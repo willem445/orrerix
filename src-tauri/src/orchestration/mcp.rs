@@ -15,6 +15,10 @@ use super::mailbox;
 use super::report;
 use super::workflow;
 use super::{Caller, Delivery, GroupId, NameSource, OrchRegistry, Role};
+
+// #3679: the quick root's surface — its listing, its dispatch gate and its
+// spawn rule. A child module so this file carries only the call sites.
+mod quickroot;
 // #1609: the thread-local read budget and the typed `Busy` a timed
 // acquisition answers with. See `docs/design/lock-liveness.md`.
 use loomux_engine::budget;
@@ -1623,6 +1627,11 @@ fn tool_defs(
         tools.push(group_usage_tool());
         return tools;
     }
+    // #3679: the quick root's positive enumeration — `quickroot` holds the
+    // list, and its module doc the argument for spelling it twice.
+    if role == Role::Quick {
+        return quickroot::tool_defs(tools);
+    }
     // POSTING A COMMENT ON AN ISSUE (#2815) — the planner's whole deliverable,
     // and the reason this is a TOOL rather than a line in an allowlist.
     //
@@ -2139,7 +2148,11 @@ fn require_orchestrator(caller: &Caller) -> Result<(), String> {
 /// orchestrator-only when a lead also holds it learns something untrue about
 /// the system it is in.
 fn require_spawner(caller: &Caller) -> Result<(), String> {
-    if matches!(caller.role, Role::Orchestrator | Role::Lead) {
+    // `Role::Quick` (#3679) joins the two, and what that admits is exactly the
+    // seven arms this gate fronts — spawn_agent, fork_session, send_prompt,
+    // get_output, kill_agent, focus_agent, rename_agent — all seven of which
+    // are on the quick root's enumerated surface (`quickroot::gate`).
+    if matches!(caller.role, Role::Orchestrator | Role::Lead | Role::Quick) {
         Ok(())
     } else {
         Err("permission denied: opening and driving agent panes is for an orchestrator, or a \
@@ -3005,6 +3018,12 @@ fn call_tool(reg: &OrchRegistry, caller: &Caller, name: &str, args: &Value) -> R
              your helpers report back to you"
         ));
     }
+    // THE QUICK ROOT'S DISPATCH GATE (#3679) — the real half of its double
+    // gate, for the reason stated twice above: without it a quick root's token
+    // reaches every arm below that has no role check of its own.
+    if caller.role == Role::Quick {
+        quickroot::gate(name)?;
+    }
     match name {
         "list_agents" => {
             let live_only = arg_bool(args, "live_only")?;
@@ -3560,7 +3579,7 @@ fn call_tool(reg: &OrchRegistry, caller: &Caller, name: &str, args: &Value) -> R
             // unchanged: a read of an aggregate scoped to the caller's own
             // group, settling nothing and writing nothing, answered in the pane
             // where the human is already asking what this is costing.
-            if caller.role != Role::Lead {
+            if !matches!(caller.role, Role::Lead | Role::Quick) {
                 require_orchestrator_or_liaison(caller, "usage aggregation")?;
             }
             let detail = arg_bool(args, "detail")?;
@@ -3990,6 +4009,22 @@ fn call_tool(reg: &OrchRegistry, caller: &Caller, name: &str, args: &Value) -> R
                     ));
                 }
             }
+            // #3679: the same rule for a quick root, at the same point and on
+            // the same EFFECTIVE class — a named block's kind wins over
+            // `kind:`, so the check has to read what the spawn resolves to.
+            // `quickroot::spawn_rule` says which three classes, and why
+            // `cwd` and `task_id` are refused with them.
+            if caller.role == Role::Quick {
+                let declared = block.as_deref().and_then(|id| {
+                    reg.group(&caller.group).and_then(|g| g.guardrails.block(id).map(|b| b.kind))
+                });
+                quickroot::spawn_rule(declared.or(kind), args)?;
+                // …and not while its run is held or over: this is what makes
+                // the run's bounds bind a root that is never reaped.
+                if let Some(refusal) = reg.qd_root_spawn_refusal(&caller.group) {
+                    return Err(refusal);
+                }
+            }
             // rev-13 finding on #345 (extended for #359 to cover reviewers too):
             // a worker/reviewer RESUME that omits `cwd` fell through silently to
             // `spawn_agent_ex`'s per-role default — the main clone for anything
@@ -4146,6 +4181,12 @@ fn call_tool(reg: &OrchRegistry, caller: &Caller, name: &str, args: &Value) -> R
         // `orch_fork_agent` command gets the same sentences this does.
         "fork_session" => {
             require_spawner(caller)?;
+            // #3679: a fork opens a pane too, so it takes `spawn_agent`'s gate.
+            if caller.role == Role::Quick {
+                if let Some(refusal) = reg.qd_root_spawn_refusal(&caller.group) {
+                    return Err(refusal);
+                }
+            }
             let target = arg_str(args, "agent").ok_or("agent required")?;
             let task = arg_str(args, "task").unwrap_or("");
             let name = arg_str(args, "name").unwrap_or("");

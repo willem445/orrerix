@@ -2633,7 +2633,7 @@ button.orch-item:active { transform: translateX(2px) scale(0.995); }
    side by side with its instructions box underneath; the boxes are plain
    textareas in the dialog's own input dress, resizable downward only so a long
    instruction never widens the card. */
-.quick-section { gap: 10px; }
+.quick-section { display: flex; flex-direction: column; gap: 10px; }
 .quick-section[hidden] { display: none; }
 .quick-text { resize: vertical; min-height: 2.6em; font-family: inherit; line-height: 1.35; }
 .quick-steps { gap: 16px; align-items: center; }

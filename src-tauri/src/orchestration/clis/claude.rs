@@ -337,7 +337,7 @@ pub fn claude_denies_interactive_question(role: Role, role_hint: Option<&str>) -
     // that pane while they queue behind it — with nobody in the pane to
     // answer, since orrerix opened it. A root that needs the human says so
     // with `report(outcome=blocked)`, which holds the run and notifies them.
-    role == Role::Orchestrator || role == Role::Quick || role_hint == Some("liaison")
+    role == Role::Orchestrator || role_hint == Some("liaison")
 }
 
 /// The generic Claude PreCompact / SessionStart(compact) hook body (#417),

@@ -1290,7 +1290,7 @@ pub fn decide(rec: &QuickDriveRecord, facts: &QuickFacts, limits: &QuickLimits) 
     if facts.provider_limited {
         return Some(QuickStep::held(QuickHeld::ProviderLimit));
     }
-    if !facts.pane_alive {
+    if facts.pane_alive {
         return Some(QuickStep::held(QuickHeld::gone(side)));
     }
     if let Some((bound, reason)) = state_bound(state, &limits) {

@@ -657,7 +657,7 @@ fn group_usage_serves_one_snapshot_per_window_and_recomputes_past_it() {
         reg.group_usage_within(&g.id, window)["lifetime_tokens"].as_u64(),
         Some(1500),
         "#743 S4b: a second polled caller inside the window must be served the stored \
-         snapshot — not a second per-live-agent transcript scan and usage.json rewrite"
+         snapshot — not a second per-live-agent transcript scan and usage-store merge"
     );
     assert_eq!(
         reg.group_usage_within(&g.id, Duration::ZERO)["lifetime_tokens"].as_u64(),

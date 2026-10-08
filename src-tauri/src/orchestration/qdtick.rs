@@ -63,7 +63,11 @@ pub const QUICK_FIX_TPL: &str = include_str!("templates/quick-fix.md");
 /// the id, beside `LEAD_MARKER`, so a group dir that is later handed to an
 /// ordinary orchestration does not answer [`OrchRegistry::is_quick_group`] for
 /// the rest of its life.
-pub const QUICK_MARKER: &str = "quick";
+///
+/// **Not `quick`**: that name is the run's document DIRECTORY
+/// (`quickdrive::QUICK_DIR`), and a file of that name beside it would make the
+/// directory impossible to create.
+pub const QUICK_MARKER: &str = "quickrun";
 
 /// How long one interpolated single-line fact may be — `rd_fact`'s cap, for
 /// its reason: a brief is a prompt, and a prompt is the pane's resident

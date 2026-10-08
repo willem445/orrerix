@@ -198,8 +198,11 @@ pub enum Role {
     /// than arms so they cannot be forgotten at one site: it is the ROOT of its
     /// group ([`Role::is_root`] — a delegate's `report` is typed into it), and
     /// it is a FIXTURE ([`Role::is_fixture`] — never reaped, never counted
-    /// against the cap it spends on its own delegates, never spawnable by an
-    /// agent, and never given a repo-authored persona).
+    /// against the cap it spends on its own delegates, never LISTED to an
+    /// agent as a block it could spawn, and never given a repo-authored
+    /// persona). That listing is cosmetic: what REFUSES a spawn of the root's
+    /// own block is the quick root's spawn rule in `src-tauri`, which admits
+    /// three classes and nothing else.
     ///
     /// **Never nameable by a workflow file, and that is the no-nesting
     /// enforcement**, exactly as for a lead:
@@ -367,10 +370,13 @@ impl Role {
     /// `Role::Quick` (#3679) is the fourth, and the one fixture orrerix opens
     /// without a human at that pane: it is the root of a run the human started,
     /// so reaping it ends the run from underneath its own delegates, counting
-    /// it spends a cap slot the run budgeted for a worker, and a spawnable or
-    /// repo-personable one is a second root or a repo-authored root — each of
-    /// which the class exists to rule out. It is bounded instead by its run's
-    /// time bound, which is a clock a fixture's exemptions do not touch.
+    /// it spends a cap slot the run budgeted for a worker, and a
+    /// repo-personable one is a repo-authored root, which the class exists to
+    /// rule out. (This predicate also keeps the root's block out of the list
+    /// of blocks an agent is shown as spawnable; it is not what refuses a
+    /// spawn of it — `spawn_agent`'s class rule is.) It is bounded instead by
+    /// its run's bounds, which a fixture's exemptions do not touch: a run that
+    /// is held or over tells its root and refuses it new helpers.
     ///
     /// Pinned as a SET (`the_fixture_classes_are_exactly_these_four`) so a
     /// later class is a deliberate addition rather than a default.

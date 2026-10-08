@@ -229,6 +229,10 @@ fn the_roots_done_ends_the_run_and_reaches_no_pane() {
     assert!(items[0].text.contains("no review was needed"), "{}", items[0].text);
     assert!(items[0].text.contains("PR #77"), "{}", items[0].text);
 
+    // A run that is over opens nothing further, whatever its root still wants.
+    let (is_error, text) = call(&reg, &root, "spawn_agent", json!({ "kind": "worker", "task": "t" }));
+    assert!(is_error && text.contains("this quick run has ended"), "{text}");
+
     // From here the run owns nothing: the root's next report is answered, not consumed.
     let late = report(&reg, &root, json!({ "outcome": "done", "note": "again" }));
     assert!(late.contains("ended"), "{late}");
@@ -282,6 +286,9 @@ fn stopping_a_described_run_tells_its_root_and_kills_nothing() {
     );
     let live = live_agents(&reg, &group);
     assert!(live.contains(&root) && live.contains(&worker), "{live:?}");
+    // And the line is not only an instruction: a stopped run opens nothing more.
+    let (is_error, text) = call(&reg, &root, "spawn_agent", json!({ "kind": "worker", "task": "t" }));
+    assert!(is_error && text.contains("this quick run has ended"), "{text}");
 }
 
 /// **A root that dies parks the run and takes its helpers with it** — nothing
@@ -564,4 +571,74 @@ fn a_quick_root_never_reaches_a_panicking_arm() {
     assert!(loomux_lib::orchestration::QUICK_TPL.contains("Never merge, tag, publish or release"));
     assert!(Role::Quick.is_fixture() && Role::Quick.is_root());
     assert!(!loomux_lib::orchestration::counts_against_max_agents(Role::Quick));
+}
+
+/// **A described run held at its time bound tells its root and refuses it new
+/// helpers** (#3712 review). The root is never reaped and is not waiting for
+/// orrerix to hand it anything, so a hold that only changed the record bound
+/// nothing: the root went on opening and driving helpers until it next tried
+/// to report. The line is the instruction; the refusal is what binds.
+#[test]
+fn a_described_run_held_at_its_time_bound_tells_its_root_and_refuses_it_new_helpers() {
+    let dir = tempfile::tempdir().unwrap();
+    let reg = relaunch_registry(dir.path());
+    let repo = Repo::new();
+    let (group, root) = describing_with(&reg, &repo, |r| r.drive_timeout_minutes = Some(5));
+    // The control: inside the bound the root opens a helper.
+    let worker = open_helper(&reg, &group, &root, "worker");
+    make_deliverable(&reg, &group, &root, 7721);
+    let held_lines = |reg: &OrchRegistry| {
+        texts_to(reg, &group, &root).iter().filter(|t| t.contains("this quick run is now HELD")).count()
+    };
+    assert_eq!(held_lines(&reg), 0, "nothing is said before the bound");
+
+    step(&reg, &group, T0 + 6 * MIN);
+    assert_eq!(held_reason(&reg, &group), "drive-stalled");
+    let typed = texts_to(&reg, &group, &root);
+    let line = typed
+        .iter()
+        .find(|t| t.contains("this quick run is now HELD"))
+        .unwrap_or_else(|| panic!("the root was told nothing: {typed:?}"));
+    assert!(line.contains("(drive-stalled)"), "it names the reason: {line}");
+    assert!(line.contains("spawn_agent is refused"), "and what follows from it: {line}");
+    assert!(is_one_paragraph(line), "{line:?}");
+
+    // The enforcement: a new helper and a fork are both refused, by the run's
+    // state and in its words, and nothing was opened.
+    let (is_error, spawn) = call(&reg, &root, "spawn_agent", json!({ "kind": "worker", "task": "more" }));
+    assert!(is_error && spawn.contains("this quick run is held (drive-stalled)"), "{spawn}");
+    let (is_error, fork) = call(&reg, &root, "fork_session", json!({ "agent": worker }));
+    assert!(is_error && fork.contains("this quick run is held (drive-stalled)"), "{fork}");
+    let mut live = live_agents(&reg, &group);
+    live.sort();
+    let mut expected = vec![root.clone(), worker.clone()];
+    expected.sort();
+    assert_eq!(live, expected, "the hold opened nothing and killed nothing");
+
+    // Told once per hold, not once per look.
+    step(&reg, &group, T0 + 6 * MIN + 1);
+    assert_eq!(held_lines(&reg), 1);
+
+    // Resume is what lifts it: the same root may open a helper again.
+    let after = reg.quick_resume_at(&group, T0 + 7 * MIN).expect("the run resumes");
+    assert_eq!(after["state"], json!("root-wait"), "{after}");
+    open_helper(&reg, &group, &root, "reviewer");
+}
+
+/// **A steps run's panes are told nothing by this**, and its hold behaves as it
+/// did: the line and the refusal are a described run's, and the control is a
+/// steps run parked at the same bound.
+#[test]
+fn a_steps_run_held_at_its_time_bound_types_no_hold_line_into_any_pane() {
+    let dir = tempfile::tempdir().unwrap();
+    let reg = relaunch_registry(dir.path());
+    let repo = Repo::new();
+    let (group, worker) = working_with(&reg, &repo, |r| r.drive_timeout_minutes = Some(5));
+    make_deliverable(&reg, &group, &worker, 7722);
+    step(&reg, &group, T0 + 6 * MIN);
+    assert_eq!(held_reason(&reg, &group), "drive-stalled", "the control: the same hold");
+    assert!(
+        !delivered_texts(&reg, &group).iter().any(|t| t.contains("this quick run is now HELD")),
+        "a steps run relays; it does not announce"
+    );
 }

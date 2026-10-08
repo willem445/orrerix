@@ -46,7 +46,6 @@ export const QUICK_STEP_CLIS: Record<QuickStep, readonly string[]> = {
   review: ["claude", "copilot", "gemini", "opencode", "pi"],
 };
 
-/** The review-round bound: the review driver's own `1..=3`. */
 /** The two ways to run a quick task (#3679).
  *
  *  - `steps`: orrerix relays between a planner, a worker and a reviewer itself.
@@ -63,6 +62,7 @@ export const QUICK_MODES: readonly QuickMode[] = ["steps", "describe"];
  *  step lists in `test/quickmodel.test.ts`. */
 export const QUICK_ROOT_CLIS: readonly string[] = ["claude", "copilot", "gemini", "opencode", "pi", "codex"];
 
+/** The review-round bound: the review driver's own `1..=3`. */
 export const QUICK_ROUNDS = { min: 1, max: 3, default: 3 } as const;
 
 /** The run's overall time bound, in minutes: the review driver's own

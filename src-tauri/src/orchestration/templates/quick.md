@@ -63,6 +63,9 @@ message carries the task and the run's limits.
   spawn-rate limit bounds a runaway loop. A refused `spawn_agent` says which.
 - The run has a time bound, given in your first message. When it is reached the run
   is held for the human whether or not you have reported.
+- When the run is held, for that or any other reason, you are told in this pane.
+  Stop there: `spawn_agent` is refused until the human resumes the run. You may still
+  read your helpers' output and tell one to stop.
 - You cannot be ended by a helper, and you cannot end yourself with `kill_agent`. If
   your pane closes, your helpers are closed with it.
 - After you report `done`, your pane and your helpers' panes stay open for the human

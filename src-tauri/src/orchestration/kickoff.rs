@@ -377,8 +377,10 @@ never merge, tag, publish, close or label anything. Do not edit files in this pa
 is the human's own checkout, and the work belongs in a worker's worktree.
 \
 - Your helpers count against the live-agent cap and the spawn-rate limit the human set, \
-and the run has a time bound; when it is reached the run is held. You cannot be killed \
-by a helper or by yourself, and if your pane closes your helpers are closed with it."
+and the run has a time bound; when it is reached the run is held. **When the run is \
+held you are told here, and `spawn_agent` is refused until the human resumes it.** You \
+cannot be killed by a helper or by yourself, and if your pane closes your helpers are \
+closed with it."
             .to_string(),
     };
     // A role_hint (#250/#324/#891) addendum — the same non-overridable treatment as

@@ -485,16 +485,29 @@ the thing #222 exists to rule out. So the difference is a class.
 `Role::is_root` is what a delegate's `report` is delivered by, so a quick
 root's helpers report to it with no new code on that path. `Role::is_fixture`
 is the one exemption rule the cap, the dock, the reaper, the watchdog, the
-review driver, `spawn_agent` and persona ownership all read, so a quick root is
-never reaped, never counted against the cap it spends on its own helpers, never
-spawnable by an agent and never given a repo-authored persona — each at the one
-place that already decided it for the other fixtures.
+review driver, the spawnable-block listing and persona ownership all read, so a
+quick root is never reaped, never counted against the cap it spends on its own
+helpers, never listed to an agent as a block it could spawn and never given a
+repo-authored persona — each at the one place that already decided it for the
+other fixtures. The listing is cosmetic. What refuses a spawn of the root's own
+block is the spawn rule in §15.3, and nothing else: with that rule removed the
+answer was a second root, opened.
 
 **It is unclamped** (`Containment::None`), for the orchestrator's reason: it
 delegates and decides, in the repository, with no worktree of its own. Every CLI
 can therefore host it, which is why a described run is not limited to the CLIs
 that can be held read-only. What bounds it is the four things below, none of
 which a deny tier can express.
+
+**The run's bounds reach the root, or they would bind nothing.** The root is
+never reaped, it is not waiting for orrerix to hand it anything, and a record
+changing on disk tells it nothing. So when a described run is held — at its
+time bound, on a provider limit, for any reason — two things happen besides the
+notice to the human: one line is typed into the root's pane saying the run is
+held and why, and `spawn_agent` and `fork_session` refuse it until the run is
+resumed. A run that has ended refuses them for good. `send_prompt` and
+`get_output` are left alone, so a held root can still read what its helpers
+did and tell one to stop.
 
 ### 15.2 What it may call
 
@@ -632,6 +645,12 @@ The decisions fall into four groups:
 - **The round bound is an instruction.** The record counts no rounds for a
   described run, because the reviews happen between the root and its helpers.
   The root is told the bound; the time bound is the one the engine enforces.
+- **A root that reports `done` while a helper is still working** leaves that
+  helper running. Nothing is killed at the end of a run, in either mode; the
+  panes are the human's.
+- **The list of unfinished runs reads every quick record** each time the form
+  opens, and ended runs are never pruned from disk. That is one small file per
+  run ever started.
 - **Helpers are listed flat** in the agent rows, not nested under the root.
 - **A root's session is not rejoined by hand.** The session browser's rejoin
   refuses a recorded role it has no class for; the run's own Resume is the way.
@@ -656,8 +675,13 @@ exactly how a new run is started; a card has no tab to offer.
 **Closing a tab** closes its panes. The engine parks the run when it next looks
 and finds the pane that held the turn gone. In the window, a run is painted onto
 the panes of the tab its group is bound to, so when that tab closes the run
-stops being polled at once; the poll had no reader. The run itself is not ended
-by closing a tab, and it is on the list.
+stops being polled at once; the poll had no reader. "Shown" is asked of the
+panes as well as of the binding, so a run whose pane was dragged to another tab
+is still read while that pane is on screen. The run itself is not ended by
+closing a tab, and it is on the list.
+
+A start or a Resume whose pane fails to open undoes the tab binding it made. A
+tab bound to a group it shows nothing of would read as that group's tab.
 
 **A first pane that never opens.** A new pane is not known to have failed until
 the backend's bind deadline (`BIND_TIMEOUT`, 20 s) has passed; until then the

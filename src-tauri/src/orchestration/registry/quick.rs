@@ -92,8 +92,11 @@ pub struct QuickStartRequest {
 }
 
 /// The live-agent cap a quick group gets when the launcher names none: one
-/// pane per step. A run never needs more — exactly one pane holds the turn —
-/// and a cap this low is what bounds a run that somehow opened more.
+/// pane per kind of delegate. A steps run never needs more, since exactly one
+/// of its panes holds the turn at a time; in a described run it is how many
+/// helpers the root may have open at once, and the root itself is a fixture
+/// and is not counted. A cap this low is what bounds a run that asked for
+/// more.
 pub const QUICK_MAX_AGENTS_DEFAULT: u32 = 3;
 
 /// Every action `orch_quick_control` accepts. Closed: an unknown word is
@@ -242,11 +245,10 @@ impl OrchRegistry {
             auto_ops: req.auto_ops,
             idle_kill_minutes: req.idle_kill_minutes,
             max_spawns_per_hour: req.max_spawns_per_hour,
-            // (A described run does have a root — but the watchdog's notice
-            // is addressed to an ORCHESTRATOR, which no quick group has, and
-            // the run's own time bound is the clock on a quiet root.)
-            // The watchdog's notice goes to the group's root, and this group
-            // has none — a stall here is the run's own bounds to report.
+            // The watchdog's notice is addressed to an ORCHESTRATOR, and no
+            // quick group has one — a steps run has no root at all, and a
+            // described run's root is not an orchestrator. A stall here is
+            // the run's own bounds to report, in either mode.
             watchdog_stall_minutes: 0,
             ..Guardrails::default()
         };
@@ -660,6 +662,40 @@ impl OrchRegistry {
             .values()
             .find(|a| &a.group == group && a.status != AgentStatus::Dead && a.role.is_root())
             .map(|a| a.id.clone())
+    }
+
+    /// Why a described run's root may not open another helper right now, or
+    /// `None` when it may (#3712 review).
+    ///
+    /// The root is unclamped and is never reaped, and the argument for that is
+    /// that its run's bounds bound it. A bound that only changed a record
+    /// would bind nothing: `spawn_agent` and `fork_session` read no run
+    /// state, so a root whose run was held at its time bound — or had ended —
+    /// could go on opening helpers for as long as it liked. So both ask here
+    /// first. A run that is held refuses until the human resumes it; a run
+    /// that is over refuses for good.
+    ///
+    /// `send_prompt` and `get_output` are not gated: a held root may still
+    /// read what its helpers have done and tell one to stop, and the human who
+    /// resumes the run finds the same panes it left.
+    pub(in crate::orchestration) fn qd_root_spawn_refusal(&self, group: &GroupId) -> Option<String> {
+        let run = self.qd_load_run(group).ok().flatten()?;
+        if !run.described {
+            return None;
+        }
+        match run.state() {
+            QuickState::Held => Some(format!(
+                "this quick run is held ({}) — open no further helpers until the human \
+                 resumes it. They have been told why.",
+                run.held_reason.map(|h| h.as_str()).unwrap_or("held")
+            )),
+            s if s.is_terminal() => Some(
+                "this quick run has ended — open nothing further. Its panes are the human's to \
+                 read or close."
+                    .to_string(),
+            ),
+            _ => None,
+        }
     }
 
     // ---------- force a hand-off ----------

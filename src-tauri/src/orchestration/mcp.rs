@@ -4019,6 +4019,11 @@ fn call_tool(reg: &OrchRegistry, caller: &Caller, name: &str, args: &Value) -> R
                     reg.group(&caller.group).and_then(|g| g.guardrails.block(id).map(|b| b.kind))
                 });
                 quickroot::spawn_rule(declared.or(kind), args)?;
+                // …and not while its run is held or over: this is what makes
+                // the run's bounds bind a root that is never reaped.
+                if let Some(refusal) = reg.qd_root_spawn_refusal(&caller.group) {
+                    return Err(refusal);
+                }
             }
             // rev-13 finding on #345 (extended for #359 to cover reviewers too):
             // a worker/reviewer RESUME that omits `cwd` fell through silently to
@@ -4176,6 +4181,12 @@ fn call_tool(reg: &OrchRegistry, caller: &Caller, name: &str, args: &Value) -> R
         // `orch_fork_agent` command gets the same sentences this does.
         "fork_session" => {
             require_spawner(caller)?;
+            // #3679: a fork opens a pane too, so it takes `spawn_agent`'s gate.
+            if caller.role == Role::Quick {
+                if let Some(refusal) = reg.qd_root_spawn_refusal(&caller.group) {
+                    return Err(refusal);
+                }
+            }
             let target = arg_str(args, "agent").ok_or("agent required")?;
             let task = arg_str(args, "task").unwrap_or("");
             let name = arg_str(args, "name").unwrap_or("");

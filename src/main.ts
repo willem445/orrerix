@@ -476,7 +476,17 @@ tabs.onChange(() => refreshAgents());
 // status onto, so it stops being polled here. The run is not ended by that —
 // the engine parks it when the pane that held the turn is gone — and it stays
 // reachable from the Quick task form's list of unfinished runs.
-tabs.onChange(() => quickRuns.retain((group) => tabs.workspaceForGroup(group) !== undefined));
+//
+// "Shown" is asked of the panes as well as of the binding: a pane dragged to
+// another tab is still on screen after the tab its group was bound to closes,
+// and a run with a pane on screen is still painted, so it is still read.
+tabs.onChange(() =>
+  quickRuns.retain(
+    (group) =>
+      tabs.workspaceForGroup(group) !== undefined ||
+      tabs.tabs.some((ws) => ws.grid.allPanes().some((p) => p.orchGroupId === group))
+  )
+);
 
 // Voice push-to-talk (#58, Alt+S): the global capture controller finds its
 // insertion target via the active pane (of the active tab).
@@ -2662,6 +2672,10 @@ async function handleWelcomeSubmit(
         await quickControl(started.group_id, "stop")
           .then((s) => quickRuns.accept(started.group_id, s))
           .catch(() => {});
+        // The run is over and no pane of it ever opened here, so this tab is
+        // not that group's tab after all.
+        tabs.forgetGroup(started.group_id);
+        persistTabs();
         throw new Error(verdict.why);
       }
       if (verdict.kind === "opening") throw new Error(QUICK_STILL_OPENING);
@@ -2685,7 +2699,13 @@ async function handleWelcomeSubmit(
       const verdict = await quickFirstPane(result.groupId, await quickControl(result.groupId, "resume"));
       // Nothing is stopped on a failure here. The run was parked before and is
       // parked again, with the reason on its row in the same list.
-      if (verdict.kind === "failed") throw new Error(verdict.why);
+      if (verdict.kind === "failed") {
+        // No pane opened, so the binding made above is undone: a tab bound to
+        // a group it shows nothing of would read as that group's tab.
+        tabs.forgetGroup(result.groupId);
+        persistTabs();
+        throw new Error(verdict.why);
+      }
       if (verdict.kind === "opening") throw new Error(QUICK_STILL_OPENING);
       ws.grid.closePane(pane, false);
       onGridChanged();

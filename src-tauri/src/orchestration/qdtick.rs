@@ -961,6 +961,9 @@ impl OrchRegistry {
         if parked_or_finished {
             out.notice = self.qd_raise_notice(group, &cur, now);
         }
+        if parked_or_finished && cur.state() == QuickState::Held {
+            self.qd_tell_root_held(&cur);
+        }
         out.state = cur.state().as_str().to_string();
         out
     }
@@ -1690,6 +1693,48 @@ impl OrchRegistry {
             .collect();
         out.sort_by(|a, b| a.as_str().cmp(b.as_str()));
         out
+    }
+
+    /// **Tell a described run's root that the run has been held** — once per
+    /// hold, best-effort, into its own pane.
+    ///
+    /// In a steps run a hold needs no announcement: every pane is between
+    /// turns or waiting for one, and the pane that would have gone next is
+    /// simply not briefed. A described run's root is not waiting for orrerix
+    /// to hand it anything. It is mid-decision, its helpers are still
+    /// reporting to it, and a record changing on disk tells it nothing — so
+    /// without this line a run "held at its time bound" went on opening and
+    /// driving helpers until the root next tried to report (#3712 review).
+    /// Stop already told the root for this reason; a hold is the same case.
+    ///
+    /// The line is the instruction. The enforcement is beside it:
+    /// `qd_root_spawn_refusal` refuses the root a new helper while the run is
+    /// held or over, which is what makes the time bound a bound.
+    ///
+    /// A hold whose root is not alive — its pane closed, or the app restarted
+    /// — has nobody to tell, and says nothing.
+    pub(super) fn qd_tell_root_held(&self, rec: &QuickDriveRecord) {
+        if !rec.described {
+            return;
+        }
+        let root = rec.pane(QuickSide::Root).agent.clone();
+        if !self.agent(&root).is_some_and(|a| a.status != AgentStatus::Dead) {
+            return;
+        }
+        let reason = rec.held_reason.unwrap_or(QuickHeld::Unresumable);
+        let line = format!(
+            "{} this quick run is now HELD ({}): {}. Open no further helpers and send no \
+             further work — spawn_agent is refused while the run is held. Wait: the human has \
+             been told, and will resume the run or stop it.",
+            brand::NOTICE_MARKER,
+            reason.as_str(),
+            reason.notice_line(),
+        );
+        // Best-effort, like Stop's line: a root that cannot be typed into is
+        // still refused new helpers, which is the half that does not depend
+        // on it reading anything. The delivery audits itself as a `prompt`
+        // row, so the group's log shows the line and who it was for.
+        let _ = self.deliver_prompt(&root, &line, brand::AUDIT_ACTOR, Delivery::MidSession);
     }
 }
 

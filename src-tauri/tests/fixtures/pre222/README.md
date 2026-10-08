@@ -1748,4 +1748,6 @@ comparison is honest either way. If it still says MISMATCH, that is a real one.
   are per-group value variables, which the golden keeps literal.
 
   The four quick BRIEF templates and the new `quick-root.md` are not in this directory and
-  never were: they are pinned by their own goldens in `tests/quickdrive/briefs.rs`.
+  never were. The four are pinned by their own goldens in `tests/quickdrive/briefs.rs`, and
+  `quick-root.md` by `the_root_brief_is_byte_for_byte_what_the_root_is_opened_with` in
+  `tests/quickdrive/described.rs`.

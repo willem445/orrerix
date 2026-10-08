@@ -200,6 +200,8 @@ What the agent can and cannot do:
 - It cannot be closed by one of its helpers. If you close its pane, its helpers
   are closed with it and the run is held.
 - **Stop quick run** tells it to stop and closes nothing.
+- When the run is held — at its time bound, for example — the agent is told,
+  and it cannot open any more helpers until you resume the run.
 
 ## Runs that have not ended
 

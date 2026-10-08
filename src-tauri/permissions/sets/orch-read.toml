@@ -28,6 +28,7 @@ permissions = [
     "allow-orch-questions-list",
     "allow-orch-needs-you-list",
     "allow-orch-quick-status",
+    "allow-orch-quick-list",
     "allow-orch-channel-list",
     "allow-orch-channel-for-pane",
     "allow-todo-snapshot",

@@ -584,14 +584,35 @@ impl OrchRegistry {
                 sig.message = qd_fact(&format!("{agent_id}: {line}"));
             }
             self.qd_kick(group);
-            return "recorded. This is a quick run with no orchestrator, so nobody can answer \
-                    in another pane: the run is being held and the human is shown your message. \
-                    Carry on only if you can without the answer."
-                .to_string();
+            // The hold notice carries the message whether or not the file
+            // took it, so the human is still shown it — but "recorded" would
+            // be a claim about a file that was not written.
+            return match &appended {
+                Ok(()) => "recorded. This is a quick run with no orchestrator, so nobody can \
+                           answer in another pane: the run is being held and the human is shown \
+                           your message. Carry on only if you can without the answer."
+                    .to_string(),
+                Err(e) => format!(
+                    "NOT saved to the run's messages file ({e}). This is a quick run with no \
+                     orchestrator, so nobody can answer in another pane: the run is being held \
+                     and the human is shown this message in the hold notice only. Carry on only \
+                     if you can without the answer."
+                ),
+            };
         }
-        "recorded for the human. This is a quick run with no orchestrator, and the run is not \
-         waiting on this pane, so nothing else happens — tell the human in this pane."
-            .to_string()
+        match &appended {
+            Ok(()) => "recorded for the human. This is a quick run with no orchestrator, and the \
+                       run is not waiting on this pane, so nothing else happens — tell the human \
+                       in this pane."
+                .to_string(),
+            // Nothing else carries a message from a pane the run is not
+            // waiting on, so here "not saved" means nobody will read it.
+            Err(e) => format!(
+                "NOT saved ({e}), so nobody will read this message: this is a quick run with no \
+                 orchestrator and the run is not waiting on this pane. Tell the human in this \
+                 pane."
+            ),
+        }
     }
 
     /// Write one of the run's documents atomically, sanitized. `Lines::Keep`:
@@ -1569,13 +1590,28 @@ impl OrchRegistry {
         if !first {
             return;
         }
-        let Ok(entries) = fs::read_dir(&self.root) else { return };
-        for e in entries.flatten() {
-            let Ok(found) = GroupId::parse(&e.file_name().to_string_lossy()) else { continue };
-            if self.is_quick_group(&found) {
-                self.qd_reconcile(&found, now);
-            }
+        for found in self.qd_quick_groups() {
+            self.qd_reconcile(&found, now);
         }
+    }
+
+    /// Every quick group on disk, by reading the orchestration root.
+    ///
+    /// One reader for the two callers that need the whole set rather than
+    /// what this process happens to hold in memory: the start-up scan above,
+    /// and the launcher's list of unfinished runs
+    /// ([`quick_list`](Self::quick_list)), which exists precisely for runs no
+    /// pane and no tab points at any more. A name that does not parse as a
+    /// `GroupId` is skipped rather than joined.
+    pub(super) fn qd_quick_groups(&self) -> Vec<GroupId> {
+        let Ok(entries) = fs::read_dir(&self.root) else { return Vec::new() };
+        let mut out: Vec<GroupId> = entries
+            .flatten()
+            .filter_map(|e| GroupId::parse(&e.file_name().to_string_lossy()).ok())
+            .filter(|g| self.is_quick_group(g))
+            .collect();
+        out.sort_by(|a, b| a.as_str().cmp(b.as_str()));
+        out
     }
 }
 

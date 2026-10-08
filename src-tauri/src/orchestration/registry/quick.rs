@@ -325,6 +325,43 @@ impl OrchRegistry {
         }
     }
 
+    /// **Every quick run that has not ended**, newest first — what the
+    /// launcher's Quick task form lists so a run can be resumed or stopped
+    /// without a pane (#3679).
+    ///
+    /// Resume and Stop live on a pane's menu, and a run can outlive every one
+    /// of its panes: close them, or quit and reopen the app, and the run is
+    /// still on disk, parked, with nothing on screen that leads to it. So the
+    /// list is read off the records themselves rather than off anything a
+    /// human can close or dismiss — which is why it is a list here and not a
+    /// button on the run's needs-you item.
+    ///
+    /// **A pure read**, like [`quick_status`](Self::quick_status): it parks
+    /// nothing, so a run an earlier process left working reads as working
+    /// until the tick's start-up scan or a control verb reconciles it. Each
+    /// row is that run's status with its group's repository beside it.
+    pub fn quick_list(&self) -> Value {
+        let mut rows: Vec<(u64, Value)> = Vec::new();
+        for group in self.qd_quick_groups() {
+            let Ok(Some(run)) = self.qd_load_run(&group) else { continue };
+            if run.state().is_terminal() {
+                continue;
+            }
+            let mut row = self.qd_status_json(&group, &run);
+            let repo = self
+                .group(&group)
+                .map(|g| g.repo)
+                .or_else(|| self.load_group_file(&group).map(|(repo, _)| repo))
+                .unwrap_or_default();
+            if let Some(o) = row.as_object_mut() {
+                o.insert("repo".to_string(), json!(repo));
+            }
+            rows.push((run.started_ms, row));
+        }
+        rows.sort_by(|a, b| b.0.cmp(&a.0));
+        Value::Array(rows.into_iter().map(|(_, row)| row).collect())
+    }
+
     fn qd_status_json(&self, group: &GroupId, r: &QuickDriveRecord) -> Value {
         let pane = |side: quickdrive::QuickSide| {
             let p = r.pane(side);

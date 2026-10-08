@@ -574,6 +574,7 @@ impl OrchRegistry {
             self.note_poll_read(group, "usage-store", Ok(()));
             return rows;
         }
+        let carried: HashSet<String> = incoming.iter().map(|s| s.key.clone()).collect();
         let (mut changed, mut added) = (false, false);
         for snap in incoming {
             let key = snap.key.clone();
@@ -584,6 +585,7 @@ impl OrchRegistry {
             }
             added |= merged == RowMerge::Added;
         }
+        let added = added || (changed && !store.overlay.iter().all(|k| carried.contains(k)));
         let wrote = match plan_usage_write(changed, added, settle, !store.overlay.is_empty()) {
             UsageWrite::Nothing => Ok(()),
             _ if fail_writes => Err(std::io::Error::new(

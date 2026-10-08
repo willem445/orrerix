@@ -735,6 +735,15 @@
 //! already reads — no I/O, no clock — so it sits beside [`usageseries`], whose
 //! inputs it shares. The fold runs inside `src-tauri`'s usage merge and the
 //! decision inside its compact-nudge loop. See `docs/design/cache-age.md`.
+//!
+//! [`quickdrive`] (#3679) is the quick task's pure core: the state machine of
+//! one short-lived plan → work → review run that has no orchestrator pane, its
+//! persisted record, and the per-tick decision. It is here for [`plandrive`]'s
+//! reason — closed enums, an enumerated arc table and a `decide` over values —
+//! and it reuses [`reviewdrive::DriveLimits`] for its bounds rather than
+//! declaring a second set. The wiring that opens panes, types briefs and
+//! raises the finish notice is `src-tauri/src/orchestration/qdtick.rs`. See
+//! `docs/design/quick-orchestration.md`.
 
 pub mod brand;
 pub mod boundedread;
@@ -762,6 +771,7 @@ pub mod profiles;
 pub mod providerlimit;
 pub mod published;
 pub mod queue;
+pub mod quickdrive;
 pub mod queuestate;
 pub mod report;
 pub mod rddrive;

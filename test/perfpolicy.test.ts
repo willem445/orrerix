@@ -577,6 +577,23 @@ const TIMERS: TimerRow[] = [
     overlapGate: null,
   },
   {
+    key: "src/quickruns.ts@QUICK_POLL_MS",
+    cadenceMs: 4000,
+    policy: "gated",
+    reason:
+      "The quick run's status chip (#3679). Wanted only while some run this window shows is in a " +
+      "WORKING state: a parked run moves when the human resumes or stops it (which refreshes it " +
+      "directly) and a finished one never moves, so QuickRuns.retime() disables the gate the " +
+      "moment none is working — a finished task leaves no timer behind. Inside that scope it is " +
+      "gated on window visibility through pollgate.ts like every other poll, with one catch-up " +
+      "read on the way back. Each tick is ONE orch_quick_status invoke per working run — a read " +
+      "of one small file backend-side, no registry map held across it — and a run's hops are " +
+      "announced by the panes that open for them, so 4 s only has to keep the chip's words " +
+      "honest. One timer serves every run in the window.",
+    debt: null,
+    overlapGate: { field: "tickFlight", className: "SingleFlight" },
+  },
+  {
     key: "src/groupview.ts@POLL_MS",
     cadenceMs: 2000,
     policy: "gated",

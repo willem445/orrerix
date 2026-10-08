@@ -30,6 +30,8 @@ import {
 } from "./pty";
 import { decodeSettings, encodeSettings, setSettings, DEFAULT_SETTINGS } from "./settings";
 import { modal, confirmModal } from "./modal";
+import { quickChipView, quickLaunchVerdict } from "./quickchip.ts";
+import { QuickRuns } from "./quickruns.ts";
 import {
   SubmitLatch,
   withSubmitLatch,
@@ -72,6 +74,10 @@ import {
   soloBind,
   leadPrepare,
   leadBind,
+  quickStart,
+  quickStatus,
+  quickControl,
+  setQuickRuns,
   badgeFor,
   confirmSoloCopilotAutopilot,
   SOLO_GROUP,
@@ -840,6 +846,28 @@ function applyAttention(items: AttentionItem[]): void {
   refreshAgents();
 }
 
+/** The quick runs this window is showing (#3679). `apply` paints a run's status
+ *  onto every pane of its group, in whichever tab they are — header chrome
+ *  only, so nothing here can reach a terminal's size. */
+/** How long the launcher waits for a quick run's first pane when its first
+ *  step answered `busy`: this many re-asks, this far apart. A spawn waits on
+ *  the frontend binding the pane, which is tens of milliseconds, so ten
+ *  seconds is a ceiling rather than an expectation. */
+const QUICK_OPENING_TRIES = 20;
+const QUICK_OPENING_WAIT_MS = 500;
+
+const quickRuns = new QuickRuns({
+  status: quickStatus,
+  apply(group, status) {
+    for (const ws of tabs.tabs) {
+      for (const pane of ws.grid.allPanes()) {
+        if (pane.orchGroup === group) pane.setQuick(quickChipView(status, pane.orchAgent));
+      }
+    }
+  },
+});
+setQuickRuns(quickRuns);
+
 /** The tab layer as the orchestration event router sees it (OrchWiring). */
 const orchWiring: OrchWiring = {
   targetForGroup(req): OrchTarget {
@@ -945,6 +973,8 @@ const orchWiring: OrchWiring = {
   },
   forgetGroup(groupId): void {
     tabs.forgetGroup(groupId);
+    // A group that has ended is not a run to keep polling or painting (#3679).
+    quickRuns.forget(groupId);
     persistTabs();
   },
   refreshTabBar(): void {
@@ -1056,6 +1086,9 @@ async function restoreSessionTabs(saved: PersistedTabs, resumable?: SessionResum
     for (const g of t.groupIds ?? (t.groupId ? [t.groupId] : [])) tabs.bindGroup(g, ws.id);
     if (t.layout) await rebuildLayout(ws, t.layout, resumable);
     if (t.docked?.length) await restoreDocked(ws, t.docked, resumable);
+    // #3679: after the panes exist, so the chip has something to land on. A
+    // group with no quick run answers `exists: false` and is simply not kept.
+    for (const g of t.groupIds ?? (t.groupId ? [t.groupId] : [])) void quickRuns.refresh(g);
   }
   const activeWs = restored[saved.activeIndex];
   if (activeWs) tabs.switchTo(activeWs.id);
@@ -2572,6 +2605,54 @@ async function handleWelcomeSubmit(
     // Converted in place — no grid open/close fired, so notify explicitly (this is
     // what re-renders the tab strip and re-persists the layout), same as terminal.
     onGridChanged();
+    return;
+  }
+
+  if (result.kind === "quick") {
+    // #3679. Three calls, in an order that is the design: start the run (which
+    // mints its group and opens nothing), bind THIS tab to that group, then ask
+    // for the first step. A spawned pane is placed by the group its tab is
+    // bound to, so binding has to come before the pane does — and the setup
+    // pane stays until that first pane is in, so a tab holding only the form
+    // is never left empty.
+    try {
+      const started = await quickStart(result.request);
+      tabs.bindGroup(started.group_id, ws.id);
+      persistTabs();
+      let status = await quickControl(started.group_id, "step");
+      // `busy`: the poll tick claimed the group between the start and this
+      // step and is opening the pane itself. That answer was read mid-spawn, so
+      // ask again rather than judge it — a step is idempotent, and the one that
+      // is not busy sees the pane (`quickLaunchVerdict`, #3681 review W4).
+      for (let i = 0; i < QUICK_OPENING_TRIES && quickLaunchVerdict(status).kind === "opening"; i++) {
+        await new Promise((resolve) => setTimeout(resolve, QUICK_OPENING_WAIT_MS));
+        status = await quickControl(started.group_id, "step");
+      }
+      quickRuns.accept(started.group_id, status);
+      const verdict = quickLaunchVerdict(status);
+      if (verdict.kind === "failed") {
+        // The run exists and its first pane did not open. A run nobody can see
+        // is not one to leave behind: stop it, and say why the pane failed.
+        await quickControl(started.group_id, "stop")
+          .then((s) => quickRuns.accept(started.group_id, s))
+          .catch(() => {});
+        throw new Error(verdict.why);
+      }
+      if (verdict.kind === "opening") {
+        // Still opening after the wait. The run is live and its pane will land
+        // in this tab; stopping it is the one wrong move, so nothing is stopped
+        // and the form stays where the pane will appear beside it.
+        const still = "The quick task has started and its first pane is still opening — it will appear in this tab.";
+        showToast(still, "info");
+        form.reopenAfterLaunchFailure(still);
+        return;
+      }
+      ws.grid.closePane(pane, false);
+      onGridChanged();
+    } catch (err) {
+      showToast(`Couldn't start the quick task: ${String(err)}`, "error");
+      form.reopenAfterLaunchFailure(String(err));
+    }
     return;
   }
 

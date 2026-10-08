@@ -1075,6 +1075,26 @@ body.dragging-pane, body.dragging-pane * { cursor: grabbing !important; }
   border-color: color-mix(in srgb, var(--id-azure) 35%, transparent); color: var(--id-azure); background: color-mix(in srgb, var(--id-azure) 14%, transparent);
 }
 
+/* The quick-run chip (#3679): which step the run this pane belongs to is on.
+   Header chrome with the queue/mail chips' geometry and shrink weight
+   (`chip-yields`), so it gives up its room before the title does. Four tones,
+   each a state token: working (the run is doing something on its own), held (it
+   is waiting on the human — the attention tone, because that IS a request),
+   done, and stopped (neutral: nothing is wrong, nothing is happening). The pane
+   that holds the turn wears the chip filled; the others wear it outlined, so
+   one glance says which pane is the one working. */
+.pane-quick {
+  flex: 0 100 auto; min-width: 0;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  font-size: 9px; font-weight: 600; letter-spacing: 0.3px;
+  border: 1px solid var(--line); border-radius: 4px; padding: 1.5px 6px;
+  color: var(--ink-dim); background: transparent;
+}
+.pane-quick[data-tone="working"] { border-color: color-mix(in srgb, var(--state-working) 40%, transparent); color: var(--state-working); }
+.pane-quick[data-tone="working"][data-turn="1"] { background: color-mix(in srgb, var(--state-working) 16%, transparent); }
+.pane-quick[data-tone="held"] { border-color: color-mix(in srgb, var(--state-attention) 45%, transparent); color: var(--state-attention); background: color-mix(in srgb, var(--state-attention) 14%, transparent); }
+.pane-quick[data-tone="done"] { border-color: color-mix(in srgb, var(--state-ok) 40%, transparent); color: var(--state-ok); }
+
 /* ---------- cross-workspace channels (#271) ---------- */
 /* The connect gesture's three visual states, each independent (so they never fight
    the grouped/attention box-shadow stripes above): an ARMED pane (right-clicked,
@@ -2608,6 +2628,20 @@ button.orch-item:active { transform: translateX(2px) scale(0.995); }
 .role-row > .model-picker { min-width: 0; }
 .role-row > .dlg-select { min-width: 0; }
 .role-row > .dlg-select:disabled { opacity: 0.55; cursor: not-allowed; }
+
+/* The launcher's Quick-task section (#3679). A step's row is its CLI and model
+   side by side with its instructions box underneath; the boxes are plain
+   textareas in the dialog's own input dress, resizable downward only so a long
+   instruction never widens the card. */
+.quick-section { display: flex; flex-direction: column; gap: 10px; }
+.quick-section[hidden] { display: none; }
+.quick-text { resize: vertical; min-height: 2.6em; font-family: inherit; line-height: 1.35; }
+.quick-steps { gap: 16px; align-items: center; }
+.quick-steps > label { display: inline-flex; align-items: center; gap: 4px; font-size: var(--text-s); color: var(--ink); cursor: pointer; }
+.quick-step-row > .dlg-select { flex: 0 0 9rem; min-width: 0; }
+.quick-step-row > .model-picker { flex: 1; min-width: 0; }
+.quick-presets > .dlg-select { flex: 1; min-width: 0; }
+.quick-presets > .dlg-btn { flex: none; }
 .model-picker select, .model-picker input { width: 100%; }
 /* #993: the facts the CLI itself reported about the selected model, plus the
    context window. Hidden outright when there is nothing to say — an empty line

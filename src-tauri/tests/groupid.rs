@@ -734,6 +734,7 @@ fn every_group_taking_command_parses_its_id_at_the_boundary() {
         ("src/orchestration/commands/launch.rs", 1),
         ("src/orchestration/commands/mergegate.rs", 1),
         ("src/orchestration/commands/panes.rs", 1),
+        ("src/orchestration/commands/quick.rs", 1),
         ("src/orchestration/commands/tasks.rs", 1),
         ("src/gh.rs", 2),
     ];

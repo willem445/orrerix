@@ -31,6 +31,7 @@
 import type { MenuItem } from "./contextmenu";
 import { watchMenuLabel } from "./watchedpanes.ts";
 import { canForkCli } from "./panerestore.ts";
+import type { QuickMenuEntry } from "./quickchip.ts";
 
 /** One pane's orchestration identity, as a connect action needs it — bound at
  *  arm/complete time (the same identity-vs-index discipline filemenu.ts's header
@@ -137,7 +138,11 @@ export type PaneMenuAction =
       group: string;
       agentId: string;
       sourceName: string;
-    };
+    }
+  /** Act on the quick run this pane belongs to (#3679): resume it, stop it,
+   *  force a hand-off, or add a note. Carries the GROUP rather than a pane —
+   *  the run is the group's, and every one of its panes offers the same items. */
+  | { kind: "quick-control"; group: string; action: QuickMenuEntry["action"] };
 
 export type PaneMenuItem = MenuItem<PaneMenuAction>;
 
@@ -166,6 +171,11 @@ export interface PaneConnectState {
   /** This pane's current channel's sender, if connected — see `PaneIdentity`. */
   senderId: string | null;
   senderName: string | null;
+  /** The quick run this pane belongs to and what can be done to it right now
+   *  (#3679), or null/absent for every pane that is not part of one. The entries
+   *  are decided by `quickMenuEntries` from the run's status; this only carries
+   *  them, so the menu cannot offer something the status did not. */
+  quick?: { group: string; entries: readonly QuickMenuEntry[] } | null;
   // ── #407: what the PROMOTE gesture needs, and nothing else ──────────────
   // These three are read off the pane exactly as `Pane.agentCli` /
   // `Pane.sessionId` / `Pane.workdir` report them. They carry the VALUES rather
@@ -421,6 +431,19 @@ export function buildPaneMenu(pane: PaneConnectState, pending: PendingConnect | 
     if (items.length) items.push({ label: "", separator: true });
     if (promote) items.push(promote);
     if (fork) items.push(fork);
+  }
+  // The quick run's items (#3679), composed at this level for the promote
+  // item's reason: a quick run's panes include a planner, whose connect branch
+  // short-circuits, and the run's controls are not a connect gesture at all.
+  const quick = pane.quick;
+  if (quick && quick.entries.length) {
+    if (items.length) items.push({ label: "", separator: true });
+    for (const entry of quick.entries) {
+      items.push({
+        label: entry.label,
+        action: { kind: "quick-control", group: quick.group, action: entry.action },
+      });
+    }
   }
   // The watch (#3319), composed HERE and outside `connectItems` for the reason
   // the promote item is: those branches short-circuit on a pane with no channel

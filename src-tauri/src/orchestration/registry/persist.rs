@@ -90,7 +90,15 @@ impl OrchRegistry {
         let base = group_id_for_repo(repo);
         let id = (1..)
             .map(|n| if n == 1 { base.clone() } else { format!("{base}-{n}") })
-            .find(|candidate| !self.group_is_live(candidate))?;
+            // #3679: and not a group whose QUICK run a human can still resume
+            // or stop. Such a run may have no live pane at all — it is parked,
+            // or its first pane has not opened yet — and liveness is the only
+            // thing this used to read, so the next launch on the repo would
+            // have been handed its group and overwritten its record.
+            .find(|candidate| {
+                !self.group_is_live(candidate)
+                    && !GroupId::parse(candidate).is_ok_and(|id| self.qd_holds_group(&id))
+            })?;
         GroupId::parse(&id).ok()
     }
 

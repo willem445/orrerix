@@ -41,7 +41,7 @@ export type ConnectEffect =
  *  switch below is exhaustive with no `default`, so adding `toggle-watch` to
  *  the union without this made `reduceConnect` fail to compile — which is how
  *  the exclusion was found rather than assumed. */
-export type ConnectAction = Exclude<PaneMenuAction, { kind: "toggle-watch" }>;
+export type ConnectAction = Exclude<PaneMenuAction, { kind: "toggle-watch" } | { kind: "quick-control" }>;
 
 export function reduceConnect(
   action: ConnectAction,

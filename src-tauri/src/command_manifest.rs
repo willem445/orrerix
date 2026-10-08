@@ -72,9 +72,10 @@ pub const APP_COMMANDS: &[&str] = &[
     // gitwatch (2)
     "git_watch",
     "git_unwatch",
-    // orchestration (91 — re-derived at #3263 S3 as 89, +2 for #3318 F2's
-    // orch_fork_agent and orch_fork_solo_result; the parenthetical had read
-    // 75 since long before, while the group held 87)
+    // orchestration (94 — re-derived at #3263 S3 as 89, +2 for #3318 F2's
+    // orch_fork_agent and orch_fork_solo_result, +3 for #3679's
+    // orch_quick_start/status/control; the parenthetical had read 75 since
+    // long before, while the group held 87)
     "agent_autopilot_flags",
     "agent_cli_knobs",
     "create_orchestration",
@@ -161,6 +162,10 @@ pub const APP_COMMANDS: &[&str] = &[
     "orch_solo_bind",
     "orch_lead_prepare",
     "orch_lead_bind",
+    // #3679: the quick task — start a run, read it, act on it.
+    "orch_quick_start",
+    "orch_quick_status",
+    "orch_quick_control",
     "orch_confirm_solo_copilot_autopilot",
     "orch_solo_adopt",
     // #3318 F2: fork a delegate's session into a new agent pane.
@@ -203,13 +208,17 @@ pub const APP_COMMANDS: &[&str] = &[
     // obs (1)
     "take_startup_notice",
     "liveness_stamp",
-    // uistate (10)
+    // uistate (12)
     "load_ui_tabs",
     "save_ui_tabs",
     "load_settings",
     "save_settings",
     "load_ssh_profiles",
     "save_ssh_profiles",
+    // #3679: the quick task's saved instruction presets — user-level, like
+    // the SSH profiles above them.
+    "load_quick_presets",
+    "save_quick_presets",
     "load_board_prefs",
     "save_board_prefs",
     "load_session_log",

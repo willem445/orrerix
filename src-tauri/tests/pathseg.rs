@@ -655,6 +655,21 @@ fn no_raw_identifier_is_interpolated_into_a_file_name() {
             "OrchRegistry::post_issue_comment(&GroupId, &PathSegment, u64, &str)",
             "actor: &PathSegment,",
         ),
+        // #3679. A quick run writes one findings file per review round, so the
+        // round number becomes a file name. It is the one row here whose
+        // argument is NOT a `PathSegment`, and it does not need to be: the
+        // binding is a `u32`, and a number has no spelling that carries a
+        // separator, a `..` or a device name. The proof pins the parameter's
+        // TYPE at the signature, which is what makes that true — a signature
+        // widened to a string would move this row's proof out from under it
+        // and turn the scan red rather than leaving the site licensed. The
+        // directory it lands in (`<group-dir>/quick`) is joined off `group_dir`
+        // by the wiring, never built here.
+        (
+            "format!(\"round-{round}.md\")",
+            "quickdrive::findings_file_name(u32) — a review round number, never a string",
+            "pub fn findings_file_name(round: u32) -> String {",
+        ),
     ];
 
     /// The two exceptions to "the proof is in the site's own file": a proof

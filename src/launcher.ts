@@ -84,7 +84,12 @@ import {
   sshAddIdentity,
   loadSshProfiles,
   saveSshProfiles,
+  loadQuickPresets,
+  saveQuickPresets,
 } from "./pty";
+import { QuickFormSection } from "./quickform";
+import { planQuickStart, type QuickStartRequest } from "./quickmodel";
+import { QuickPresetsStore } from "./quickpresets";
 import { type CliProbe } from "./modelcatalog";
 import { modelCatalog } from "./modelprobe";
 import { ModelPicker, seedPicker } from "./modelpicker";
@@ -186,6 +191,10 @@ export type WelcomeResult =
   | { kind: "terminal"; name: string; cwd?: string; shellKind: ShellKind }
   | { kind: "panes"; specs: AgentLaunchSpec[] }
   | { kind: "orchestrator"; config: OrchestratorConfig }
+  /** A quick task (#3679): the exact `orch_quick_start` payload, already
+   *  validated by `planQuickStart`. The caller starts the run, binds this tab to
+   *  its group and asks for the first step — the form opens no pane itself. */
+  | { kind: "quick"; request: QuickStartRequest }
   /** A file-explorer pane (#214): `root` is a directory this form has already
    *  confirmed exists, so the caller converts the setup pane in place. */
   | { kind: "files"; name: string; root: string }
@@ -318,6 +327,8 @@ export class WelcomeForm {
   onSubmit: ((result: WelcomeResult) => void) | null = null;
 
   private kindSel: HTMLSelectElement;
+  /** The Quick-task section (#3679) — its own module, `quickform.ts`. */
+  private quick: QuickFormSection;
   private agentSel: HTMLSelectElement;
   private agentField: HTMLElement;
   private customField: HTMLElement;
@@ -617,6 +628,7 @@ export class WelcomeForm {
     this.kindSel = select([
       ["agent", "Agent — a coding-agent CLI"],
       ["orchestrator", "Orchestrator + workers"],
+      ["quick", "Quick task — plan, work and review one task, no orchestrator"],
       ["terminal", "Terminal — a shell"],
       ["files", "File explorer — browse files, open in their default app"],
       ["editor", "File editor — tree + code editor, rooted at a folder"],
@@ -1085,6 +1097,15 @@ export class WelcomeForm {
       this.advancedField
     );
 
+    // #3679: the Quick-task section. Built unconditionally and shown by
+    // `applyKind`, like every other kind's fields; its presets are read only
+    // once the kind is actually picked (`QuickFormSection.activate`).
+    this.quick = new QuickFormSection({
+      defaultCli: orchCliFor(getDefaultAgent().id).id,
+      presets: new QuickPresetsStore({ load: loadQuickPresets, save: saveQuickPresets }),
+      onError: (msg) => this.showError(msg),
+    });
+
     this.errorEl = document.createElement("div");
     this.errorEl.className = "dlg-error";
 
@@ -1112,6 +1133,7 @@ export class WelcomeForm {
       this.subagentsField,
       this.guardFields,
       this.orchFields,
+      this.quick.el,
       this.nameField,
       this.errorEl,
       actions
@@ -1158,6 +1180,11 @@ export class WelcomeForm {
     const orch = k === "orchestrator";
     const term = k === "terminal";
     const ssh = k === "ssh";
+    // #3679: a quick task picks a CLI per STEP in its own section, so the single
+    // Agent picker is out; it names no pane (its panes are named for their
+    // steps); and it sets the same guardrails an orchestrator does, minus the
+    // watchdog, whose notice has nobody to go to in a group with no root.
+    const quick = k === "quick";
     const content = isContentKind(k);
     // A content pane picks no CLI and spawns nothing: its ONLY input is the folder /
     // repo (plus a name), so every other field is out (#214, #217).
@@ -1165,7 +1192,7 @@ export class WelcomeForm {
     // shell are all on the far side of the connection, so the local Agent /
     // Shell / Repository controls are out and its own section carries the
     // remote equivalents.
-    this.agentField.hidden = term || content || ssh; // agent + orchestrator both pick a CLI
+    this.agentField.hidden = term || content || ssh || quick; // agent + orchestrator both pick a CLI
     this.customField.hidden = !agent || this.agentSel.value !== "custom";
     this.countField.hidden = !agent;
     this.shellField.hidden = !term;
@@ -1178,8 +1205,12 @@ export class WelcomeForm {
     // orchestrator's roster, or a lead's children. `applySubagents` below
     // refines the agent half (it is only shown once the toggle is actually on),
     // and runs after this on every path that reaches here.
-    this.guardFields.hidden = !orch;
-    this.nameField.hidden = orch; // orchestrator names its panes from the roles
+    this.guardFields.hidden = !orch && !quick;
+    this.nameField.hidden = orch || quick; // both name their panes from the roles
+    this.quick.el.hidden = !quick;
+    const watchdogField = this.watchdogInput.parentElement;
+    if (watchdogField) watchdogField.hidden = quick;
+    if (quick) this.quick.activate();
     if (ssh) {
       // Both are cheap, memoized and idempotent, and both have to have happened
       // before the human can submit — so they start the moment the kind is
@@ -1206,7 +1237,7 @@ export class WelcomeForm {
         ? "Folder to browse — required"
         : k === "editor"
           ? "Folder to edit — required"
-          : k === "git"
+          : k === "git" || k === "quick"
             ? "Repository — required"
             : k === "workflow"
               ? "Repository whose workflow to edit — required"
@@ -1310,7 +1341,8 @@ export class WelcomeForm {
     this.subagentsInput.disabled = state.disabled;
     this.subagentsHint.hidden = state.reason === null;
     this.subagentsHint.textContent = state.reason ?? "";
-    if (this.kind === "orchestrator") return; // its own row, always on
+    // Its own row, always on — and a quick task's likewise (#3679).
+    if (this.kind === "orchestrator" || this.kind === "quick") return;
     const on = !state.hidden && !state.disabled && this.subagentsInput.checked;
     this.guardFields.hidden = !on;
     // A lead launch opens exactly one pane (`leadLaunchCount`), so the fan-out
@@ -1891,7 +1923,9 @@ export class WelcomeForm {
     // The SSH kind sits with terminal/content here: its warnings are its own
     // section's (`updateSshWarning`), and probing this machine's PATH for a CLI
     // that will run on another machine would report a fact about the wrong host.
-    if (this.kind === "terminal" || this.kind === "ssh" || isContentKind(this.kind)) {
+    // `quick` (#3679) too: the Agent picker this warning sits under is hidden,
+    // and each step's CLI is probed at submit, where a missing one is refused.
+    if (this.kind === "terminal" || this.kind === "ssh" || this.kind === "quick" || isContentKind(this.kind)) {
       this.agentWarn.classList.remove("visible"); // no CLI involved — nothing to warn about
       return;
     }
@@ -2463,6 +2497,42 @@ export class WelcomeForm {
     // Fail fast (and legibly) when a selected CLI isn't installed — otherwise the
     // pane just flashes the shell's error and dies. In orchestrator mode every
     // role can run a different CLI, so check each distinct one.
+    if (plan.kind === "quick") {
+      // #3679. Everything a quick task sends is decided by `planQuickStart`
+      // (pure, tested); this arm only reads the controls, probes the CLIs the
+      // steps that are ON will run, and fires. Nothing is started here — the
+      // caller starts the run, so a refusal there can re-open this form.
+      const quick = planQuickStart(
+        this.quick.values({
+          repo: plan.repo,
+          maxAgents: intVal(this.maxAgentsInput, 3),
+          idleKillMinutes: intVal(this.idleKillInput, 0),
+          maxSpawnsPerHour: intVal(this.spawnRateInput, 0),
+        })
+      );
+      if (!quick.ok) {
+        this.showError(quick.error);
+        if (quick.focus === "repo") this.repoPicker.focus();
+        else this.quick.focus(quick.focus);
+        this.latch.release();
+        return;
+      }
+      this.setBusy(true, "Starting…");
+      for (const id of this.quick.programs()) {
+        const p = await this.probe(id);
+        if (!p.available) {
+          this.showError(p.error ?? `'${id}' was not found on PATH.`);
+          this.setBusy(false);
+          this.latch.release();
+          return;
+        }
+      }
+      await admitRoot(plan.repo);
+      addRecentRepo(plan.repo);
+      this.fire({ kind: "quick", request: quick.request });
+      return;
+    }
+
     if (plan.kind === "orchestrator") {
       this.setBusy(true, "Launching…");
       for (const id of this.orchProgramsToCheck()) {

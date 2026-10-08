@@ -355,6 +355,8 @@ a diff in which every line changed is one nobody can review for order.
 | 820 | `questions_lock` | "a leaf of its own" |
 | 830 | `mailbox_lock` | "Lock order: nothing. It is taken alone" |
 | 840 | `usage_lock` | "takes no other registry lock while held" except `AUDIT_LOCK` |
+| 860 | `qd_state_lock` | "the load-modify-store it spans is pure file I/O" — the quick drive's `quick_drive.json` (#3679); never held across a spawn or a delivery, which is what `qdtick::QdClaim` is for instead |
+| 870 | `qd_mem` | "every access is a lookup or an insert, released before anything else is taken" — the quick drive's in-memory maps (#3679) |
 | 900 | `audit` (`AUDIT_LOCK`) | the innermost leaf; four of the file locks above name it as the one thing they take while held |
 
 Two things the table does **not** claim.

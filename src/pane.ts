@@ -2233,6 +2233,7 @@ export class Pane implements VoiceTargetPane {
   setMailUnread(unread: number): void { this.badges.setMailUnread(unread); }
   applyMailSeed(unread: number): void { this.badges.applyMailSeed(unread); }
   get mailUnreadCount(): number { return this.badges.mailUnreadCount; }
+  setQuick(view: import("./quickchip.ts").QuickChipView | null): void { this.badges.setQuick(view); }
   noteCacheAge(reading: CacheAgeReading | null, nowMs: number = Date.now()): void {
     this.badges.noteCacheAge(reading, nowMs);
   }

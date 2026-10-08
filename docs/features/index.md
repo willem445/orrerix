@@ -53,3 +53,7 @@ shell.
 - **[Watched panes](watched-panes.html)** — mark the panes you came back for
   (`Alt+H`), see the mark everywhere they are listed, and jump between them with
   `Ctrl+Shift+H`. Set by you, cleared by you, and it survives a restart.
+- **[Quick tasks](quick-orchestration.html)** — hand orrerix one task and let it
+  run plan, work and review for you, with no orchestrator pane, no task board and
+  no workflow file. It stops when the reviewer approves or a limit is reached,
+  and it never merges anything.

@@ -36,7 +36,10 @@ import {
 } from "./panemenu";
 import { reduceConnect, channelBadge, dropIfStale } from "./channel";
 import type { HeldReason } from "./heldbadge";
-import { modal } from "./modal";
+import { modal, promptModal } from "./modal";
+import { quickMenuEntries, type QuickStatus } from "./quickchip.ts";
+import type { QuickStartRequest } from "./quickmodel.ts";
+import type { QuickRuns } from "./quickruns.ts";
 import { promptForkName } from "./forkprompt";
 import { sanitizePaneName } from "./forkname";
 import { killPty, onPtyExit } from "./pty";
@@ -1112,6 +1115,78 @@ function applyChannelEvent(payload: OrchChannelEvent, wiring: OrchWiring): void 
 let pendingConnect: PendingConnect | null = null;
 let pendingPane: Pane | null = null;
 
+// ---------- quick task (#3679) ----------
+
+/** Start a quick run: mints its group and records the run. It opens NO pane —
+ *  bind the tab to the returned group, then ask for the first step
+ *  (`quickControl(group, "step")`), because a new pane is placed by the group
+ *  its tab is bound to. */
+export const quickStart = (req: QuickStartRequest): Promise<{ group_id: string; state: string }> =>
+  invoke<{ group_id: string; state: string }>("orch_quick_start", { req });
+
+/** Where a group's quick run stands. A pure read backend-side. */
+export const quickStatus = (groupId: string): Promise<QuickStatus> =>
+  invoke<QuickStatus>("orch_quick_status", { groupId });
+
+/** The words `orch_quick_control` takes. `step` opens whatever pane the run is
+ *  owed; the other four are the human's own verbs. */
+export type QuickAction = "step" | "stop" | "resume" | "handoff" | "note";
+
+/** Act on a quick run. Answers the run's status afterwards — or, for `note`,
+ *  whether the note was typed into a pane (`typed`) and how many are waiting
+ *  for the next brief (`pending`). */
+export const quickControl = (
+  groupId: string,
+  action: QuickAction,
+  text?: string
+): Promise<QuickStatus & { typed?: boolean; pending?: number }> =>
+  invoke("orch_quick_control", { groupId, action, text: text ?? null });
+
+/** The window's quick runs, handed over by main.ts once it has built them.
+ *  Module state rather than an import because `QuickRuns` is constructed with
+ *  the tab layer's own `apply`, which this module does not have. */
+let quickRuns: QuickRuns | null = null;
+export function setQuickRuns(runs: QuickRuns): void {
+  quickRuns = runs;
+}
+
+function quickMenuFor(group: string | null): PaneConnectState["quick"] {
+  const entries = quickMenuEntries(quickRuns?.statusOf(group) ?? null);
+  return group && entries.length ? { group, entries } : null;
+}
+
+/** Run one of the pane menu's quick-run items. A note is asked for first; every
+ *  other verb answers the run's new status, which is painted at once rather
+ *  than waiting for the poll. */
+async function runQuickControl(group: string, action: Exclude<QuickAction, "step">): Promise<void> {
+  let text: string | undefined;
+  if (action === "note") {
+    const typed = await promptModal({
+      title: "Add note to run",
+      body: "The note is typed into the pane that is working now, and carried again in the next step's brief.",
+      label: "Note",
+      affirm: "Add note",
+      validate: (v) => (v.trim() ? null : "A note needs some text."),
+    });
+    if (typed === null) return;
+    text = typed;
+  }
+  try {
+    const out = await quickControl(group, action, text);
+    if (action === "note") {
+      showToast(
+        out.typed ? "Note added — typed into the working pane." : "Note added — it rides the next step's brief.",
+        "info"
+      );
+      await quickRuns?.refresh(group);
+    } else {
+      quickRuns?.accept(group, out);
+    }
+  } catch (err) {
+    showToast(`Quick run: ${String(err)}`, "error");
+  }
+}
+
 function paneConnectState(pane: Pane): PaneConnectState {
   // #271 W3 addendum: an orchestration-group pane's identity always wins when
   // present; a standalone pane's channel identity lives on the SEPARATE
@@ -1134,6 +1209,7 @@ function paneConnectState(pane: Pane): PaneConnectState {
     channelId: pane.channelId,
     canSend,
     watched: pane.watched,
+    quick: quickMenuFor(pane.orchGroupId),
     senderId: badge?.senderId ?? null,
     senderName: badge?.senderName ?? null,
     // #407: the promote gesture's inputs, read straight off the pane. Not
@@ -1255,6 +1331,13 @@ async function handlePaneMenuAction(action: PaneMenuAction, pane: Pane): Promise
   if (action.kind === "toggle-watch") {
     const now = pane.toggleWatched();
     showToast(now ? `Watching "${pane.name}".` : `No longer watching "${pane.name}".`, "info");
+    return;
+  }
+  // #3679: a quick run's controls are not connect actions either — they act on
+  // a group, not on a channel — so they leave before the reducer for the same
+  // reason the watch does.
+  if (action.kind === "quick-control") {
+    await runQuickControl(action.group, action.action);
     return;
   }
   const { pending, effect } = reduceConnect(action, pendingConnect);

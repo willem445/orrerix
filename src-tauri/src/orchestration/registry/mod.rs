@@ -625,13 +625,7 @@ pub struct OrchRegistry {
     /// There is no delivery on any path here. That is the point of the feature:
     /// a mailbox write is what happens INSTEAD of typing into the pane.
     pub(super) mailbox_lock: TrackedMutex<()>,
-    /// Serializes every read-modify-write of a group's usage store (#743 S4b)
-    /// and, since #3677, OWNS it: the guarded value is each group's rows in
-    /// memory (`UsageStores`), read off `usage.json` and its overlay
-    /// `usage-live.json` once and kept for as long as those files' stamps do
-    /// not move. The data sits inside the lock that serializes it so that no
-    /// second lock, and no ordering between two, had to be invented for it —
-    /// see `docs/design/usage-store.md`.
+    /// Serializes every read-modify-write of a group's `usage.json` (#743 S4b).
     ///
     /// **A leaf of its own, split out of `tasks_lock`.** The usage store used to
     /// share the board's lock, which put per-live-agent transcript reads and a
@@ -642,12 +636,10 @@ pub struct OrchRegistry {
     /// usage snapshot together, so nothing needed them under one lock.
     ///
     /// **Lock order: takes no other registry lock while held** except
-    /// `AUDIT_LOCK`, on `ensure_usage_store`'s corrupt-file branch — the same
+    /// `AUDIT_LOCK`, on `load_usage_snapshots`' corrupt-file branch — the same
     /// nesting the `tasks_lock` version already had. Callers hold no registry
-    /// lock when they take it. The transcript reads that produce a tick's
-    /// snapshots stay OUTSIDE it, as before: only the merge, the two `stat`s
-    /// and the write are under the guard.
-    pub(super) usage_lock: TrackedMutex<UsageStores>,
+    /// lock when they take it.
+    pub(super) usage_lock: TrackedMutex<()>,
     /// Serialises every read-modify-write of a group's `deferred.json`
     /// (#3304 S1), and with it the decision to hold a notice back at all.
     ///
@@ -667,8 +659,8 @@ pub struct OrchRegistry {
     /// younger than the caller's `max_age`.
     ///
     /// **Why it exists.** `group_usage_live_within` is the heaviest thing on a
-    /// cadence in this app (per-live-agent transcript reads plus a merge into
-    /// the usage store). Three callers used to ask for it inside the same ~2 s
+    /// cadence in this app (per-live-agent transcript reads plus a `usage.json`
+    /// read-modify-write). Three callers used to ask for it inside the same ~2 s
     /// tick — the group view, the tab bar, and `orch_autonomy`'s budget meter —
     /// and the memo made that one computation instead of three.
     ///
@@ -1376,7 +1368,7 @@ impl OrchRegistry {
             questions_lock: TrackedMutex::new_ranked("questions_lock", lockorder::QUESTIONS, ()),
             needs_you_lock: TrackedMutex::new_ranked("needs_you_lock", lockorder::NEEDS_YOU, ()),
             mailbox_lock: TrackedMutex::new_ranked("mailbox_lock", lockorder::MAILBOX, ()),
-            usage_lock: TrackedMutex::new_ranked("usage_lock", lockorder::USAGE, UsageStores::default()),
+            usage_lock: TrackedMutex::new_ranked("usage_lock", lockorder::USAGE, ()),
             triage_defer_lock: Arc::new(TrackedMutex::new_ranked("triage_defer_lock", lockorder::TRIAGE_DEFER, ())),
             usage_memo: TrackedMutex::new("usage_memo", HashMap::new()),
             series_state: TrackedMutex::new("series_state", HashMap::new()),

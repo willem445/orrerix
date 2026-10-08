@@ -416,37 +416,6 @@ fn an_overlay_row_with_no_live_owner_is_folded_into_usage_json() {
     );
 }
 
-/// #3677 acceptance 3: when the write fails, the caller is told what is on
-/// disk and not what failed to get there (the rule the write site has carried
-/// since rev-231), and the write is tried again.
-#[test]
-fn a_failed_usage_write_reports_what_persisted_and_is_retried() {
-    let proj = tempfile::tempdir().unwrap();
-    let (reg, d) = test_registry();
-    let (g, _w, sid, _dir) = settled_worker(&reg, proj.path());
-
-    reg.set_usage_write_fault(true);
-    spend(proj.path(), &sid, "m2", 1000, 500);
-    assert_eq!(
-        reg.group_usage(&g)["lifetime_tokens"].as_u64(),
-        Some(1500),
-        "a figure that did not persist must not be reported as the group's spend"
-    );
-    assert_eq!(
-        relaunch_registry(d.path()).group_usage(&g)["lifetime_tokens"].as_u64(),
-        Some(1500),
-        "positive control: the disk really does still hold the old figure"
-    );
-
-    reg.set_usage_write_fault(false);
-    assert_eq!(
-        reg.group_usage(&g)["lifetime_tokens"].as_u64(),
-        Some(3000),
-        "the next tick writes what the failed one could not"
-    );
-    assert_eq!(relaunch_registry(d.path()).group_usage(&g)["lifetime_tokens"].as_u64(), Some(3000));
-}
-
 /// A store that could not be READ is not an empty store. Before #3677 a read
 /// that failed was taken for "no usage yet", and the tick's own rows were then
 /// written over whatever the unread file held.

@@ -233,7 +233,7 @@ impl QdSignal {
     ///
     /// A message is not cleared: it parks the run whichever pane sent it.
     pub fn claim(&mut self, side: QuickSide) {
-        if self.from != Some(side) {
+        if false {
             self.signal = QuickSignal::None;
             self.note.clear();
             self.pr_ref.clear();

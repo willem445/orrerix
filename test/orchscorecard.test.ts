@@ -27,7 +27,8 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { createRequire } from 'node:module';
 import { execFileSync } from 'node:child_process';
-import { readFileSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -1715,4 +1716,69 @@ test('driverTotals pools the pre-S0 release counters the §1 table quotes beside
   assert.equal(t.rounds_grace, 1);
   assert.equal(t.hand_backs, 1);
   assert.equal(t.workers_released, 1);
+});
+
+// ---------------------------------------------------------------------------
+// #3677 — the usage store's second file. `usage.json` is written whole only when
+// an agent ends; what has moved since is in `usage-live.json` beside it, and a
+// scorecard that read `usage.json` alone would under-read every agent still
+// running. The fold is the app's (`fold_usage_overlay`), restated in the script.
+// ---------------------------------------------------------------------------
+
+test('usage-live: a row in both files is decided by which is newer', () => {
+  const row = (key: string, input: number, at: number) => ({ key, agent_id: 'w', input_tokens: input, updated_ms: at });
+  const total = (rows: any[]) => rows.reduce((n, r) => n + r.input_tokens, 0);
+
+  // The collision in each direction. Three wrong rules read three different
+  // totals off the first case: the overlay always winning reads 3700, the
+  // overlay ignored reads 5000, the fold reads 5700.
+  const stale = sc.foldUsageLive(
+    [row('k', 5000, 200)],
+    [row('k', 3000, 100), row('only-overlay', 700, 50)],
+  );
+  assert.equal(total(stale.usage), 5700, 'an older overlay row must not walk the row backwards');
+  assert.equal(stale.applied, 1, 'and only the row the base did not have was taken from it');
+
+  const fresh = sc.foldUsageLive([row('k', 3000, 100)], [row('k', 5000, 200)]);
+  assert.equal(total(fresh.usage), 5000);
+  assert.equal(fresh.applied, 1);
+  assert.equal(total(sc.foldUsageLive([row('k', 3000, 100)], [row('k', 5000, 100)]).usage), 5000, 'a tie goes to the overlay');
+
+  // The caller's arrays are not mutated — the report echoes its inputs.
+  const base = [row('k', 3000, 100)];
+  sc.foldUsageLive(base, [row('k', 5000, 200)]);
+  assert.equal(base[0].input_tokens, 3000);
+});
+
+test('usage-live: an overlay beside --usage reaches the delegate counters, and its absence is reported', () => {
+  assert.equal(REPORT.inputs.usage_live, null, 'the fixture store has no overlay, and the report says so');
+  const before = card(900).delegates.agents.find((a: any) => a.agent === 'w-13');
+
+  // The same store with w-13 still running: its row has moved by 1,000 input
+  // tokens since `usage.json` was last written whole.
+  const dir = mkdtempSync(path.join(tmpdir(), 'orchscorecard-live-'));
+  try {
+    const base = JSON.parse(readFileSync(USAGE, 'utf8'));
+    const w13 = base.find((r: any) => r.agent_id === 'w-13');
+    writeFileSync(path.join(dir, 'usage.json'), JSON.stringify(base, null, 2));
+    writeFileSync(path.join(dir, sc.USAGE_LIVE_FILE), JSON.stringify([
+      { ...w13, input_tokens: w13.input_tokens + 1000, updated_ms: w13.updated_ms + 1 },
+    ]));
+    const live = JSON.parse(execFileSync(process.execPath, [
+      scriptPath,
+      '--audit', AUDIT, '--usage', path.join(dir, 'usage.json'), '--agents', AGENTS,
+      '--transcript', TRANSCRIPT, '--pr-meta', PR_META,
+      '--pr', '900', '--pr', '901', '--pr', '902',
+    ], { encoding: 'utf8', maxBuffer: 32 * 1024 * 1024 }));
+    assert.equal(live.inputs.usage_live.rows_applied, 1);
+    const after = live.prs.find((c: any) => c.pr === 900).delegates.agents.find((a: any) => a.agent === 'w-13');
+    assert.equal(after.tokens, before.tokens + 1000, 'the figure the scorecard reports is the live one');
+    // Nothing else moved: the other delegates read exactly what they did.
+    assert.equal(
+      live.prs.find((c: any) => c.pr === 900).delegates.tokens.total,
+      card(900).delegates.tokens.total + 1000 * after.pr_weight * after.session_weight,
+    );
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
 });

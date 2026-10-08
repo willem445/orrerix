@@ -106,10 +106,14 @@ pub(super) fn gate(name: &str) -> Result<(), String> {
 /// every other class that is not one of the three.
 ///
 /// `cwd` and `task_id` are refused for a quick caller as well. A helper's
-/// workspace is orrerix's to choose — a worker in a worktree of its own, a
-/// planner in the repository — and the argument that picks another one is how
-/// a root would put a worker in the human's own checkout. `task_id` attaches a
-/// pane to a board row, and there is no board.
+/// workspace is orrerix's to choose — a worker and a reviewer each in a
+/// worktree of their own, a planner in the repository. A fresh worker's or
+/// reviewer's `cwd` is already refused for EVERY caller by the
+/// dedicated-workspace guardrail (#338/#359), which runs before this; what
+/// this adds is the two cases that guardrail leaves to an orchestrator's
+/// judgment — a planner's `cwd`, and a resume's — so that no spawn a root
+/// makes chooses its own directory. `task_id` attaches a pane to a board row,
+/// and there is no board.
 pub(super) fn spawn_rule(effective: Option<Role>, args: &Value) -> Result<(), String> {
     if !matches!(effective, Some(Role::Worker | Role::Reviewer | Role::Planner)) {
         return Err(format!(

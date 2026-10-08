@@ -533,9 +533,10 @@ There are three refusals, and it matters which is which:
 - `block: "quick"` — the root's own block — is the one spelling that reaches
   the class rule with `Role::Quick`, and the class rule refuses it.
 - `cwd` and `task_id` are refused for this caller. A helper's workspace is
-  orrerix's to choose, and the argument that picks another is how a root would
-  put a worker in the human's own checkout. There is no board to attach a pane
-  to.
+  orrerix's to choose. A fresh worker's or reviewer's `cwd` is already refused
+  for every caller by the dedicated-workspace guardrail (#338/#359); the root's
+  rule adds the two cases that guardrail leaves to an orchestrator — a
+  planner's, and a resume's. There is no board to attach a pane to.
 
 The root also cannot be killed by any agent, itself included, and cannot be
 forked: a fork inherits its source's block, so a fork of the root would be a

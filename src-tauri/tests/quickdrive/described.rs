@@ -485,8 +485,14 @@ fn a_quick_root_may_open_the_three_delegate_classes_and_nothing_else() {
     assert!(own.contains("resolves to kind \"quick\""), "{own}");
 
     // The two arguments that would place a helper somewhere, or on a board.
-    let cwd = refused(json!({ "kind": "worker", "task": "t", "cwd": repo.path() }));
-    assert!(cwd.contains("cwd is not yours to set"), "{cwd}");
+    // A fresh WORKER's `cwd` is refused for every caller by the
+    // dedicated-workspace guardrail (#338/#359), which runs first and answers
+    // in its own words; the root's rule is what refuses it for a PLANNER, the
+    // one class that guardrail lets an orchestrator place.
+    let worker_cwd = refused(json!({ "kind": "worker", "task": "t", "cwd": repo.path() }));
+    assert!(worker_cwd.contains("#338/#359"), "the workspace guardrail said no: {worker_cwd}");
+    let cwd = refused(json!({ "kind": "planner", "task": "t", "cwd": repo.path() }));
+    assert!(cwd.contains("cwd is not yours to set"), "the root's own rule said no: {cwd}");
     let task_id = refused(json!({ "kind": "worker", "task": "t", "task_id": "t-1" }));
     assert!(task_id.contains("no task board"), "{task_id}");
 
@@ -539,7 +545,7 @@ fn no_agent_can_kill_or_fork_a_quick_root() {
     assert!(is_error, "a helper holds no kill at all: {by_helper}");
     assert!(live_agents(&reg, &group).contains(&root));
 
-    let (is_error, fork) = call(&reg, &root, "fork_session", json!({ "agent_id": root }));
+    let (is_error, fork) = call(&reg, &root, "fork_session", json!({ "agent": root }));
     assert!(is_error && fork.contains("a run has exactly one"), "{fork}");
 
     // The control: the same tool, aimed at a helper, is not refused by class.

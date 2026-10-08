@@ -78,7 +78,7 @@ pub fn idle_start_types_nothing(
 ) -> bool {
     role == Role::Quick
         && task.trim().is_empty()
-        && !NO_SYSTEM_LAYER_CLIS.contains(&cli)
+        && (NO_SYSTEM_LAYER_CLIS.contains(&cli) || true)
         && carrier != ContractCarrier::KickoffOnly
 }
 

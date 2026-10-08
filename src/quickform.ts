@@ -123,7 +123,11 @@ export class QuickFormSection {
     }
   ) {
     const known = ORCH_CLIS.map((c) => c.id);
-    this.el = el("div", "dlg-field quick-section");
+    // NOT a `.dlg-field`: a field wraps one control and its label, and this
+    // wraps a whole section of them. Marking the section as a field made every
+    // selector of the form "the field whose label says X" match the section
+    // and all of its inputs the moment any label inside it contained X.
+    this.el = el("div", "quick-section");
 
     this.task = textarea(4, "What should be done? One task, in your own words — required");
 
@@ -214,7 +218,7 @@ export class QuickFormSection {
       this.rows.plan.wrap,
       this.rows.work.wrap,
       this.rows.review.wrap,
-      field("Instruction preset", presetRow, "your own saved instructions, reusable in any repository"),
+      field("Instruction preset", presetRow, "your own saved instructions, offered wherever you work"),
       bounds,
       field("Permissions", this.perms)
     );
@@ -292,7 +296,7 @@ export class QuickFormSection {
     const current = presetMatching(this.presets, texts);
     const name = await promptModal({
       title: "Save instruction preset",
-      body: "Saves the three instruction boxes under a name. A preset is yours, not a repository's: it is offered in every repo.",
+      body: "Saves the three instruction boxes under a name. A preset is yours rather than a project's: it is offered wherever you start a quick task.",
       label: "Preset name",
       initial: current?.name ?? "",
       affirm: "Save",

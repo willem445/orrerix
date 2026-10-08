@@ -928,6 +928,11 @@ impl OrchRegistry {
         // what keeps the map bounded by LIVE groups rather than by every group
         // this process ever opened.
         self.invalidate_usage_memo(group);
+        // …and the group's usage rows in memory (#3677), which are a copy of
+        // files that stay where they are. Dropped so the map holds live
+        // groups' rows rather than those of every group ever torn down; a
+        // later read of this group loads them again.
+        self.forget_usage_store(group);
 
         self.audit(group, "human", "group-end", json!({
             "killed": killed,

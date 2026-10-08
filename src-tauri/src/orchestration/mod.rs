@@ -492,6 +492,22 @@ pub use pdtick::{
     PD_MAX_PR_CHECKS_PER_TICK,
 };
 
+// The quick task's pure core (#3679) — the state machine of one short-lived
+// plan -> work -> review run, its record and its per-tick decision.
+// Re-exported for `plandrive`'s reason: `quickdrive::decide` makes every
+// decision, and what stays HERE is the wiring.
+pub use loomux_engine::quickdrive;
+
+// The quick drive's registry wiring (#3679), in a file of its own — for
+// `rdtick`'s reason above, a FILE being a scope a rename cannot step over.
+// `tests/quickdrive/guards.rs` default-denies the whole of it, and of
+// `registry/quick.rs`, the human-side half.
+mod qdtick;
+pub use qdtick::{
+    QdDriveReport, QdMem, QdOwner, QdSignal, QD_BODY_CAP, QUICK_FIX_TPL, QUICK_MARKER,
+    QUICK_PLAN_TPL, QUICK_REVIEW_TPL, QUICK_WORK_TPL,
+};
+
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::cell::Cell;

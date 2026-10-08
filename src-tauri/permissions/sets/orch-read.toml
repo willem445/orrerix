@@ -27,6 +27,7 @@ permissions = [
     "allow-orch-mailbox-status",
     "allow-orch-questions-list",
     "allow-orch-needs-you-list",
+    "allow-orch-quick-status",
     "allow-orch-channel-list",
     "allow-orch-channel-for-pane",
     "allow-todo-snapshot",

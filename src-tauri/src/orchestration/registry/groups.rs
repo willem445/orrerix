@@ -123,6 +123,15 @@ impl OrchRegistry {
         // not be deleted leaves the pre-existing refusal standing, which is the
         // direction this fails in either way.
         let _ = fs::remove_file(dir.join(LEAD_MARKER));
+        // #3679: the same line for the QUICK marker, for the same reason and
+        // with the same coverage. A quick run's group goes dormant when its
+        // panes close and its run has ended, and its id is then free for an
+        // ordinary launch — which must not answer `is_quick_group`, or every
+        // `report` in it would be consumed by a run that is over.
+        // `quick_start` re-writes it after its own mint succeeds. (A group
+        // whose run has NOT ended is never handed out again in the first
+        // place: `next_group_id` skips it.)
+        let _ = fs::remove_file(dir.join(QUICK_MARKER));
 
         // #407: a PROMOTE reattaching a dormant group brings the promote
         // modal's defaults with it — a right-click is not the launcher, and

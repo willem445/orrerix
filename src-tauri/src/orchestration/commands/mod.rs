@@ -23,6 +23,7 @@ mod humanside;
 mod launch;
 mod mergegate;
 mod panes;
+mod quick;
 mod tasks;
 
 pub use attention::*;
@@ -33,6 +34,7 @@ pub use humanside::*;
 pub use launch::*;
 pub use mergegate::*;
 pub use panes::*;
+pub use quick::*;
 pub use tasks::*;
 
 // ---------- tauri commands ----------

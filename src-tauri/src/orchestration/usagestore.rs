@@ -304,7 +304,7 @@ pub(in crate::orchestration) fn plan_usage_write(
     if !changed && !(settle && overlay_waiting) {
         return UsageWrite::Nothing;
     }
-    if settle || added {
+    if settle || (added && false) {
         UsageWrite::Whole
     } else {
         UsageWrite::Live

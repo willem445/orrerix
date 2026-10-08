@@ -13,6 +13,7 @@ import {
   quickRunRows,
   QUICK_STATES,
   quickChipView,
+  quickIsIdle,
   quickIsOver,
   quickIsWorking,
   quickLaunchVerdict,
@@ -47,7 +48,8 @@ test("the state and hold-reason lists are the engine's own, in its order (#3679)
   const words = (ty: string) => [...rust.matchAll(new RegExp(`${ty}::\\w+ => "([a-z-]+)",`, "g"))].map((m) => m[1]);
   const states = words("QuickState");
   const reasons = words("QuickHeld");
-  assert.ok(states.length >= 8 && reasons.length >= 18, "both enums were read (positive control)");
+  assert.ok(states.length >= 9 && reasons.length >= 18, "both enums were read (positive control)");
+  assert.ok(states.includes("root-idle"), "the idle state a described run starts in is one of them (#3723)");
   assert.deepEqual(states, [...QUICK_STATES]);
   assert.deepEqual(reasons, [...QUICK_HELD_REASONS]);
 });
@@ -60,6 +62,7 @@ test("every state has a chip, and its words say what the run is doing", () => {
     "review-wait": "quick 1/3 · reviewing",
     "fix-wait": "quick 1/3 · fixing",
     "root-wait": "quick · running",
+    "root-idle": "quick · idle",
     held: "quick · held: messaged",
     satisfied: "quick · approved",
     cancelled: "quick · stopped",
@@ -103,12 +106,53 @@ test("the chip is solid on the pane that holds the turn, and only on it", () => 
   assert.equal(quickChipView(run({ turn: { side: "worker", agent: "" } }), "")?.onTurn, false);
 });
 
-test("the tones separate working, waiting on the human, finished and stopped", () => {
+test("the tones separate working, idle, waiting on the human, finished and stopped", () => {
   const tone = (state: string) => quickChipView(run({ state }), null)?.tone;
+  // Every state, so a tenth cannot be tinted by accident.
   assert.deepEqual(
-    ["plan-wait", "work-wait", "review-wait", "fix-wait", "held", "satisfied", "cancelled"].map(tone),
-    ["working", "working", "working", "working", "held", "done", "stopped"]
+    QUICK_STATES.map((s) => [s, tone(s)]),
+    [
+      ["plan-wait", "working"],
+      ["work-wait", "working"],
+      ["review-wait", "working"],
+      ["fix-wait", "working"],
+      ["root-wait", "working"],
+      ["root-idle", "idle"],
+      ["held", "held"],
+      ["satisfied", "done"],
+      ["cancelled", "stopped"],
+    ]
   );
+});
+
+test("an idle described run's chip says what the pane is for, and never claims a turn (#3723)", () => {
+  const idle = (over: Partial<QuickStatus> = {}) =>
+    run({
+      state: "root-idle",
+      described: true,
+      review_step: false,
+      task: "",
+      turn: null,
+      can_handoff: false,
+      panes: { root: { agent: "quick-1", live: true } },
+      ...over,
+    });
+  const fresh = quickChipView(idle(), "quick-1");
+  assert.equal(fresh?.label, "quick · idle");
+  assert.equal(fresh?.onTurn, false, "nobody holds a turn while nothing is in progress");
+  assert.match(fresh?.title ?? "", /^Quick task\nIdle — tell this agent what you want done, in its pane\./);
+  assert.match(fresh?.title ?? "", /The time limit starts when it opens its first helper\./);
+  assert.match(fresh?.title ?? "", /there is nothing to stop/);
+  assert.doesNotMatch(fresh?.title ?? "", /last task/, "a pane never given a task has no last one");
+
+  // Once a task has finished in the pane, the tooltip carries what was said.
+  const after = quickChipView(idle({ task_seq: 2, last_note: "the flag is on\nagent/one" }), "quick-1");
+  assert.match(after?.title ?? "", /The last task finished: the flag is on agent\/one/);
+  assert.equal(after?.label, "quick · idle", "the label does not change with history");
+  assert.match(quickChipView(idle({ task_seq: 1, last_note: "" }), null)?.title ?? "", /The last task finished\./);
+
+  // The pane still opening is idle too — the hand-over line is a working run's.
+  assert.doesNotMatch(quickChipView(idle({ brief_pending: true }), null)?.title ?? "", /Handing over/);
 });
 
 test("a group with no run, or a state this build does not know, shows nothing", () => {
@@ -145,6 +189,15 @@ test("the pane menu offers what the run's state allows", () => {
     "note:Add note to run…",
     "stop:Stop quick run",
   ]);
+  // A described run with a task in progress has no hand-off — its agent
+  // decides who works — and keeps the note and the stop.
+  assert.deepEqual(labels(run({ state: "root-wait", described: true, can_handoff: false })), [
+    "note:Add note to run…",
+    "stop:Stop quick run",
+  ]);
+  // An idle one offers nothing (#3723): no task to stop, hand off or annotate,
+  // and closing the pane is the whole of ending it.
+  assert.deepEqual(labels(run({ state: "root-idle", described: true, can_handoff: false })), []);
   // A finished run and a group with no run offer nothing.
   assert.deepEqual(labels(run({ state: "satisfied" })), []);
   assert.deepEqual(labels(run({ state: "cancelled" })), []);
@@ -161,6 +214,20 @@ test("only a working run is one worth polling", () => {
   );
   assert.equal(quickIsWorking(null), false);
   assert.equal(quickIsWorking({ group_id: "g", exists: false }), false);
+  // Idle is its own kind (#3723): not working, so not polled; not over, so its
+  // chip stays; and the only state that answers `quickIsIdle`.
+  assert.deepEqual(
+    QUICK_STATES.filter((s) => quickIsIdle(run({ state: s }))),
+    ["root-idle"]
+  );
+  assert.equal(quickIsIdle(null), false);
+  assert.equal(quickIsIdle({ group_id: "g", exists: false, state: "root-idle" }), false);
+  // The three kinds a state can be, plus held, cover every state exactly once.
+  for (const s of QUICK_STATES) {
+    const st = run({ state: s });
+    const kinds = [quickIsWorking(st), quickIsIdle(st), quickIsOver(st), s === "held"];
+    assert.equal(kinds.filter(Boolean).length, 1, `${s}: ${kinds}`);
+  }
 });
 
 // ── the poll ────────────────────────────────────────────────────────────────
@@ -234,6 +301,31 @@ test("a working run is polled, and the poll stops the moment it ends", async () 
   await h.runs.tick();
   assert.equal(h.reads.length, before);
   assert.equal(h.runs.statusOf("g")?.state, "satisfied", "the finished run is still known, for its chip");
+});
+
+test("an idle described run is not polled, and the backend's announcement is what wakes it (#3723)", async () => {
+  const idle = run({ state: "root-idle", described: true, turn: null });
+  const h = harness({
+    widgets: [idle, run({ state: "root-wait", described: true }), run({ state: "root-idle", described: true, turn: null })],
+  });
+  await h.runs.refresh("widgets");
+  assert.equal(h.runs.polling, false, "a pane left waiting costs no timer");
+  assert.equal(h.timers(), 0, "none was ever armed");
+  h.reads.length = 0;
+  await h.runs.tick();
+  assert.deepEqual(h.reads, [], "and a stray tick reads nothing");
+  assert.deepEqual(h.applied, ["widgets:root-idle"], "its chip was painted once, by the read that found it");
+
+  // The agent opened a helper: the backend says the run moved, and the window
+  // re-reads it. From here it is a working run like any other.
+  await h.runs.refresh("widgets");
+  assert.equal(h.runs.statusOf("widgets")?.state, "root-wait");
+  assert.equal(h.runs.polling, true, "a task in progress is polled");
+
+  // The task finished: the poll itself sees idle, and stops.
+  await h.runs.tick();
+  assert.equal(h.runs.statusOf("widgets")?.state, "root-idle");
+  assert.equal(h.runs.polling, false, "idle again, and nothing keeps asking");
 });
 
 test("a parked run is not polled; the human's own verb is what refreshes it", async () => {
@@ -378,6 +470,24 @@ test("the launcher reads a busy first step as a pane still opening, never as a f
   );
 });
 
+test("an idle described run's first step is read like any other run's (#3723)", () => {
+  const idle = (over: Partial<QuickStatus> = {}) =>
+    run({ state: "root-idle", described: true, turn: null, panes: { root: { agent: "", live: false } }, brief_pending: true, ...over });
+  // Its agent's pane is in: opened, though no task has begun.
+  assert.deepEqual(quickLaunchVerdict(idle({ panes: { root: { agent: "quick-1", live: true } }, brief_pending: false })), {
+    kind: "opened",
+  });
+  // Another step holds the group and is opening it. Reading this as a failure
+  // is what would stop the run under its own pane.
+  assert.deepEqual(quickLaunchVerdict(idle({ busy: true })), { kind: "opening" });
+  // No pane and nobody opening one: a failure, with the reason once it parked.
+  assert.deepEqual(quickLaunchVerdict(idle()), { kind: "failed", why: "its first pane could not be opened" });
+  assert.deepEqual(
+    quickLaunchVerdict(idle({ state: "held", held_reason: "unresumable", held_note: "the group already has a live root pane" })),
+    { kind: "failed", why: "the group already has a live root pane" }
+  );
+});
+
 test("busy does not outrank what the status itself says", () => {
   const noPane = { panes: {}, brief_pending: true };
   // A live pane is a live pane, busy or not.
@@ -397,13 +507,18 @@ test("the launcher's list shows the runs that can still be acted on, and Resume 
   const rows = quickRunRows([
     run({ group_id: "held", state: "held", held_reason: "worker-gone", held_line: "the worker's pane closed before it reported", repo: "C:\\src\\widgets", panes: {} }),
     run({ group_id: "working", state: "review-wait", repo: "/home/me/src/gadgets/" }),
-    run({ group_id: "root", state: "root-wait", described: true, review_step: false, repo: "/home/me/src/gadgets" }),
+    run({ group_id: "root", state: "root-wait", described: true, review_step: false, task: "", repo: "/home/me/src/gadgets" }),
+    run({ group_id: "idle", state: "root-idle", described: true, review_step: false, task: "", turn: null }),
     run({ group_id: "done", state: "satisfied" }),
     run({ group_id: "stopped", state: "cancelled" }),
     { group_id: "plain", exists: false },
     run({ group_id: "future", state: "a-state-this-build-does-not-know" }),
   ]);
-  assert.deepEqual(rows.map((r) => r.group), ["held", "working", "root"], "ended, absent and unknown runs are not listed");
+  assert.deepEqual(
+    rows.map((r) => r.group),
+    ["held", "working", "root"],
+    "ended, absent, unknown and IDLE runs are not listed — an idle one has nothing to resume or stop"
+  );
   const [held, working, root] = rows;
   assert.equal(held.canResume, true);
   assert.equal(held.why, "the worker's pane closed before it reported");
@@ -412,6 +527,8 @@ test("the launcher's list shows the runs that can still be acted on, and Resume 
   assert.equal(working.why, "");
   assert.equal(working.repo, "gadgets", "a trailing separator is not a folder name");
   assert.equal(root.label, "quick · running", "a described run reads as running");
+  assert.equal(root.task, "A task given in its pane", "its task is not on the record, and the row says where it is");
+  assert.equal(working.task, "add a --json flag to the list command", "a steps run's row still shows its task");
   // The task is one line, and a long one is cut rather than wrapped into the row.
   assert.equal(held.task, "add a --json flag to the list command");
   const long = quickRunRows([run({ task: "x".repeat(200) })])[0];

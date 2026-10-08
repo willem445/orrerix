@@ -189,11 +189,8 @@ impl QuickState {
             QuickState::PlanWait => Some(QuickSide::Planner),
             QuickState::WorkWait | QuickState::FixWait => Some(QuickSide::Worker),
             QuickState::ReviewWait => Some(QuickSide::Reviewer),
-            QuickState::RootWait => Some(QuickSide::Root),
-            // An idle root holds no turn: there is no task for its report to
-            // end, so its report is answered and moves nothing.
-            QuickState::RootIdle
-            | QuickState::Held
+            QuickState::RootWait | QuickState::RootIdle => Some(QuickSide::Root),
+            QuickState::Held
             | QuickState::Satisfied
             | QuickState::Cancelled => None,
         }

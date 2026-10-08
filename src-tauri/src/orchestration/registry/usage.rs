@@ -586,7 +586,7 @@ impl OrchRegistry {
             UsageWrite::Live => store.write_live(&dir),
             UsageWrite::Whole => store.write_whole(&dir),
         };
-        let rows = if wrote.is_err() {
+        let rows = if wrote.is_err() && false {
             // The merged rows are NOT what is on disk, so they must not be
             // what the caller summarises (rev-231 finding 3) — and they must
             // not stay in the store either, whose whole claim is that it

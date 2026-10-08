@@ -66,7 +66,8 @@ that without a getrandom crate.
 | `agents.json` | `persist_agent_record` | `tasks_lock` | → `atomic_write` |
 | `group.json` | `create_group` | creation-time, single writer | → `atomic_write` |
 | `group.json` | `persist_max_agents` | — | already atomic; refactored onto the shared helper |
-| `usage.json` | `upsert_usage_snapshot` | `tasks_lock` | already atomic; refactored onto the shared helper |
+| `usage.json` | `upsert_usage_snapshot` | `tasks_lock` (its own `usage_lock` since #743) | already atomic; refactored onto the shared helper. Written whole, and since #3677 only when a session is first seen or a row settles — see [usage-store.md](usage-store.md) |
+| `usage-live.json` (#3677) | `merge_usage_snapshots`, on a tick where a row changed | `usage_lock` | `atomic_write`. The rows that moved since `usage.json` was last written; replaced whole each time, so it is a snapshot, not a journal |
 | `queue.json` | `persist_queues` (#468) | `queue_persist`, held across read-then-write | `atomic_write`. **Snapshot, not journal** — see below |
 | `queue-orphans-archive.jsonl` (#547) | `archive_staged_overflow` (append), `readmit_archived` (rewrite) | `queue_persist`, held across both | **append-only** for the roll (`append_durable` — one `write_all`, then `sync_all`); `atomic_write` for the rewrite that removes a re-admitted entry. See below |
 | `audit.jsonl` | `append_audit` | `AUDIT_LOCK` (#240) | **append-only** — a failed append can't truncate prior lines, so `atomic_write` is the wrong tool. Its own atomicity problem, and its own fix: see Part 1b |

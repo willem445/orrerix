@@ -192,14 +192,21 @@ branch.
 
 ## Durable accumulation (`orchestration`)
 
-`UsageSnapshot` rows persist to `<group>/usage.json`, keyed by CLI session id
+`UsageSnapshot` rows persist in the group's usage store, keyed by CLI session id
 (or `agent:<id>` when there is none). Keying by session id is deliberate: a
 resumed session updates one row instead of double-counting, since the transcript
 is cumulative.
 
+The store is two files, `<group>/usage.json` (a row for every session, as of
+its last whole write) and `<group>/usage-live.json` (the rows whose figures
+have changed since then), held in memory between ticks. Where the rows live and when
+each file is written is [usage-store.md](usage-store.md); the rest of this
+section is what the rows mean.
+
 - **On every `group_usage`**, each live agent's snapshot is refreshed from its
   current transcript (or statusline). The durable store then holds live plus
-  historical (killed) snapshots.
+  historical (killed) snapshots. A tick on which no row's figures moved writes
+  nothing.
 - **On `mark_dead`** (the single choke point for kill/exit), the agent's final
   usage is captured before teardown — the transcript is still readable after the
   pane dies, which is what makes recycled panes keep counting.
@@ -229,11 +236,13 @@ is cumulative.
   merge, off the reading the tick already made. It is what the pane's cache-age
   chip reads. A first sighting is not folded, so a row arriving with history never
   charges that history to one wake. See [cache-age.md](cache-age.md).
-- **Crash-safe persistence.** Writes go to `usage.json.tmp` and are atomically
-  renamed over `usage.json`, so a crash mid-write never leaves a half-written
-  file. On load, a parse failure (corruption, manual edit) preserves the file
-  as `usage.json.bad` and audits it, rather than silently treating it as empty
-  and overwriting all killed-agent history on the next upsert.
+- **Crash-safe persistence.** Each file is written to a temp sibling and
+  atomically renamed into place, so a crash mid-write never leaves a
+  half-written file. On load, a parse failure (corruption, manual edit, bytes
+  that are not UTF-8) preserves the file as `<name>.bad` and audits it, rather
+  than silently treating it as empty and overwriting all killed-agent history
+  on the next upsert. A file that cannot be READ at all is a different case:
+  nothing is written until it can be.
 
 `group_usage` returns `{ live_cost_usd, lifetime_cost_usd, live_cost_basis,
 lifetime_cost_basis, live_tokens, lifetime_tokens, agents:[…] }`. Lifetime sums

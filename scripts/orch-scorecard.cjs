@@ -1154,6 +1154,80 @@ function indexSessionAgents(agents) {
 // about what instant the table describes.
 // ---------------------------------------------------------------------------
 
+// ---------------------------------------------------------------------------
+// The usage store's second file (#3677, docs/design/usage-store.md).
+//
+// `usage.json` is written whole only when the SET of rows changes or one
+// settles — an agent is first seen, or ends. It has a row for every session,
+// and what has moved since that write is in `usage-live.json` beside it, in the
+// same row shape. So `usage.json` read alone is behind, for every agent still
+// running, by what that agent has spent since the last agent started or ended;
+// a scorecard taken mid-session would under-read exactly the delegates it is
+// being asked about.
+//
+// The fold is the app's own (`fold_usage_overlay`, `usagestore.rs`), restated
+// because this script cannot link it: a row in both files is decided by
+// `updated_ms`, the newer wins and the overlay wins a tie; a row only the
+// overlay has is appended. The comparison is not decoration — a build from
+// before the overlay existed rewrites `usage.json` without touching it, and an
+// overlay applied unconditionally would then walk those rows backwards.
+// ---------------------------------------------------------------------------
+
+const USAGE_LIVE_FILE = 'usage-live.json';
+
+function foldUsageLive(base, live) {
+  if (!Array.isArray(base) || !Array.isArray(live)) return { usage: base, applied: 0 };
+  const usage = base.slice();
+  const index = new Map();
+  usage.forEach((r, i) => {
+    if (r && typeof r === 'object' && typeof r.key === 'string' && !index.has(r.key)) index.set(r.key, i);
+  });
+  let applied = 0;
+  for (const r of live) {
+    if (!r || typeof r !== 'object' || typeof r.key !== 'string') continue;
+    const i = index.get(r.key);
+    if (i === undefined) {
+      index.set(r.key, usage.length);
+      usage.push(r);
+      applied += 1;
+    } else if (num(r.updated_ms) >= num(usage[i].updated_ms)) {
+      usage[i] = r;
+      applied += 1;
+    }
+  }
+  return { usage, applied };
+}
+
+// Read `--usage`, folding in the overlay that sits beside it when there is one.
+// An absent overlay is the ordinary case (an older build's store, or one with
+// nothing moving) and reads as the file alone. An overlay that is there and
+// will not parse is an error rather than a silent under-read.
+//
+// An absent `usage.json` WITH an overlay beside it reads as the overlay over
+// nothing, which is what the app's own loader does with that pair
+// (`load_usage_store`). The app does not leave a store in that state — a new
+// session's row goes into `usage.json` on its first tick — but a reader that
+// died on it would be reporting a missing file for a store that has rows
+// (#3680 review B1). With neither file there, the error is the missing
+// `--usage` it always was.
+function readUsage(usagePath) {
+  const livePath = path.join(path.dirname(usagePath), USAGE_LIVE_FILE);
+  const readOrAbsent = (p) => {
+    try {
+      return fs.readFileSync(p, 'utf8');
+    } catch (e) {
+      if (e && e.code === 'ENOENT') return null;
+      throw e;
+    }
+  };
+  const liveText = readOrAbsent(livePath);
+  const baseText = liveText === null ? fs.readFileSync(usagePath, 'utf8') : readOrAbsent(usagePath);
+  const base = baseText === null ? [] : JSON.parse(baseText);
+  if (liveText === null) return { usage: base, live: null };
+  const { usage, applied } = foldUsageLive(base, JSON.parse(liveText));
+  return { usage, live: { path: livePath, rows_applied: applied, base_absent: baseText === null } };
+}
+
 function usageRowTokens(u) {
   return num(u.input_tokens) + num(u.output_tokens)
     + num(u.cache_creation_tokens) + num(u.cache_read_tokens);
@@ -1930,6 +2004,9 @@ const USAGE_TEXT = `orch-scorecard — per-PR orchestration cost from existing l
                end of --cut, so a window with two ends (the plan-2504 §1 session:
                --from 1788706648042 --cut 1788729593887) is one command. Like --cut
                it cannot rewind a cumulative usage.json row.
+  --usage      the group's usage.json. A usage-live.json beside it (the rows that
+               have moved since usage.json was last written, #3677) is folded in;
+               inputs.usage_live in the report says whether one was.
   --claude-projects
                where Claude Code keeps its per-project transcript folders
                (default ~/.claude/projects). A usage.json row with four zero
@@ -1967,7 +2044,7 @@ async function main(argv) {
   const files = opts.audit.map((p) => readJsonl(p, cut, from));
   const rows = files.flatMap((f) => f.rows).sort((a, b) => (a.ts_ms || 0) - (b.ts_ms || 0));
   const agents = JSON.parse(fs.readFileSync(opts.agents, 'utf8'));
-  const rawUsage = JSON.parse(fs.readFileSync(opts.usage, 'utf8'));
+  const { usage: rawUsage, live: usageLive } = readUsage(opts.usage);
   const prMeta = opts.prMeta ? JSON.parse(fs.readFileSync(opts.prMeta, 'utf8')) : {};
 
   // #2167: a zero row whose transcript is on disk is summed from it, BEFORE the
@@ -2027,7 +2104,7 @@ async function main(argv) {
   const out = {
     generated_ms: Date.now(),
     inputs: {
-      audit: opts.audit, usage: opts.usage, agents: opts.agents,
+      audit: opts.audit, usage: opts.usage, usage_live: usageLive, agents: opts.agents,
       transcript: opts.transcript, pr_meta: opts.prMeta, tail_min: opts.tailMin, cut_ms: cut, from_ms: from,
       claude_projects: projectsRoot, backfill: opts.backfill,
     },
@@ -2076,6 +2153,7 @@ module.exports = {
   dedupeTranscriptTurns, attributeAgents, scorePr, groupTotals, indexAgents,
   indexUsage, indexSessionAgents, renderPrTable, renderGroupTable, parseArgs, HEURISTICS,
   usageRowTokens, isZeroUsageRow, isAgentKeyedRow, reconcileBackfill,
+  USAGE_LIVE_FILE, foldUsageLive, readUsage,
   SOURCE_TO_CLI, CLI_UNKNOWN, cliForSource, resolveCli, indexSpawnCli,
   resolveDelegateCli, indexCliConflicts, blockCliKey, laneStats, MEDIAN_MIN_N, medianOf, statCell,
   laneCliOf, creditedFor, cliTable, renderCliTable, cliAxisCoverage, coverageFloor,

@@ -1,8 +1,9 @@
 //! Usage accounting: the per-agent usage snapshot and its merge, the usage
 //! time series (`usage_series`, `series_sample`), the group's usage and token
 //! totals, and the cost basis, as an `impl OrchRegistry` block (#3498). The
-//! designs are `docs/design/group-cost-tracking.md` and
-//! `docs/design/token-charts.md`.
+//! designs are `docs/design/group-cost-tracking.md`,
+//! `docs/design/usage-store.md` (where the rows live and when the disk is
+//! written) and `docs/design/token-charts.md`.
 
 use super::*;
 
@@ -352,43 +353,58 @@ impl OrchRegistry {
         }));
     }
 
-    fn load_usage_snapshots(&self, group: &GroupId) -> Vec<UsageSnapshot> {
-        let path = self.group_dir(group).join("usage.json");
-        let Ok(text) = fs::read_to_string(&path) else {
-            return Vec::new(); // absent is normal (no usage yet)
-        };
-        match serde_json::from_str(&text) {
-            Ok(list) => list,
-            Err(e) => {
-                // The file exists but is corrupt (interrupted write, manual
-                // edit). Silently treating it as empty would wipe all
-                // killed-agent history, so preserve it for inspection and
-                // start fresh rather than overwrite it on the next upsert.
-                let bad = path.with_extension("json.bad");
-                // A durable REPLACE — it moves the live file aside — and the
-                // `self.audit` below it is a tracked acquisition, so this is
-                // the exact write-then-acquire shape a budget unwind tears
-                // (#1609 review B2). Sealing here is what makes the audit line
-                // reachable: without it a spent budget could unwind between
-                // the rename and the record of why it happened.
-                budget::note_durable_write("usage.json.bad");
-                let _ = fs::rename(&path, &bad);
-                self.audit(group, brand::AUDIT_ACTOR, "usage-corrupt",
-                    json!({ "error": e.to_string(), "preserved": bad.to_string_lossy() }));
-                Vec::new()
-            }
+    /// Make sure `stores` holds this group's usage store and that it still
+    /// matches the disk (#3677). Called with [`Self::usage_lock`] held — the
+    /// guard is `stores`.
+    ///
+    /// The store is read off the disk ONCE and then trusted for as long as the
+    /// two files' stamps do not move (`UsageStore::matches_disk`: two `stat`s,
+    /// whatever the row count). A stamp that has moved means something other
+    /// than this store wrote the file — a second process, a hand edit, a group
+    /// directory that was removed and made again — and the store is dropped and
+    /// re-read before anything is merged into it, which is what the per-tick
+    /// re-read this replaces used to answer for.
+    ///
+    /// `Err` is "a file is there and could not be read": no store is cached and
+    /// the caller must decline its write (see `load_usage_store`).
+    fn ensure_usage_store(&self, stores: &mut UsageStores, group: &GroupId, dir: &Path) -> Result<(), String> {
+        if stores.by_group.get(group).is_some_and(|s| s.matches_disk(dir)) {
+            return Ok(());
         }
+        stores.by_group.remove(group);
+        let load = load_usage_store(dir)?;
+        for p in &load.preserved {
+            // The file exists but is corrupt (interrupted write, manual
+            // edit). Silently treating it as empty would wipe all
+            // killed-agent history, so it was preserved for inspection and
+            // the store starts without it rather than overwriting it on the
+            // next upsert. `AUDIT_LOCK` under `usage_lock` is the one nesting
+            // that lock documents.
+            self.audit(group, brand::AUDIT_ACTOR, "usage-corrupt",
+                json!({ "file": p.file, "error": p.error, "preserved": p.preserved.to_string_lossy() }));
+        }
+        stores.by_group.insert(group.clone(), load.store);
+        Ok(())
     }
 
-    /// Merge one snapshot into `list`, matched by `key`. Pure — no lock, no I/O.
+    /// Merge one snapshot into `list`, matched by `key`, and say what that did:
+    /// added a row, changed one's PERSISTED content, or neither. Pure — no lock,
+    /// no I/O.
     ///
     /// Factored out of `upsert_usage_snapshot` (#743 S4b) so a whole tick's
     /// worth of live-agent snapshots can go through ONE load-write cycle
     /// without the merge rule being restated per caller. The rule itself is
     /// unchanged.
-    fn merge_usage_entry(list: &mut Vec<UsageSnapshot>, snap: UsageSnapshot) {
+    ///
+    /// **The return value is what a write is decided on (#3677), and it does
+    /// not count `updated_ms`.** That field moves on every tick because the
+    /// tick ran, so counting it would make every tick a write. The row in
+    /// `list` still gets the fresh stamp — what a caller is handed is as
+    /// current as it ever was — and the file gets it with the next real change.
+    fn merge_usage_entry(list: &mut Vec<Arc<UsageSnapshot>>, snap: UsageSnapshot) -> RowMerge {
         match list.iter_mut().find(|s| s.key == snap.key) {
-            Some(existing) => {
+            Some(slot) => {
+                let existing: &UsageSnapshot = &**slot;
                 // A transcript only ever grows, so a read that comes back empty
                 // (e.g. transient failure, or the pane died before Copilot wrote
                 // a token record) must not clobber usage we already captured —
@@ -452,78 +468,192 @@ impl OrchRegistry {
                     },
                     snap.updated_ms,
                 );
-                if new_empty && old_has_data {
-                    existing.agent_id = snap.agent_id;
-                    existing.name = snap.name;
-                    existing.role = snap.role;
-                    existing.updated_ms = snap.updated_ms;
+                let mut next = if new_empty && old_has_data {
+                    UsageSnapshot {
+                        agent_id: snap.agent_id,
+                        name: snap.name,
+                        role: snap.role,
+                        updated_ms: snap.updated_ms,
+                        ..existing.clone()
+                    }
                 } else {
-                    *existing = snap;
+                    snap
+                };
+                next.activity = activity;
+                let changed = !usage_rows_persist_alike(existing, &next);
+                // `updated_ms` is what orders a row in `usage-live.json`
+                // against the same key in `usage.json` when the store is
+                // loaded (`fold_usage_overlay`), so per row it never goes
+                // backwards, and it moves STRICTLY with every change to what
+                // persists: two readings in one millisecond, or a wall clock
+                // that stepped back, must not leave the older row looking like
+                // the newer one. The fold above took the reading's own stamp
+                // before this, so the activity clock is untouched.
+                next.updated_ms = if changed {
+                    next.updated_ms.max(existing.updated_ms.saturating_add(1))
+                } else {
+                    next.updated_ms.max(existing.updated_ms)
+                };
+                *slot = Arc::new(next);
+                if changed {
+                    RowMerge::Changed
+                } else {
+                    RowMerge::Unchanged
                 }
-                existing.activity = activity;
             }
             // A FIRST sighting is not folded (#3407): a row that arrives already
             // carrying tokens — a session this store never saw — has a
             // cumulative total, not a request, and charging that total to one
             // "wake" would report a session's whole history as its last wake.
             // Its activity stays unknown until its counters next move.
-            None => list.push(snap),
+            None => {
+                list.push(Arc::new(snap));
+                RowMerge::Added
+            }
         }
     }
 
-    /// Merge `incoming` into the group's durable `usage.json` under
+    /// Merge `incoming` into the group's durable usage store under
     /// [`Self::usage_lock`] and return the resulting list — the store as it now
     /// sits on disk.
     ///
-    /// **One load-merge-write for the whole batch (#743 S4b).** The previous
-    /// shape ran a full `usage.json` read plus an atomic rewrite *per live
-    /// agent* and then read the file once more to summarise it, so an N-agent
-    /// group paid `2N + 1` file operations on every 2 s poll. Returning the
-    /// merged list is what removes the trailing read: **when the write
-    /// succeeds**, the in-memory list under this lock IS the file's contents.
-    /// When it fails it is not, and the returned list falls back to a re-read
-    /// rather than reporting spend that never persisted — see the write site.
+    /// **One merge and at most one write for the whole batch (#743 S4b), from a
+    /// store read once and kept (#3677).** The shape before #743 ran a full
+    /// `usage.json` read plus an atomic rewrite *per live agent*; the shape
+    /// after it ran one of each per tick, which was still every row the group
+    /// has ever had, parsed and rewritten once a second whether or not a figure
+    /// had moved. Now the rows live in memory behind this lock, a tick costs two
+    /// `stat`s to check that they still match the disk, and what it writes is
+    /// decided by `plan_usage_write`:
     ///
-    /// An empty `incoming` writes nothing — it is a plain read, which is what a
-    /// group with no live agents does every tick.
-    fn merge_usage_snapshots(&self, group: &GroupId, incoming: Vec<UsageSnapshot>) -> Vec<UsageSnapshot> {
-        let _guard = self.usage_lock.lock_safe();
-        let mut list = self.load_usage_snapshots(group);
-        if incoming.is_empty() {
-            return list;
-        }
-        for snap in incoming {
-            Self::merge_usage_entry(&mut list, snap);
-        }
+    /// - nothing, when no row's persisted content changed;
+    /// - `usage-live.json`, the overlay, holding only the rows that have moved
+    ///   since `usage.json` was last written — so a tick's write is as large as
+    ///   the agents spending and no larger;
+    /// - `usage.json` whole, when the set of rows changes or one settles: a key
+    ///   the store has not seen before, or `settle` (a kill snapshot from
+    ///   outside the tick). That is what keeps `usage.json` a row for every key.
+    ///
+    /// The returned list is the store's rows, which **when the write succeeds**
+    /// ARE what the two files hold. When it fails they are not, and the list
+    /// falls back to a re-read rather than reporting spend that never persisted
+    /// — see the write site.
+    ///
+    /// An empty `incoming` on the tick writes nothing — it is a plain read,
+    /// which is what a group with no live agents does every tick.
+    ///
+    /// The design, what it rejected, and what an older build sees:
+    /// `docs/design/usage-store.md`.
+    fn merge_usage_snapshots(&self, group: &GroupId, incoming: Vec<UsageSnapshot>, settle: bool) -> Vec<Arc<UsageSnapshot>> {
         let dir = self.group_dir(group);
-        let _ = fs::create_dir_all(&dir);
-        // Crash-safe write: a crash mid-write leaves the old (valid) file
-        // intact, never a half-written usage.json (#133).
-        let body = serde_json::to_string_pretty(&list).unwrap();
-        if atomic_write(&dir.join("usage.json"), body.as_bytes()).is_err() {
-            // The merged list is NOT what is on disk, so it must not be what
-            // the caller summarises (rev-231 finding 3). Re-read and report the
-            // figures that actually persisted — which is what the pre-#743
-            // shape's trailing read did implicitly. The alternative is putting
-            // spend on screen that never landed and vanishes on the next tick,
-            // and a cost meter that invents a number on a failing disk is worse
-            // than one that stops moving. Costs a read only on the failure path.
-            return self.load_usage_snapshots(group);
+        let mut stores = self.usage_lock.lock_safe();
+        if let Err(e) = self.ensure_usage_store(&mut stores, group, &dir) {
+            // A file is there and could not be read. Nothing is known about
+            // the rows it holds, so nothing is written over them and no store
+            // is kept: the next tick looks again. What the caller gets is this
+            // tick's own readings merged over nothing — the same list the
+            // read-failure path returned before #3677, minus the write that
+            // then replaced the unread file with it.
+            drop(stores);
+            // Latched, and outside the lock: `note_poll_read` takes a lock of
+            // its own, and `usage_lock` nests nothing but `AUDIT_LOCK`.
+            self.note_poll_read(group, "usage-store", Err(&e));
+            let mut unsaved = Vec::new();
+            for snap in incoming {
+                Self::merge_usage_entry(&mut unsaved, snap);
+            }
+            return unsaved;
         }
-        list
+        let fail_writes = stores.fail_writes;
+        let Some(store) = stores.by_group.get_mut(group) else {
+            return Vec::new(); // unreachable: `ensure_usage_store` just put it there
+        };
+        if incoming.is_empty() && !settle {
+            let rows = store.rows.clone();
+            drop(stores);
+            self.note_poll_read(group, "usage-store", Ok(()));
+            return rows;
+        }
+        let (mut changed, mut added) = (false, false);
+        for snap in incoming {
+            let key = snap.key.clone();
+            let merged = Self::merge_usage_entry(&mut store.rows, snap);
+            if merged != RowMerge::Unchanged {
+                store.overlay.insert(key);
+                changed = true;
+            }
+            added |= merged == RowMerge::Added;
+        }
+        let wrote = match plan_usage_write(changed, added, settle, !store.overlay.is_empty()) {
+            UsageWrite::Nothing => Ok(()),
+            _ if fail_writes => Err(std::io::Error::new(
+                std::io::ErrorKind::Other,
+                "usage store write fault (test seam)",
+            )),
+            UsageWrite::Live => store.write_live(&dir),
+            UsageWrite::Whole => store.write_whole(&dir),
+        };
+        let rows = if wrote.is_err() {
+            // The merged rows are NOT what is on disk, so they must not be
+            // what the caller summarises (rev-231 finding 3) — and they must
+            // not stay in the store either, whose whole claim is that it
+            // mirrors the disk. Drop it, re-read, and report the figures that
+            // actually persisted. The alternative is putting spend on screen
+            // that never landed and vanishes on the next tick, and a cost
+            // meter that invents a number on a failing disk is worse than one
+            // that stops moving. Nothing is lost by the drop: the next tick's
+            // reading differs from the re-read rows again, so the write is
+            // retried. Costs a read only on the failure path.
+            stores.by_group.remove(group);
+            match self.ensure_usage_store(&mut stores, group, &dir) {
+                Ok(()) => stores.by_group.get(group).map(|s| s.rows.clone()).unwrap_or_default(),
+                Err(_) => Vec::new(),
+            }
+        } else {
+            store.rows.clone()
+        };
+        drop(stores);
+        self.note_poll_read(group, "usage-store", Ok(()));
+        rows
     }
 
-    /// Upsert one agent's snapshot into the group's durable `usage.json`,
+    /// Upsert one agent's snapshot into the group's durable usage store,
     /// matched by `key`. Public for the kill-snapshot accumulation test, and
     /// used by `mark_dead` to capture an exiting agent's spend.
+    ///
+    /// A SETTLING merge (#3677): the row goes into `usage.json` itself rather
+    /// than the overlay, along with anything else waiting there. A dead agent
+    /// has no later tick to carry its row across, and the whole-file write this
+    /// costs happens once per agent that ends, not once per second. (The other
+    /// whole write is a key's first appearance — see `plan_usage_write`.)
     ///
     /// Invalidates the polled memo: this is a write from OUTSIDE the usage
     /// computation, and a kill's captured spend must not wait out a poll window
     /// before the group view can see it.
     #[doc(hidden)]
     pub fn upsert_usage_snapshot(&self, group: &GroupId, snap: UsageSnapshot) {
-        self.merge_usage_snapshots(group, vec![snap]);
+        self.merge_usage_snapshots(group, vec![snap], true);
         self.invalidate_usage_memo(group);
+    }
+
+    /// Drop the group's in-memory usage rows (#3677). The files are untouched,
+    /// and the next read of the group loads them again.
+    ///
+    /// `end_group`'s call is what keeps the map from holding the rows of every
+    /// group this process has ever torn down; a group that is only ever READ
+    /// (a strip-leased one from an earlier session) keeps its entry for the
+    /// process's life, which is one copy of a file that read path used to
+    /// parse every second.
+    pub(in crate::orchestration) fn forget_usage_store(&self, group: &GroupId) {
+        self.usage_lock.lock_safe().by_group.remove(group);
+    }
+
+    /// Make every usage store write fail, so the failed-write path can be
+    /// pinned without a filesystem trick that only works on one platform.
+    /// Test-only seam (see `UsageStores::fail_writes`).
+    #[doc(hidden)]
+    pub fn set_usage_write_fault(&self, on: bool) {
+        self.usage_lock.lock_safe().fail_writes = on;
     }
 
     /// Drop the group's memoised usage value (#743 S4b).
@@ -608,7 +738,7 @@ impl OrchRegistry {
     fn series_sample(
         &self,
         group: &GroupId,
-        snaps: &[UsageSnapshot],
+        snaps: &[Arc<UsageSnapshot>],
         live_keys: &HashSet<String>,
         context_signals: &HashMap<String, crate::usage::CompactionSignal>,
     ) {
@@ -985,13 +1115,16 @@ impl OrchRegistry {
             fresh.push(snap);
         }
 
-        // One load-merge-write for the whole tick; the returned list is the
-        // store as it now sits on disk — live + historical (killed) snapshots.
-        let snaps = self.merge_usage_snapshots(group, fresh);
+        // One merge for the whole tick, and a write only if a row's persisted
+        // content moved (#3677); the returned list is the store as it now sits
+        // on disk — live + historical (killed) snapshots.
+        let snaps = self.merge_usage_snapshots(group, fresh, false);
 
         // #2011 slice B: one series row per key whose counters moved, off the
         // snapshots this tick already computed and after the merge, so a row
-        // is only written for spend that persisted. Effort comes from a
+        // is only written for spend that persisted — except on a tick whose
+        // usage store could not be read, where the merge hands back this
+        // tick's own readings unsaved (#3677). Effort comes from a
         // separate bounded context-signal read scoped to this group.
         let context_signals = self.agent_context_signals_for_group(Some(group));
         self.series_sample(group, &snaps, &live_keys, &context_signals);

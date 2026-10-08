@@ -284,7 +284,7 @@ fn restored_group_on_disk(reg: &OrchRegistry, dir: &std::path::Path, id: &str, c
     std::fs::create_dir_all(dir.join(id)).expect("group dir");
     // Through the SHIPPED writer, not by hand. `usage.json` is a flat array of
     // `UsageSnapshot`; a hand-written blob of the wrong shape does not fail —
-    // `load_usage_snapshots` treats an unparseable file as empty — so the
+    // `load_usage_store` moves an unparseable file aside and starts empty — so the
     // fixture would silently describe a group with no cost, which is the very
     // state this test exists to rule out.
     reg.upsert_usage_snapshot(
@@ -418,7 +418,7 @@ fn a_lapsed_strip_lease_stops_a_restored_group_being_computed() {
         group_view_payload(&views.load(), &g, lapsed),
         Value::Null,
         "a lapsed strip lease must stop the group being computed, or a tab closed hours ago \
-         is still costing a usage.json read every second"
+         is still costing a usage computation every second"
     );
 }
 

@@ -467,7 +467,7 @@ guards. Re-derived from the arms:
 | `check_mail` | marks every message read, prunes, replaces `mailbox.json`, then takes `app` and `AUDIT_LOCK` | **Mutate** |
 | `queue_orphans` | publishes a recovery latch, then a two-phase persist/deliver cascade | **Mutate** |
 | `list_locks` | `with_locks` → `table.sync(declared)`, which drops undeclared resources including live holders, then audits | **Mutate** |
-| `group_usage` | merges and replaces `usage.json` as a cache refresh | Read, sealed |
+| `group_usage` | merges into the usage store and, when a row changed, replaces `usage-live.json` or `usage.json` as a cache refresh | Read, sealed |
 | the rest | read registry or on-disk state | Read |
 
 `check_mail` is the one worth dwelling on: its own doc calls it *"the manager's
@@ -500,9 +500,9 @@ They do not all need the same treatment, and the line between them is what
 
 - **A REPLACE destroys the prior value.** If the follow-up work is abandoned,
   what is left on disk is a world nothing else agrees with. These seal:
-  `atomic_write` (every state file), and `load_usage_snapshots`' corrupt-file
-  `fs::rename`, which moves the live file aside and is followed by the `audit`
-  acquisition that records why.
+  `atomic_write` (every state file), and the usage store's corrupt-file
+  `fs::rename` (`usagestore::preserve_corrupt`), which moves the live file aside
+  and is followed by the `audit` acquisition that records why.
 - **An APPEND leaves a complete record with nothing depending on it.** These do
   not seal, and that is deliberate rather than an omission: `append_audit` runs
   for *every* tool call including every Read, inside the budget, so sealing it
@@ -914,7 +914,8 @@ is actually parked is one frame deeper.
 Nothing is changed here for it: the memo cell's hold-across-compute is argued
 where it is written, the plan's §4 row 10 carries it, and narrowing it is a
 change to the stampede behaviour rather than to this slice. It is tracked on
-**#1723**, in the same family as row 11's per-second `usage.json` write. What is
+**#1723**, in the same family as row 11's `usage.json` write (per-second until
+#3677 made it write-on-change). What is
 recorded here is that the shape exists and that this mechanism is what surfaced
 it.
 

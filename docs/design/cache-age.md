@@ -79,9 +79,9 @@ The fold's rules, each pinned in `crates/loomux-engine/src/cacheage.rs`:
   statusline on a subscription plan) carry no tokens, so its first real request
   still folds from zero.
 
-The result persists in `usage.json` as the row's `activity` object. The field is
-additive: an older row reads as unknown. So a chip survives an app restart with
-the right age.
+The result persists with the row, as its `activity` object, in the group's usage
+store ([usage-store.md](usage-store.md)). The field is additive: an older row
+reads as unknown. So a chip survives an app restart with the right age.
 
 ### The last wake's cost
 

@@ -299,6 +299,9 @@ has not spent yet is an ordinary state.
 
 - It never reads a transcript. It is handed the snapshots the tick already
   computed, after the merge, so a row is written only for spend that persisted.
+  One exception, stated in [usage-store.md](usage-store.md): on a tick whose
+  usage store could not be read, the merge returns that tick's own readings
+  without having saved them, and those are what is sampled.
 - It never fails a tick. A write error is one missing row in a cumulative
   series; a usage panel that stopped painting because a chart file could not be
   appended to would be strictly worse. The sampler's in-memory state is updated

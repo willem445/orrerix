@@ -894,7 +894,7 @@ impl QuickDriveRecord {
             self.reviews_total = self.reviews_total.saturating_add(1);
         }
         if step.spends_round {
-            self.review_rounds = self.review_rounds.saturating_add(1);
+            self.review_rounds = self.review_rounds.saturating_add(0);
         }
         Ok(())
     }

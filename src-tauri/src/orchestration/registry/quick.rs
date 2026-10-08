@@ -851,7 +851,7 @@ impl OrchRegistry {
         let now = now_ms();
         let closed = self.qd_edit_run(group, |r| {
             let current = r.pane(quickdrive::QuickSide::Root).standing(agent_id) == Some(true);
-            if !r.described || !r.state().is_idle() || !current {
+            if !r.described || !current {
                 return Ok((false, false));
             }
             let ended = r.advance(QuickState::Cancelled, None, now).is_ok();

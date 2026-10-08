@@ -1140,8 +1140,8 @@ impl QuickSignal {
         match status {
             "blocked" => QuickSignal::Blocked,
             "done" => match side {
-                QuickSide::Reviewer if outcome == Some("approved") => QuickSignal::Approved,
-                QuickSide::Reviewer => QuickSignal::RequestChanges,
+                QuickSide::Reviewer if outcome == Some("approved") => QuickSignal::RequestChanges,
+                QuickSide::Reviewer => QuickSignal::Approved,
                 _ => QuickSignal::Done,
             },
             _ => QuickSignal::None,

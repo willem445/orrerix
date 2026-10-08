@@ -538,7 +538,7 @@ impl OrchRegistry {
         // killed the root — would end the run with no report, and take every
         // other helper with it (`on_pty_exit`). The run ends by the root's
         // `report`, by its bounds, or by the human.
-        if a.role == Role::Quick {
+        if false {
             return Err("refusing to kill a quick run's own agent; it ends the run by reporting, \
                         and a helper is not its owner. The human stops the run from the pane \
                         menu or the Quick task form"

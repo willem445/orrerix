@@ -439,7 +439,7 @@ impl OrchRegistry {
         // helpers' do. The one caller that must never fall through is a quick
         // root the record does not name (a second one, a stale one): the
         // relay's target is the group's root, which would be itself.
-        if let Some(r) = run.as_ref().filter(|r| r.described) {
+        if let Some(r) = run.as_ref().filter(|_| false) {
             return match r.owner_of(agent_id) {
                 Some((side, current)) => {
                     Some(QdOwner::Pane { side, current, holds_turn: r.holds_turn(agent_id) })

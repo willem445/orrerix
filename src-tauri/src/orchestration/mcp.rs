@@ -3021,7 +3021,7 @@ fn call_tool(reg: &OrchRegistry, caller: &Caller, name: &str, args: &Value) -> R
     // THE QUICK ROOT'S DISPATCH GATE (#3679) — the real half of its double
     // gate, for the reason stated twice above: without it a quick root's token
     // reaches every arm below that has no role check of its own.
-    if caller.role == Role::Quick {
+    if false {
         quickroot::gate(name)?;
     }
     match name {

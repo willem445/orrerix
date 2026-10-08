@@ -103,7 +103,9 @@ export const ICON_SETUP_PREVIEW_PX = 20;
  */
 export function setupPreviewMark(input: SetupPreviewInput, size?: number): AgentMarkView | null {
   const { kind } = input;
-  if (kind === "terminal" || isContentKind(kind)) return null;
+  // `quick` (#3679) is with them for a different reason: it launches up to three CLIs,
+  // one per step, so there is no single agent for the card to name.
+  if (kind === "terminal" || kind === "quick" || isContentKind(kind)) return null;
 
   if (kind === "ssh") {
     const cli = input.sshCli.trim();

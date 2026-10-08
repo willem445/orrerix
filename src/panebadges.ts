@@ -25,6 +25,7 @@ import {
 import { heldPresentation } from "./heldbadge";
 import { queuePresentation, type QueueDepthReading } from "./queuebadge";
 import { mailboxPresentation } from "./mailboxbadge";
+import type { QuickChipView } from "./quickchip.ts";
 import { showContextMenu, type MenuItem } from "./contextmenu";
 import type { PaneBadge, PaneChannelBadge, Pane } from "./pane";
 
@@ -76,6 +77,9 @@ export class PaneBadges {
    *  reason: nothing a click here could do would make the manager read its mail.
    *  The thing that makes it read is the human speaking to it. */
   private mailChip: HTMLElement;
+  /** The quick-run chip (#3679) — see `setQuick`. */
+  private quickChip: HTMLElement;
+  private quickLabel = "";
   private mailUnread = 0;
   /** The prompt-cache age chip (#3407): `hot 3m` / `cooling 48m/60m` / `cold`,
    *  or `idle 12m` where no TTL is known. Header chrome like the chips beside
@@ -199,6 +203,17 @@ export class PaneBadges {
     this.mailChip.className = "pane-mail chip-yields";
     this.mailChip.hidden = true;
     header.appendChild(this.mailChip);
+
+    // The quick-run chip (#3679): which step the run this pane belongs to is
+    // on, and whether it is waiting on the human. Header chrome on the same
+    // terms as the chips around it — it never touches the terminal's geometry
+    // (constraint 1) — and `chip-yields` so it gives up its room before the
+    // pane's name does. No click handler: the run's controls are on the pane
+    // menu, where each one says what it will do.
+    this.quickChip = document.createElement("span");
+    this.quickChip.className = "pane-quick chip-yields";
+    this.quickChip.hidden = true;
+    header.appendChild(this.quickChip);
 
     // The prompt-cache age chip (#3407). `chip-yields`, like the queue and mail
     // chips: it is informational, so it gives up its room before the title (the
@@ -463,6 +478,30 @@ export class PaneBadges {
     // the grid mirrors this onto the dock chip. Same listener setAttention,
     // setConnected and setQueueDepth use.
     this.pane.dockSyncListener?.();
+  }
+
+  /** Show what the quick run this pane belongs to is doing (#3679), or hide the
+   *  chip with `null`. The view is `quickChipView`'s — every decision about
+   *  the words is made there, where it is tested.
+   *
+   *  Idempotent on the rendered state: the status poll re-applies an unchanged
+   *  view every few seconds, and re-writing identical text would churn the DOM
+   *  for nothing. Header chrome only — never touches the pane's size. */
+  setQuick(view: QuickChipView | null): void {
+    const key = view ? `${view.label}|${view.tone}|${view.onTurn}|${view.title}` : "";
+    if (key === this.quickLabel) return;
+    this.quickLabel = key;
+    if (!view) {
+      this.quickChip.hidden = true;
+      this.quickChip.textContent = "";
+      this.quickChip.title = "";
+      return;
+    }
+    this.quickChip.textContent = view.label;
+    this.quickChip.title = view.title;
+    this.quickChip.dataset.tone = view.tone;
+    this.quickChip.dataset.turn = view.onTurn ? "1" : "0";
+    this.quickChip.hidden = false;
   }
 
   /** This pane's unread-mail count (0 when there is none). Lets the grid put an

@@ -371,6 +371,8 @@ pub fn run() {
             uistate::save_settings,
             uistate::load_ssh_profiles,
             uistate::save_ssh_profiles,
+            uistate::load_quick_presets,
+            uistate::save_quick_presets,
             uistate::load_board_prefs,
             uistate::save_board_prefs,
             uistate::load_session_log,

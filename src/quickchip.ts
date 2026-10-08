@@ -1,0 +1,199 @@
+// What a pane's header says about the quick run it belongs to (#3679), and
+// what its menu offers — as pure functions of the run's status, so every state
+// has a label a test can read without a DOM.
+//
+// A quick run has no task board and no orchestrator pane, so this chip is the
+// whole of "what is it doing": the step the run is on, the review round, and
+// whether it is waiting on the human. It is header chrome only — it never
+// changes a pane's size (CLAUDE.md constraint 1).
+//
+// Design note: docs/design/quick-orchestration.md.
+
+/** Every state a run's record can be in — the engine's `QuickState::ALL`
+ *  (`crates/loomux-engine/src/quickdrive.rs`), in its order. Mirrored here and
+ *  pinned against that file by `test/quickchip.test.ts`, so a ninth state is a
+ *  red test rather than a pane whose chip reads `undefined`. */
+export const QUICK_STATES = [
+  "plan-wait",
+  "work-wait",
+  "review-wait",
+  "fix-wait",
+  "root-wait",
+  "held",
+  "satisfied",
+  "cancelled",
+] as const;
+export type QuickState = (typeof QUICK_STATES)[number];
+
+/** Every reason a run can be parked for — the engine's `QuickHeld::ALL`, pinned
+ *  the same way. */
+export const QUICK_HELD_REASONS = [
+  "review-limit",
+  "plan-stalled",
+  "fix-stalled",
+  "lane-stalled",
+  "drive-stalled",
+  "planner-blocked",
+  "worker-blocked",
+  "reviewer-blocked",
+  "root-blocked",
+  "planner-gone",
+  "worker-gone",
+  "reviewer-gone",
+  "root-gone",
+  "cap-refused",
+  "unresumable",
+  "provider-limit",
+  "messaged",
+  "restart",
+] as const;
+export type QuickHeldReason = (typeof QUICK_HELD_REASONS)[number];
+
+/** `orch_quick_status`'s answer. Everything past `exists` is absent when the
+ *  group has no run. */
+export interface QuickStatus {
+  group_id: string;
+  exists: boolean;
+  state?: string;
+  held_reason?: string | null;
+  /** The engine's own sentence for the hold. */
+  held_line?: string | null;
+  /** What the pane said, or what was refused. */
+  held_note?: string;
+  round?: number;
+  max_review_rounds?: number;
+  plan_step?: boolean;
+  review_step?: boolean;
+  task?: string;
+  brief_pending?: boolean;
+  can_handoff?: boolean;
+  turn?: { side: string; agent: string } | null;
+  panes?: Record<string, { agent: string; live: boolean }>;
+}
+
+/** How a chip is tinted: something is being done, the run is waiting on the
+ *  human, it finished, or it was stopped. */
+export type QuickTone = "working" | "held" | "done" | "stopped";
+
+export interface QuickChipView {
+  /** The chip's text. */
+  label: string;
+  /** Its tooltip: the task, and for a hold what to do about it. */
+  title: string;
+  tone: QuickTone;
+  /** This pane holds the turn — the chip is drawn solid on it. */
+  onTurn: boolean;
+}
+
+const isQuickState = (s: string | undefined): s is QuickState =>
+  (QUICK_STATES as readonly string[]).includes(s ?? "");
+
+/** Whether a run in this state is still doing something on its own — the one
+ *  question the status poll asks. A parked run moves only when the human
+ *  resumes or stops it, and a finished one never moves, so neither is polled:
+ *  when the task ends, nothing keeps asking. */
+export function quickIsWorking(status: QuickStatus | null): boolean {
+  if (!status?.exists || !isQuickState(status.state)) return false;
+  return status.state !== "held" && status.state !== "satisfied" && status.state !== "cancelled";
+}
+
+/** Whether the run has ended — approved, done or stopped. */
+export function quickIsOver(status: QuickStatus | null): boolean {
+  return status?.state === "satisfied" || status?.state === "cancelled";
+}
+
+/** The verb a state is shown as. Total over `QUICK_STATES` by construction —
+ *  `Record<QuickState, …>` makes a missing state a compile error. */
+const STATE_VERB: Record<QuickState, string> = {
+  "plan-wait": "planning",
+  "work-wait": "working",
+  "review-wait": "reviewing",
+  "fix-wait": "fixing",
+  "root-wait": "running",
+  held: "held",
+  satisfied: "approved",
+  cancelled: "stopped",
+};
+
+const STATE_TONE: Record<QuickState, QuickTone> = {
+  "plan-wait": "working",
+  "work-wait": "working",
+  "review-wait": "working",
+  "fix-wait": "working",
+  "root-wait": "working",
+  held: "held",
+  satisfied: "done",
+  cancelled: "stopped",
+};
+
+/** The chip for one pane of a run, or `null` when there is nothing to show —
+ *  the group has no run, or the status names a state this build does not know
+ *  (shown as nothing rather than as a guess).
+ *
+ *  `agentId` is the pane's own agent id; the chip is solid on the pane that
+ *  holds the turn and outlined on the others. */
+export function quickChipView(status: QuickStatus | null, agentId: string | null): QuickChipView | null {
+  if (!status?.exists || !isQuickState(status.state)) return null;
+  const state = status.state;
+  const reviewing = status.review_step === true;
+  // The round is shown while the worker or the reviewer holds the turn in a
+  // run that HAS a review step; a plan, a finish and a hold do not carry one.
+  const rounds =
+    reviewing && (state === "work-wait" || state === "review-wait" || state === "fix-wait")
+      ? ` ${status.round ?? 1}/${status.max_review_rounds ?? 1}`
+      : "";
+  let verb = STATE_VERB[state];
+  if (state === "satisfied" && !reviewing) verb = "done";
+  if (state === "held") verb = `held: ${status.held_reason ?? "unknown"}`;
+  const label = `quick${rounds} · ${verb}`;
+
+  const task = (status.task ?? "").split(/\s+/).filter(Boolean).join(" ");
+  const head = task ? `Quick task: ${task}` : "Quick task";
+  let title = head;
+  if (state === "held") {
+    const why = status.held_line ? ` — ${status.held_line}` : "";
+    const note = status.held_note ? ` (${status.held_note})` : "";
+    title = `${head}\nHeld${why}${note}. Right-click this pane to resume or stop the run.`;
+  } else if (state === "satisfied") {
+    title = `${head}\nFinished. Nothing was merged; the panes are yours to read or close.`;
+  } else if (state === "cancelled") {
+    title = `${head}\nStopped. The panes are yours to read or close.`;
+  } else if (status.brief_pending) {
+    title = `${head}\nHanding over to the next step…`;
+  }
+  return {
+    label,
+    title,
+    tone: STATE_TONE[state],
+    onTurn: agentId !== null && agentId !== "" && status.turn?.agent === agentId,
+  };
+}
+
+/** One thing a human can do to a run from a pane's menu. `action` is the word
+ *  `orch_quick_control` takes. */
+export interface QuickMenuEntry {
+  action: "resume" | "stop" | "handoff" | "note";
+  label: string;
+}
+
+/** What a pane's menu offers for the run it belongs to. Empty once the run has
+ *  ended — there is nothing left to do to it — and for a group with no run.
+ *
+ *  A parked run offers Resume first, because that is the answer the hold's
+ *  notice asks for; a working one offers the hand-off first, named for the
+ *  direction it would go. Stop is always last. */
+export function quickMenuEntries(status: QuickStatus | null): QuickMenuEntry[] {
+  if (!status?.exists || !isQuickState(status.state) || quickIsOver(status)) return [];
+  const entries: QuickMenuEntry[] = [];
+  if (status.state === "held") {
+    entries.push({ action: "resume", label: "Resume quick run" });
+  } else if (status.can_handoff) {
+    entries.push({
+      action: "handoff",
+      label: status.state === "review-wait" ? "Send back to the worker now" : "Hand to the reviewer now",
+    });
+  }
+  entries.push({ action: "note", label: "Add note to run…" });
+  entries.push({ action: "stop", label: "Stop quick run" });
+  return entries;
+}

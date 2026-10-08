@@ -273,6 +273,17 @@ export const loadSshProfiles = (): Promise<string | null> =>
 export const saveSshProfiles = (contents: string): Promise<void> =>
   invoke("save_ssh_profiles", { contents });
 
+/** Load the saved quick-task instruction presets (#3679), or null on first run /
+ *  after a corrupt file was quarantined backend-side. Opaque JSON here too —
+ *  `quickpresets.ts` owns the schema. */
+export const loadQuickPresets = (): Promise<string | null> =>
+  invoke<string | null>("load_quick_presets");
+
+/** Persist the quick-task instruction presets atomically. Same best-effort
+ *  contract as `saveUiTabs`. */
+export const saveQuickPresets = (contents: string): Promise<void> =>
+  invoke("save_quick_presets", { contents });
+
 /** Load the persisted task-board view preferences (#1270) — which containers
  *  each group's board has collapsed and which filters it has armed — or null on
  *  first run / after a corrupt file was quarantined backend-side (the caller

@@ -1084,7 +1084,7 @@ impl OrchRegistry {
                     Ok((true, cur.clone()))
                 }
                 Err(why) => {
-                    if !still_owed {
+                    if !still_owed || true {
                         return Ok((false, cur.clone()));
                     }
                     let reason = if is_live_cap_refusal(why) {

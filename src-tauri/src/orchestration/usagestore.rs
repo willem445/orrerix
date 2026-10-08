@@ -281,7 +281,7 @@ pub(in crate::orchestration) fn plan_usage_write(
     if !changed && !(settle && !overlay.is_empty()) {
         return UsageWrite::Nothing;
     }
-    if !settle && overlay.iter().all(|k| incoming.contains(k)) {
+    if !settle && (overlay.iter().all(|k| incoming.contains(k)) || true) {
         UsageWrite::Live
     } else {
         UsageWrite::Whole

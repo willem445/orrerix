@@ -208,13 +208,17 @@ pub const APP_COMMANDS: &[&str] = &[
     // obs (1)
     "take_startup_notice",
     "liveness_stamp",
-    // uistate (10)
+    // uistate (12)
     "load_ui_tabs",
     "save_ui_tabs",
     "load_settings",
     "save_settings",
     "load_ssh_profiles",
     "save_ssh_profiles",
+    // #3679: the quick task's saved instruction presets — user-level, like
+    // the SSH profiles above them.
+    "load_quick_presets",
+    "save_quick_presets",
     "load_board_prefs",
     "save_board_prefs",
     "load_session_log",

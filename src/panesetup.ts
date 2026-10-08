@@ -62,6 +62,7 @@ import {
 export type PaneKind =
   | "agent"
   | "orchestrator"
+  | "quick"
   | "terminal"
   | "files"
   | "editor"
@@ -167,6 +168,14 @@ export interface OrchestratorPlan {
   kind: "orchestrator";
   repo: string;
 }
+/** A quick task (#3679): one short-lived plan → work → review run with no
+ *  orchestrator pane. Only the repository is decided here — the task, the steps
+ *  and the two bounds are `planQuickStart`'s (`quickmodel.ts`), which the form
+ *  runs once this has answered ok. */
+export interface QuickTaskPlan {
+  kind: "quick";
+  repo: string;
+}
 /** A file-explorer pane (#214): a directory to root the manager at, and a name. No
  *  command, no shell, no PTY — the pane's content IS the file manager. */
 export interface FilesPlan {
@@ -239,6 +248,7 @@ export type PaneSetupPlan =
   | TerminalPlan
   | AgentPlan
   | OrchestratorPlan
+  | QuickTaskPlan
   | FilesPlan
   | EditorPlan
   | GitPlan
@@ -791,6 +801,17 @@ export function planPaneSetup(input: PaneSetupInput): PaneSetupResult {
       };
     }
     return { ok: true, plan: { kind: "orchestrator", repo } };
+  }
+
+  if (input.kind === "quick") {
+    if (!repo) {
+      return {
+        ok: false,
+        error: "A quick task needs a repository — pick one first.",
+        focus: "repo",
+      };
+    }
+    return { ok: true, plan: { kind: "quick", repo } };
   }
 
   // SSH (#887 S3). Two rules, and they are the only two this module can decide:

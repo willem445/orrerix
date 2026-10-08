@@ -152,6 +152,23 @@ fn ssh_profiles_path() -> PathBuf {
     state_dir().join("sshprofiles.json")
 }
 
+/// Absolute path of the saved quick-task instruction presets (#3679).
+///
+/// A sibling file for `sshprofiles.json`'s reason: a multi-entry list with its
+/// own lifecycle (save / replace / delete a preset) does not belong inside
+/// `settings.json`'s flat bag of app-wide scalars.
+///
+/// **The user's, not a repository's.** A preset is a name and three pieces of
+/// prompt text — what the human wants a quick task's plan, work and review
+/// steps told. It lives here so it is offered in every repository, and so that
+/// no repo file can author one: a quick run reads no workflow file at all.
+/// `src/quickpresets.ts` owns the schema. No agent reads this file and no MCP
+/// tool can reach it; the text reaches an agent only by a human picking the
+/// preset on the launcher and pressing Create.
+fn quick_presets_path() -> PathBuf {
+    state_dir().join("quickpresets.json")
+}
+
 /// Absolute path of the persisted task-board view preferences (#1270).
 ///
 /// A sibling file for the same reason `sshprofiles.json` is one: a multi-entry
@@ -334,6 +351,32 @@ pub async fn save_ssh_profiles(contents: String) -> Result<(), String> {
     let ticket = next_write_ticket();
     crate::blocking::run_blocking(move || write_atomic_seq(&ssh_profiles_path(), &contents, ticket))
         .await
+}
+
+/// Read the saved quick-task instruction presets (#3679) as an opaque JSON
+/// string, or `null` on first run / a quarantined corrupt file —
+/// `src/quickpresets.ts` degrades that to an empty list, exactly like
+/// `load_ssh_profiles`/`sshprofile.ts`.
+///
+/// **Reentrancy.** Identical to [`load_ui_tabs`], on its own sibling file.
+#[tauri::command]
+pub async fn load_quick_presets() -> Option<String> {
+    crate::blocking::run_blocking(|| load_or_quarantine(&quick_presets_path())).await
+}
+
+/// Persist the quick-task instruction presets (an opaque JSON string produced
+/// by `src/quickpresets.ts`), atomically. Same best-effort contract as
+/// `save_ui_tabs`.
+///
+/// **Reentrancy.** Same ticket as [`save_ui_tabs`], against its own path's
+/// high-water mark — none of the state files gate each other.
+#[tauri::command]
+pub async fn save_quick_presets(contents: String) -> Result<(), String> {
+    let ticket = next_write_ticket();
+    crate::blocking::run_blocking(move || {
+        write_atomic_seq(&quick_presets_path(), &contents, ticket)
+    })
+    .await
 }
 
 /// Read the persisted task-board view preferences (#1270) as an opaque JSON
@@ -562,6 +605,21 @@ mod tests {
         assert_ne!(log, ssh, "the sessions log must not write over the SSH profiles");
         assert_ne!(log, board, "the sessions log must not write over the board view");
         assert_eq!(log.parent(), tabs.parent());
+        // #3679's sixth file, added the same way and so exposed to the same
+        // copy-paste failure: a duplicated path fn that kept the old name would
+        // make every saved preset silently overwrite the user's SSH profiles.
+        let presets = quick_presets_path();
+        assert_eq!(presets.file_name().unwrap(), "quickpresets.json");
+        for (other, what) in [
+            (&tabs, "the tab set"),
+            (&settings, "app settings"),
+            (&ssh, "the SSH profiles"),
+            (&board, "the board view"),
+            (&log, "the sessions log"),
+        ] {
+            assert_ne!(&presets, other, "quick presets must not write over {what}");
+        }
+        assert_eq!(presets.parent(), tabs.parent());
     }
 
     #[test]

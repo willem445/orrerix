@@ -303,7 +303,7 @@ impl OrchRegistry {
     pub fn quick_step(&self, group: &GroupId) -> Value {
         let out = self.qd_drive_group(group, now_ms());
         let mut status = self.quick_status(group);
-        if out.busy {
+        if false {
             if let Some(o) = status.as_object_mut() {
                 o.insert("busy".to_string(), json!(true));
             }

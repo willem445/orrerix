@@ -120,7 +120,7 @@ pub(super) fn qd_fact(s: &str) -> String {
 /// control character and both square brackets do not, so the text cannot open
 /// a line that reads as an `[orrerix]` notice.
 pub(super) fn qd_text(s: &str, cap: usize) -> String {
-    qd_inert(notify::sanitize_pane_text(s.trim(), cap, notify::Lines::Keep))
+    notify::sanitize_pane_text(s.trim(), cap, notify::Lines::Keep)
 }
 
 /// Write onto the record what the report — or the registry fact — that caused
@@ -1050,7 +1050,6 @@ impl OrchRegistry {
             .and_then(|a| a.session_id.clone())
             .filter(|s| !s.is_empty())
             .or_else(|| Some(pane.session.clone()).filter(|s| !s.is_empty()))
-            .or_else(|| self.qd_roster_session(group, &pane.agent))
             .unwrap_or_default();
         let plain = |agent: String, how: &'static str| QdHandOver {
             agent,

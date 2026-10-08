@@ -318,7 +318,8 @@ pub(in crate::orchestration) fn claude_cached_version() -> Option<String> {
 /// different question. The orchestrator is `Containment::None` (denies
 /// nothing today) and still gets this deny; a liaison-hinted reviewer is
 /// `Containment::NoEdits` (#891) and gets both denials in the SAME
-/// `--disallowedTools` list. A worker, a planner, and a non-liaison reviewer
+/// `--disallowedTools` list. A quick run's root (#3679) is denied it too, for
+/// the orchestrator's reason. A worker, a planner, and a non-liaison reviewer
 /// never get this one: a human standing at a DELEGATE's own pane, answering
 /// its dialog in person, never stalls anyone else, so the dialog stays
 /// reachable exactly where holding it is harmless.

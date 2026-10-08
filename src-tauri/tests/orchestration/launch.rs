@@ -700,13 +700,21 @@ fn a_liaison_hinted_reviewer_denies_both_edits_and_the_question_dialog() {
 }
 
 /// The predicate itself (#946 Q4 / #1091 H7), independent of any spawn
-/// plumbing: exactly orchestrator OR liaison-hinted, nothing else — the unit
+/// plumbing: exactly an orchestrator, a quick run's root (#3679) OR
+/// liaison-hinted, nothing else — the unit
 /// `a_liaison_hinted_reviewer_denies_both_edits_and_the_question_dialog` and
 /// `a_spawn_carries_the_deny_flags_of_the_class_it_spawned` exercise through
 /// real spawns.
 #[test]
-fn claude_denies_interactive_question_is_exactly_orchestrator_or_liaison() {
+fn claude_denies_interactive_question_is_exactly_orchestrator_quick_root_or_liaison() {
     assert!(claude_denies_interactive_question(Role::Orchestrator, None));
+    // #3679: the quick root, for the orchestrator's reason — its helpers'
+    // reports queue behind a modal, and nobody is in a pane orrerix opened.
+    assert!(claude_denies_interactive_question(Role::Quick, None));
+    // The control on that: a LEAD is a root too and is NOT denied, because the
+    // human is in that pane. The rule is "nobody is there to answer", not
+    // "this is a root".
+    assert!(!claude_denies_interactive_question(Role::Lead, None));
     assert!(claude_denies_interactive_question(Role::Orchestrator, Some("liaison")));
     assert!(claude_denies_interactive_question(Role::Reviewer, Some("liaison")));
     // Every other (role, hint) pairing this codebase can actually produce

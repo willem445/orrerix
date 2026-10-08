@@ -1010,7 +1010,6 @@ pub struct UsageSnapshot {
     /// — folded in [`OrchRegistry::merge_usage_entry`] from the reading this
     /// tick already made, never from a second read. Additive: a row written
     /// before the field existed reads as unknown, and the next growth fills it.
-    #[serde(default)]
     pub activity: loomux_engine::cacheage::Activity,
 }
 

@@ -12,15 +12,18 @@
 
 use super::*;
 
-/// Every row the group has, as one JSON array — the file an older build wrote
-/// and still reads. Rewritten whole, and only when a row SETTLES: a kill
-/// snapshot, or a row in the overlay that no live agent owns any more.
+/// A row for every key the group has, as one JSON array — the file an older
+/// build wrote and still reads. Rewritten whole, and only when the SET of rows
+/// changes or a row settles: a key seen for the first time, or a kill
+/// snapshot. So it names every session the store knows, and holds each one's
+/// figures as of the last such write.
 pub const USAGE_FILE: &str = "usage.json";
 
-/// The overlay: the rows that have changed since [`USAGE_FILE`] was last
-/// written whole, in the same row shape. This is the only file a usage tick
-/// writes, so a tick's write is as large as the rows that are moving and no
-/// larger. An older build ignores it.
+/// The overlay: the rows whose figures have changed since [`USAGE_FILE`] was
+/// last written whole, in the same row shape. It is what a usage tick writes
+/// when an agent it already knows has spent, so that write is as large as the
+/// rows that are moving and no larger. This store never adds a key to it that
+/// [`USAGE_FILE`] lacks. An older build ignores it.
 pub const USAGE_LIVE_FILE: &str = "usage-live.json";
 
 /// What `fs::metadata` says about one of the store's two files — the cheap
@@ -244,12 +247,23 @@ pub(in crate::orchestration) fn load_usage_store(dir: &Path) -> Result<UsageLoad
     })
 }
 
+/// What merging one reading did to the store's rows.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(in crate::orchestration) enum RowMerge {
+    /// The row is there and nothing that persists moved.
+    Unchanged,
+    /// The row is there and its persisted content moved.
+    Changed,
+    /// No row had this key: one was added.
+    Added,
+}
+
 /// Which file a merge has to write.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(in crate::orchestration) enum UsageWrite {
     /// Nothing that persists has changed.
     Nothing,
-    /// The overlay alone: only rows a live agent owns are waiting.
+    /// The overlay alone: rows the base already has, with newer figures.
     Live,
     /// The whole base file, after which the overlay is redundant and removed.
     Whole,
@@ -257,34 +271,43 @@ pub(in crate::orchestration) enum UsageWrite {
 
 /// Decide what a merge writes. Pure.
 ///
-/// - `changed`: some row's persisted content moved in this merge.
+/// - `changed`: some row's persisted content moved in this merge (a row that
+///   was added counts).
+/// - `added`: the merge added a row for a key the store did not have.
 /// - `settle`: the merge is a write from outside the usage tick (a kill
 ///   snapshot), so whatever is waiting in the overlay goes into the base now.
 ///   A dead agent's row has no later tick to carry it there.
-/// - `overlay`: the keys waiting, AFTER the merge.
-/// - `incoming`: the keys this merge carried, which on the tick are the live
-///   agents'.
+/// - `overlay_waiting`: the overlay holds at least one row, AFTER the merge.
 ///
-/// The overlay is written only while every key in it is one this tick
-/// carried. A key nobody carried is a row no later tick will refresh — a
-/// session that ended with the previous process, or the `agent:<id>` row a
-/// pane had before its session id was known — and leaving it in the overlay
-/// would let the overlay grow by one row per such event, which is the growth
-/// this store exists to stop. So that tick writes the whole file once, and the
-/// overlay goes back to holding live rows only.
+/// **A new key is a whole write, and that is what keeps `usage.json` complete**
+/// (#3680 review B1). Were a first sighting written to the overlay like any
+/// other change, a row would exist in `usage-live.json` alone until the next
+/// agent ended — so `usage.json`, the one file an older build and any outside
+/// reader open, would be missing every agent spawned since, and would not
+/// exist at all in a group where nobody had ended yet. The cost is one whole
+/// write per key that appears, the same cadence as one per agent that ends.
+///
+/// **Nothing else makes a tick write the whole file.** In particular a row
+/// waiting in the overlay that this tick did not carry — one a previous
+/// process left, or one a second instance of the app owns — stays there. An
+/// earlier version folded such a row into the base on sight, and two instances
+/// each with an agent spending in the same group then rewrote the whole file
+/// against each other once a tick (#3680 review N1). The overlay cannot grow
+/// without bound for the lack of that rule: it only ever takes keys the base
+/// has, and the next new key or ended agent empties it.
 pub(in crate::orchestration) fn plan_usage_write(
     changed: bool,
+    added: bool,
     settle: bool,
-    overlay: &HashSet<String>,
-    incoming: &HashSet<String>,
+    overlay_waiting: bool,
 ) -> UsageWrite {
-    if !changed && !(settle && !overlay.is_empty()) {
+    if !changed && !(settle && overlay_waiting) {
         return UsageWrite::Nothing;
     }
-    if !settle && overlay.iter().all(|k| incoming.contains(k)) {
-        UsageWrite::Live
-    } else {
+    if settle || added {
         UsageWrite::Whole
+    } else {
+        UsageWrite::Live
     }
 }
 

@@ -77,10 +77,11 @@ fn spend(proj: &Path, sid: &str, id: &str, input: u64, output: u64) {
 /// A group with one live claude worker whose session has spent 1,500 tokens,
 /// ticked until its row has stopped changing.
 ///
-/// TWO ticks, and the second is not padding: the first sights the row, and the
-/// second records the baseline the cache-age fold measures growth from (#3407)
-/// — a real change to what persists. Only from the third tick on is "nothing
-/// moved" true of the row.
+/// TWO ticks, and the second is not padding: the first sights the row — a new
+/// key, so it is written into `usage.json` — and the second records the
+/// baseline the cache-age fold measures growth from (#3407), a real change to
+/// what persists, which goes to the overlay. Only from the third tick on is
+/// "nothing moved" true of the row. So this leaves the row in BOTH files.
 fn settled_worker(reg: &OrchRegistry, proj: &Path) -> (GroupId, String, String, PathBuf) {
     reg.set_claude_projects_dir(proj.to_path_buf());
     let g = reg.create_group("C:/tmp/repo", rails()).unwrap();
@@ -152,11 +153,21 @@ fn a_tick_with_one_agent_spending_does_not_rewrite_the_historical_rows() {
         .map(|i| usage_snap(&format!("sess-dead-{i}"), &format!("w-dead-{i}"), 0.5, 1000, 0))
         .collect();
     fs::write(dir.join("usage.json"), serde_json::to_string_pretty(&dead).unwrap()).unwrap();
-    let historical = file_state(&dir.join("usage.json")).unwrap();
 
     let w = reg.spawn_agent(&g.id, Role::Worker, "w", "task", false, None).unwrap();
     let sid = w.session_id.clone().unwrap();
-    let mut live = 0u64;
+    // The agent's FIRST tick is the one whole write it costs: a new key goes
+    // into `usage.json`, so that file names every session the group has.
+    spend(proj.path(), &sid, "m0", 10, 5);
+    let mut live = 15u64;
+    assert_eq!(reg.group_usage(&g.id)["lifetime_tokens"].as_u64(), Some(DEAD as u64 * 1000 + live));
+    assert_eq!(
+        rows_in(&dir.join("usage.json")).len(),
+        DEAD + 1,
+        "fixture: the live agent's row is in usage.json beside the historical ones"
+    );
+    // From here on it is an agent the store knows, spending.
+    let historical = file_state(&dir.join("usage.json")).unwrap();
     for turn in 1..=5u64 {
         spend(proj.path(), &sid, &format!("m{turn}"), 100 * turn, 50);
         live += 100 * turn + 50;
@@ -379,41 +390,132 @@ fn a_row_in_both_files_is_decided_by_which_is_newer() {
     assert_eq!(load(vec![stamped("sess-k", 3000, 100)], vec![stamped("sess-k", 5000, 100)]), 5000);
 }
 
-/// The overlay holds live rows only. A row in it that no live agent owns — here
-/// one a previous process left behind when it stopped — is folded into
-/// `usage.json` on the next tick that writes at all, so the overlay cannot
-/// grow by a row per restart.
+/// #3680 review B1. `usage.json` is the file an older build and every outside
+/// reader open, so it must hold a row for every key the store has — from the
+/// tick the key first appears, not from the next time some agent happens to
+/// end. A first sighting written to the overlay alone left `usage.json`
+/// missing every agent spawned since the last whole write, and absent
+/// altogether in a group where nobody had ended yet.
 #[test]
-fn an_overlay_row_with_no_live_owner_is_folded_into_usage_json() {
+fn a_newly_seen_agent_is_in_usage_json_from_its_first_tick() {
     let proj = tempfile::tempdir().unwrap();
     let (reg, _d) = test_registry();
     reg.set_claude_projects_dir(proj.path().to_path_buf());
     let g = reg.create_group("C:/tmp/repo", rails()).unwrap();
     let dir = reg.state_root().join(g.id.as_str());
-    fs::create_dir_all(&dir).unwrap();
-    let orphan = vec![usage_snap("sess-gone", "w-gone", 0.5, 9000, 0)];
-    fs::write(dir.join("usage-live.json"), serde_json::to_string(&orphan).unwrap()).unwrap();
+    let keys_in = |file: &str| -> Vec<String> {
+        let mut keys: Vec<String> = rows_in(&dir.join(file)).into_iter().map(|r| r.key).collect();
+        keys.sort();
+        keys
+    };
 
-    let w = reg.spawn_agent(&g.id, Role::Worker, "w", "task", false, None).unwrap();
-    let sid = w.session_id.clone().unwrap();
-    spend(proj.path(), &sid, "m1", 1000, 500);
-    assert_eq!(reg.group_usage(&g.id)["lifetime_tokens"].as_u64(), Some(10_500));
+    // The first agent of a group nobody has ended in: ONE tick.
+    let a = reg.spawn_agent(&g.id, Role::Worker, "a", "task", false, None).unwrap();
+    let sid_a = a.session_id.clone().unwrap();
+    spend(proj.path(), &sid_a, "a1", 1000, 500);
+    assert_eq!(reg.group_usage(&g.id)["lifetime_tokens"].as_u64(), Some(1500));
+    let base = rows_in(&dir.join("usage.json"));
+    assert_eq!(base.len(), 1, "usage.json exists and holds the row after one tick");
+    assert_eq!(base[0].key, sid_a);
+    assert_eq!(row_tokens(&base[0]), 1500);
 
-    let mut keys: Vec<String> = rows_in(&dir.join("usage.json")).into_iter().map(|r| r.key).collect();
-    keys.sort();
-    let mut want = vec!["sess-gone".to_string(), sid.clone()];
+    // It spends, which moves its row into the overlay…
+    spend(proj.path(), &sid_a, "a2", 1000, 500);
+    assert_eq!(reg.group_usage(&g.id)["lifetime_tokens"].as_u64(), Some(3000));
+    assert_eq!(keys_in("usage-live.json"), vec![sid_a.clone()], "fixture: a row is waiting in the overlay");
+
+    // …and then a SECOND agent is spawned, with no agent having ended in between.
+    let b = reg.spawn_agent(&g.id, Role::Worker, "b", "task", false, None).unwrap();
+    let sid_b = b.session_id.clone().unwrap();
+    spend(proj.path(), &sid_b, "b1", 200, 100);
+    assert_eq!(reg.group_usage(&g.id)["lifetime_tokens"].as_u64(), Some(3300));
+    let mut want = vec![sid_a.clone(), sid_b.clone()];
     want.sort();
-    assert_eq!(keys, want, "the orphaned row moved into usage.json, with the live one");
-    assert_eq!(file_state(&dir.join("usage-live.json")), None, "and the overlay was emptied");
+    assert_eq!(keys_in("usage.json"), want, "the agent spawned since the last whole write is in usage.json");
+    let seen: u64 = rows_in(&dir.join("usage.json")).iter().map(row_tokens).sum();
+    assert_eq!(seen, 3300, "and that write brought the first agent's row up to date with it");
+    assert_eq!(file_state(&dir.join("usage-live.json")), None, "leaving nothing waiting");
+}
 
-    // From here the overlay is live rows only again.
-    assert_eq!(reg.group_usage(&g.id)["lifetime_tokens"].as_u64(), Some(10_500));
-    spend(proj.path(), &sid, "m2", 1000, 500);
-    assert_eq!(reg.group_usage(&g.id)["lifetime_tokens"].as_u64(), Some(12_000));
+/// #3680 review N1. A tick writes `usage.json` whole for a key it has not
+/// seen and for nothing else. In particular not for a row waiting in the
+/// overlay that this process does not own — one a second instance of the app
+/// is spending on in the same group, or one a previous process left. Folding
+/// such a row on sight made two instances rewrite the whole file against each
+/// other once a tick.
+#[test]
+fn a_tick_leaves_an_overlay_row_it_does_not_own_where_it_is() {
+    let proj = tempfile::tempdir().unwrap();
+    let (reg, d) = test_registry();
+    let (g, w, sid, dir) = settled_worker(&reg, proj.path());
+
+    // What a second instance's agent leaves on disk: its row in usage.json
+    // from its first tick, and newer figures for it in the overlay.
+    let mut base = rows_in(&dir.join("usage.json"));
+    base.push(UsageSnapshot { updated_ms: 10, ..usage_snap("sess-other", "w-other", 0.5, 1000, 0) });
+    fs::write(dir.join("usage.json"), serde_json::to_string_pretty(&base).unwrap()).unwrap();
+    let mut overlay = rows_in(&dir.join("usage-live.json"));
+    overlay.push(UsageSnapshot { updated_ms: 20, ..usage_snap("sess-other", "w-other", 0.5, 9000, 0) });
+    fs::write(dir.join("usage-live.json"), serde_json::to_string(&overlay).unwrap()).unwrap();
     assert_eq!(
-        rows_in(&dir.join("usage-live.json")).iter().map(|r| r.key.as_str()).collect::<Vec<_>>(),
-        vec![sid.as_str()]
+        reg.group_usage(&g)["lifetime_tokens"].as_u64(),
+        Some(10_500),
+        "positive control: this process has loaded the other writer's row, at its overlay figure"
     );
+
+    let untouched = file_state(&dir.join("usage.json")).unwrap();
+    for turn in 2..=4u64 {
+        spend(proj.path(), &sid, &format!("m{turn}"), 1000, 500);
+        assert_eq!(reg.group_usage(&g)["lifetime_tokens"].as_u64(), Some(10_500 + 1500 * (turn - 1)));
+    }
+    assert_eq!(
+        file_state(&dir.join("usage.json")).as_ref(),
+        Some(&untouched),
+        "a row this tick did not carry must not cost a whole rewrite of usage.json"
+    );
+    let waiting = rows_in(&dir.join("usage-live.json"));
+    let other = waiting.iter().find(|r| r.key == "sess-other").expect("the other writer's row is still waiting");
+    assert_eq!(row_tokens(other), 9000, "and is carried forward as it was, not dropped and not rolled back");
+    assert!(waiting.iter().any(|r| r.key == sid));
+
+    // It reaches usage.json with the next whole write, like everything else waiting.
+    reg.mark_dead(&w, Some(0));
+    let settled = rows_in(&dir.join("usage.json"));
+    assert_eq!(settled.iter().find(|r| r.key == "sess-other").map(row_tokens), Some(9000));
+    assert_eq!(relaunch_registry(d.path()).group_usage(&g)["lifetime_tokens"].as_u64(), Some(15_000));
+}
+
+/// #3680 review N2. A row held in both files is decided by `updated_ms`, so a
+/// change to a row has to carry a LATER stamp than the row it replaces —
+/// whatever the reading's own clock says. Two readings in one millisecond, or
+/// a wall clock that stepped back, would otherwise leave the older row
+/// looking like the newer one.
+#[test]
+fn a_changed_row_always_gets_a_later_updated_ms() {
+    let (reg, _d) = test_registry();
+    let g = reg.create_group("C:/tmp/repo", rails()).unwrap();
+    let path = reg.state_root().join(g.id.as_str()).join("usage.json");
+    let at = |input: u64, stamp: u64| UsageSnapshot {
+        updated_ms: stamp,
+        ..usage_snap("sess-k", "w-1", 0.5, input, 0)
+    };
+    let stamp_on_disk = || rows_in(&path)[0].updated_ms;
+
+    reg.upsert_usage_snapshot(&g.id, at(100, 1000));
+    assert_eq!(stamp_on_disk(), 1000, "a first sighting keeps the stamp it came with");
+
+    // The clock stepped BACK between two readings.
+    reg.upsert_usage_snapshot(&g.id, at(200, 400));
+    assert_eq!(row_tokens(&rows_in(&path)[0]), 200, "positive control: the change was written");
+    assert_eq!(stamp_on_disk(), 1001, "a change stamped earlier than the row it replaces");
+
+    // Two readings in the same millisecond.
+    reg.upsert_usage_snapshot(&g.id, at(300, 1001));
+    assert_eq!(stamp_on_disk(), 1002, "a change stamped the same as the row it replaces");
+
+    // And a clock that is simply ahead is taken as it is.
+    reg.upsert_usage_snapshot(&g.id, at(400, 5000));
+    assert_eq!(stamp_on_disk(), 5000);
 }
 
 /// #3677 acceptance 3: when the write fails, the caller is told what is on
@@ -587,21 +689,44 @@ fn a_usage_json_written_by_v1_3_1_beta7_loads_whole_and_is_not_rewritten_by_the_
 
 /// What an OLDER build sees of a store this build wrote, which is the other
 /// direction of acceptance 4: `usage.json` is still a plain row list it can
-/// parse, holding every row, with a live row as of the last whole write.
+/// parse, with a row for every key the store has, each as of the last whole
+/// write.
+///
+/// The fixture has an agent spawned AFTER the last agent ended and both live
+/// agents spending since (#3680 review B1): the state in which a row could be
+/// missing from `usage.json` outright if a new key were not a whole write.
 #[test]
 fn usage_json_stays_a_row_list_an_older_build_can_read() {
     let proj = tempfile::tempdir().unwrap();
     let (reg, _d) = test_registry();
     let (g, _w, sid, dir) = settled_worker(&reg, proj.path());
     reg.upsert_usage_snapshot(&g, usage_snap("sess-old", "w-old", 1.25, 1000, 2000));
+    let late = reg.spawn_agent(&g, Role::Worker, "late", "task", false, None).unwrap();
+    let late_sid = late.session_id.clone().unwrap();
+    spend(proj.path(), &late_sid, "l1", 400, 100);
+    assert_eq!(reg.group_usage(&g)["lifetime_tokens"].as_u64(), Some(5000));
+    // Both live agents spend after that: 1,000 and 250 that only the overlay has.
     spend(proj.path(), &sid, "m2", 700, 300);
-    assert_eq!(reg.group_usage(&g)["lifetime_tokens"].as_u64(), Some(5500));
+    spend(proj.path(), &late_sid, "l2", 200, 50);
+    let usage = reg.group_usage(&g);
+    assert_eq!(usage["lifetime_tokens"].as_u64(), Some(6250));
 
     // Read the way v1.3.0 read it: `usage.json` alone, as a flat array of
     // objects with these keys.
     let text = fs::read_to_string(dir.join("usage.json")).unwrap();
     let rows: Vec<Value> = serde_json::from_str(&text).expect("a JSON array");
-    assert_eq!(rows.len(), 2, "the settled row and the live one");
+    assert_eq!(
+        rows.len(),
+        usage["agents"].as_array().unwrap().len(),
+        "one row per session the app itself reports — none is in the overlay alone"
+    );
+    assert_eq!(rows.len(), 3, "the ended session and both live ones");
+    let in_overlay: Vec<String> = rows_in(&dir.join("usage-live.json")).into_iter().map(|r| r.key).collect();
+    assert!(!in_overlay.is_empty(), "fixture: figures are waiting in the overlay");
+    assert!(
+        in_overlay.iter().all(|k| rows.iter().any(|r| r["key"] == k.as_str())),
+        "and every key waiting there has its row in usage.json"
+    );
     for key in [
         "key", "agent_id", "name", "role", "source", "input_tokens", "output_tokens",
         "cache_creation_tokens", "cache_read_tokens", "cost_usd", "estimated", "model", "updated_ms",
@@ -610,8 +735,8 @@ fn usage_json_stays_a_row_list_an_older_build_can_read() {
     }
     let seen: u64 = rows_in(&dir.join("usage.json")).iter().map(row_tokens).sum();
     assert_eq!(
-        seen, 4500,
-        "an older build is behind by exactly what moved since the last whole write (1,000 \
+        seen, 5000,
+        "an older build is behind by exactly what moved since the last whole write (1,250 \
          here), never by a whole row"
     );
 }

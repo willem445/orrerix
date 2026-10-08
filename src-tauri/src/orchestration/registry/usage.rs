@@ -387,8 +387,9 @@ impl OrchRegistry {
         Ok(())
     }
 
-    /// Merge one snapshot into `list`, matched by `key`, and say whether the
-    /// row's PERSISTED content changed. Pure — no lock, no I/O.
+    /// Merge one snapshot into `list`, matched by `key`, and say what that did:
+    /// added a row, changed one's PERSISTED content, or neither. Pure — no lock,
+    /// no I/O.
     ///
     /// Factored out of `upsert_usage_snapshot` (#743 S4b) so a whole tick's
     /// worth of live-agent snapshots can go through ONE load-write cycle
@@ -400,7 +401,7 @@ impl OrchRegistry {
     /// tick ran, so counting it would make every tick a write. The row in
     /// `list` still gets the fresh stamp — what a caller is handed is as
     /// current as it ever was — and the file gets it with the next real change.
-    fn merge_usage_entry(list: &mut Vec<Arc<UsageSnapshot>>, snap: UsageSnapshot) -> bool {
+    fn merge_usage_entry(list: &mut Vec<Arc<UsageSnapshot>>, snap: UsageSnapshot) -> RowMerge {
         match list.iter_mut().find(|s| s.key == snap.key) {
             Some(slot) => {
                 let existing: &UsageSnapshot = &**slot;
@@ -494,7 +495,11 @@ impl OrchRegistry {
                     next.updated_ms.max(existing.updated_ms)
                 };
                 *slot = Arc::new(next);
-                changed
+                if changed {
+                    RowMerge::Changed
+                } else {
+                    RowMerge::Unchanged
+                }
             }
             // A FIRST sighting is not folded (#3407): a row that arrives already
             // carrying tokens — a session this store never saw — has a
@@ -503,7 +508,7 @@ impl OrchRegistry {
             // Its activity stays unknown until its counters next move.
             None => {
                 list.push(Arc::new(snap));
-                true
+                RowMerge::Added
             }
         }
     }
@@ -525,8 +530,9 @@ impl OrchRegistry {
     /// - `usage-live.json`, the overlay, holding only the rows that have moved
     ///   since `usage.json` was last written — so a tick's write is as large as
     ///   the agents spending and no larger;
-    /// - `usage.json` whole, when a row settles: `settle` (a kill snapshot from
-    ///   outside the tick) or an overlay row no live agent owns any more.
+    /// - `usage.json` whole, when the set of rows changes or one settles: a key
+    ///   the store has not seen before, or `settle` (a kill snapshot from
+    ///   outside the tick). That is what keeps `usage.json` a row for every key.
     ///
     /// The returned list is the store's rows, which **when the write succeeds**
     /// ARE what the two files hold. When it fails they are not, and the list
@@ -568,16 +574,17 @@ impl OrchRegistry {
             self.note_poll_read(group, "usage-store", Ok(()));
             return rows;
         }
-        let incoming_keys: HashSet<String> = incoming.iter().map(|s| s.key.clone()).collect();
-        let mut changed = false;
+        let (mut changed, mut added) = (false, false);
         for snap in incoming {
             let key = snap.key.clone();
-            if Self::merge_usage_entry(&mut store.rows, snap) {
+            let merged = Self::merge_usage_entry(&mut store.rows, snap);
+            if merged != RowMerge::Unchanged {
                 store.overlay.insert(key);
                 changed = true;
             }
+            added |= merged == RowMerge::Added;
         }
-        let wrote = match plan_usage_write(changed, settle, &store.overlay, &incoming_keys) {
+        let wrote = match plan_usage_write(changed, added, settle, !store.overlay.is_empty()) {
             UsageWrite::Nothing => Ok(()),
             _ if fail_writes => Err(std::io::Error::new(
                 std::io::ErrorKind::Other,
@@ -617,7 +624,8 @@ impl OrchRegistry {
     /// A SETTLING merge (#3677): the row goes into `usage.json` itself rather
     /// than the overlay, along with anything else waiting there. A dead agent
     /// has no later tick to carry its row across, and the whole-file write this
-    /// costs happens once per agent that ends, not once per second.
+    /// costs happens once per agent that ends, not once per second. (The other
+    /// whole write is a key's first appearance — see `plan_usage_write`.)
     ///
     /// Invalidates the polled memo: this is a write from OUTSIDE the usage
     /// computation, and a kill's captured spend must not wait out a poll window

@@ -241,7 +241,7 @@ pub async fn orch_set_compact_nudge_min_context_percent(
 ///
 /// **Reentrancy.** The markers, guardrails, and agent state it reads are
 /// read-only here. The token total is not: it runs the same usage computation
-/// `orch_group_usage` does, whose usage-store read-modify-write is serialized
+/// `orch_group_usage` does, whose `usage.json` read-modify-write is serialized
 /// by [`OrchRegistry::usage_lock`] — and inside one window the two commands
 /// share a single computation rather than racing to do it twice.
 #[tauri::command]
@@ -316,7 +316,7 @@ pub async fn orch_group_view(app: AppHandle, group_id: String) -> Value {
 /// one, and the publisher covers `reg.groups` plus every fresh strip lease. A
 /// leased id the registry does not know is computed through the SAME functions
 /// as any other — `group_summary` answers zero live agents, `group_usage_live_within`
-/// reads that group's usage store — so a restored group's entry is
+/// reads that group's `usage.json` — so a restored group's entry is
 /// wire-identical to what the commands it replaced returned for it, by
 /// construction rather than by a second disk path.
 ///

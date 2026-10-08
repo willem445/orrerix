@@ -71,8 +71,9 @@
 #    entry is at the bottom of this file. The routing rules above are carried
 #    by the block NAMES the orchestrator sees in its roster, by the edges, and
 #    by the gate.
-#  * effort:/context: are not settable on opencode blocks (CLI_CAPS); on the
-#    claude blocks they are left at the CLI default.
+#  * effort:/context: are not settable on opencode blocks (CLI_CAPS). Here
+#    worker-std and rev-std pin an effort; the other claude blocks use the CLI
+#    default.
 #  * "Once" is a routing intent, not a mechanism: a verdict is bound to the
 #    commit AND body it reviewed, so a push or a body edit after rev-final's
 #    PASS is a second call by construction. Rule 1 is what keeps that to one.

@@ -1157,11 +1157,13 @@ function indexSessionAgents(agents) {
 // ---------------------------------------------------------------------------
 // The usage store's second file (#3677, docs/design/usage-store.md).
 //
-// `usage.json` is written whole only when a row SETTLES — an agent ends. What
-// has moved since then is in `usage-live.json` beside it, in the same row shape.
-// So `usage.json` read alone is behind, for every agent still running, by what
-// that agent has spent since the last agent ended; a scorecard taken mid-session
-// would under-read exactly the delegates it is being asked about.
+// `usage.json` is written whole only when the SET of rows changes or one
+// settles — an agent is first seen, or ends. It has a row for every session,
+// and what has moved since that write is in `usage-live.json` beside it, in the
+// same row shape. So `usage.json` read alone is behind, for every agent still
+// running, by what that agent has spent since the last agent started or ended;
+// a scorecard taken mid-session would under-read exactly the delegates it is
+// being asked about.
 //
 // The fold is the app's own (`fold_usage_overlay`, `usagestore.rs`), restated
 // because this script cannot link it: a row in both files is decided by
@@ -1197,21 +1199,33 @@ function foldUsageLive(base, live) {
 }
 
 // Read `--usage`, folding in the overlay that sits beside it when there is one.
-// Absent is the ordinary case (an older build's store, or one with nothing
-// moving) and reads as the file alone. An overlay that is there and will not
-// parse is an error rather than a silent under-read.
+// An absent overlay is the ordinary case (an older build's store, or one with
+// nothing moving) and reads as the file alone. An overlay that is there and
+// will not parse is an error rather than a silent under-read.
+//
+// An absent `usage.json` WITH an overlay beside it reads as the overlay over
+// nothing, which is what the app's own loader does with that pair
+// (`load_usage_store`). The app does not leave a store in that state — a new
+// session's row goes into `usage.json` on its first tick — but a reader that
+// died on it would be reporting a missing file for a store that has rows
+// (#3680 review B1). With neither file there, the error is the missing
+// `--usage` it always was.
 function readUsage(usagePath) {
-  const base = JSON.parse(fs.readFileSync(usagePath, 'utf8'));
   const livePath = path.join(path.dirname(usagePath), USAGE_LIVE_FILE);
-  let text;
-  try {
-    text = fs.readFileSync(livePath, 'utf8');
-  } catch (e) {
-    if (e && e.code === 'ENOENT') return { usage: base, live: null };
-    throw e;
-  }
-  const { usage, applied } = foldUsageLive(base, JSON.parse(text));
-  return { usage, live: { path: livePath, rows_applied: applied } };
+  const readOrAbsent = (p) => {
+    try {
+      return fs.readFileSync(p, 'utf8');
+    } catch (e) {
+      if (e && e.code === 'ENOENT') return null;
+      throw e;
+    }
+  };
+  const liveText = readOrAbsent(livePath);
+  const baseText = liveText === null ? fs.readFileSync(usagePath, 'utf8') : readOrAbsent(usagePath);
+  const base = baseText === null ? [] : JSON.parse(baseText);
+  if (liveText === null) return { usage: base, live: null };
+  const { usage, applied } = foldUsageLive(base, JSON.parse(liveText));
+  return { usage, live: { path: livePath, rows_applied: applied, base_absent: baseText === null } };
 }
 
 function usageRowTokens(u) {

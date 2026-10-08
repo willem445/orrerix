@@ -1782,3 +1782,36 @@ test('usage-live: an overlay beside --usage reaches the delegate counters, and i
     rmSync(dir, { recursive: true, force: true });
   }
 });
+
+test('usage-live: an overlay with no usage.json beside it is read, and neither file is still an error', () => {
+  const run = (usagePath: string) => execFileSync(process.execPath, [
+    scriptPath,
+    '--audit', AUDIT, '--usage', usagePath, '--agents', AGENTS,
+    '--transcript', TRANSCRIPT, '--pr-meta', PR_META,
+    '--pr', '900', '--pr', '901', '--pr', '902',
+  ], { encoding: 'utf8', maxBuffer: 32 * 1024 * 1024, stdio: ['ignore', 'pipe', 'pipe'] });
+
+  const dir = mkdtempSync(path.join(tmpdir(), 'orchscorecard-overlay-only-'));
+  try {
+    // The fixture store's rows, held by the overlay alone.
+    writeFileSync(path.join(dir, sc.USAGE_LIVE_FILE), readFileSync(USAGE, 'utf8'));
+    const report = JSON.parse(run(path.join(dir, 'usage.json')));
+    assert.equal(report.inputs.usage_live.base_absent, true);
+    // Every row that HAS a key: the fixture carries one deliberately keyless row,
+    // which no fold can place.
+    const keyed = JSON.parse(readFileSync(USAGE, 'utf8')).filter((r: any) => r && typeof r.key === 'string');
+    assert.equal(report.inputs.usage_live.rows_applied, keyed.length);
+    assert.ok(keyed.length > 0, 'positive control: the overlay carried rows');
+    // Same rows, same answer as when usage.json holds them.
+    assert.deepEqual(
+      report.prs.find((c: any) => c.pr === 900).delegates.tokens,
+      card(900).delegates.tokens,
+    );
+
+    // Negative control: with NEITHER file the read still fails, naming --usage.
+    rmSync(path.join(dir, sc.USAGE_LIVE_FILE));
+    assert.throws(() => run(path.join(dir, 'usage.json')), /ENOENT[\s\S]*usage\.json/);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});

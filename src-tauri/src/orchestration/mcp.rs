@@ -873,6 +873,15 @@ pub fn dispatch(
                     call_tool(reg, caller, name, &args)
                 }
             };
+            // #3723: a described quick run's task BEGINS when its root first
+            // puts a helper to work. Read here because this funnel is the one
+            // place that knows the call succeeded; `qd_root_acted` owns the rule.
+            let out = match out {
+                Ok(t) if caller.role == Role::Quick => {
+                    Ok(reg.qd_root_acted(&caller.group, &caller.agent_id, name, t))
+                }
+                other => other,
+            };
             let (text, is_error) = match out {
                 Ok(t) => (t, false),
                 Err(t) => (t, true),

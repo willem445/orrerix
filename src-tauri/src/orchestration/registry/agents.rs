@@ -535,13 +535,14 @@ impl OrchRegistry {
         // #3679, the same hole for the same reason: `kill_agent` is on the
         // quick root's surface so it can end a helper, and nothing below tells
         // a pane from its opener. A root that killed itself — or a helper that
-        // killed the root — would end the run with no report, and take every
-        // other helper with it (`on_pty_exit`). The run ends by the root's
-        // `report`, by its bounds, or by the human.
+        // killed the root — would end a task with no report, and take every
+        // other helper with it (`on_pty_exit`). A task ends by the root's
+        // `report` or at its bounds; the run ends by the human, who stops it
+        // or closes its pane (#3723).
         if a.role == Role::Quick {
-            return Err("refusing to kill a quick run's own agent; it ends the run by reporting, \
-                        and a helper is not its owner. The human stops the run from the pane \
-                        menu or the Quick task form"
+            return Err("refusing to kill a quick run's own agent; it ends a task by reporting, \
+                        and a helper is not its owner. The human ends the run: by stopping it \
+                        from the pane menu or the Quick task form, or by closing its pane"
                 .into());
         }
         // Checked BEFORE the app handle and before the stamp: with no pty
@@ -1207,6 +1208,17 @@ impl OrchRegistry {
             // looks, and Resume re-opens the root's session.
             if a.role == Role::Lead || a.role == Role::Quick {
                 self.end_lead_children(&a);
+                // #3723: a quick root with NO task in progress. Closed by
+                // the human or by orrerix, its run ends outright — there is
+                // nothing to park, and a record left idle would need a Stop
+                // for no reason. Gone by ITSELF — a CLI that died at boot —
+                // the run parks instead, so a failed launch is not a pane
+                // that vanished without a word. `expected` is which — except
+                // at app shutdown, whose kills all arrive unasked-for and
+                // move nothing (`note_shutdown`).
+                if a.role == Role::Quick {
+                    self.qd_root_exited(&a.group, &a.id, expected);
+                }
             } else if a.role != Role::Orchestrator {
                 let elapsed_ms = now_ms().saturating_sub(started_ms);
                 let cause = exit_cause(expected, tail, total_bytes);

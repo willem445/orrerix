@@ -1751,3 +1751,29 @@ comparison is honest either way. If it still says MISMATCH, that is a real one.
   never were. The four are pinned by their own goldens in `tests/quickdrive/briefs.rs`, and
   `quick-root.md` by `the_root_brief_is_byte_for_byte_what_the_root_is_opened_with` in
   `tests/quickdrive/described.rs`.
+- **#3723, `quick.md` is re-blessed** — the one golden this change moves, and deliberately.
+  A described quick run's root now opens **idle**: nothing is typed into its pane, and the
+  human gives it its task there. The template used to open "A human described one task …
+  Your first message carries the task and the run's limits", which is false of an agent
+  that is sent no first message, so it was rewritten rather than patched:
+
+  - a new **You start idle** section — wait for the human, ask them what you need to in
+    plain text, and open no helper until you know what is wanted;
+  - a new **A task, and the next one** section — a task begins with the root's first
+    `spawn_agent`, `fork_session` or `send_prompt` and ends with its `done`, after which the
+    pane takes another, and helpers left from an earlier task count against the cap;
+  - step 5 reads the round bound off "the task's limits" (stated in the answer of the call
+    that begins the task) instead of off a first message that no longer exists;
+  - the question-dialog rule no longer says nobody is in the pane — before a task starts,
+    somebody is — and says when `report(outcome: "blocked")` is the right call instead;
+  - the time bound is a task's, counted from when it begins, and "Open nothing further"
+    after a `done` is gone, because the next task opens things.
+
+  The golden is a byte copy of the live template (`cmp` on the two files is silent), and its
+  `LIVE` key list is still empty: the edit adds no placeholder.
+
+  `mechanics_core`'s `Role::Quick` arm (`kickoff.rs`) is the template's lockstep twin and
+  moves in the same commit. `quick-root.md` changes too and is still outside this directory:
+  it is now the message a RESUMED task's root is typed, pinned by
+  `the_resume_message_is_byte_for_byte_what_a_resumed_root_is_typed` in
+  `tests/quickdrive/described.rs`, which replaces the test the #3679 entry above names.

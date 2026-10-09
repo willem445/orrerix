@@ -56,7 +56,7 @@ const HELPER_HINT: Record<QuickStep, string> = {
 
 const MODE_LABEL: Record<QuickMode, string> = {
   steps: "Steps — orrerix passes the work between a planner, a worker and a reviewer",
-  describe: "Describe it — one agent gets the task and opens its own helpers",
+  describe: "Describe it — one agent opens idle; you tell it the task in its pane and it opens its own helpers",
 };
 
 /** Radio groups are matched by `name` across the whole document, and a tab can
@@ -145,6 +145,8 @@ export class QuickFormSection {
   private readonly rootCli: HTMLSelectElement;
   private readonly rootModel: ModelPicker;
   private readonly rootField: HTMLElement;
+  private readonly taskField: HTMLElement;
+  private readonly minutesField: HTMLElement;
   private readonly stepsField: HTMLElement;
   private readonly presetField: HTMLElement;
   private readonly runsField: HTMLElement;
@@ -221,7 +223,11 @@ export class QuickFormSection {
     seedRoot();
     const rootPair = el("div", "dlg-row quick-step-row");
     rootPair.append(this.rootCli, this.rootModel.root);
-    this.rootField = field("Runs on", rootPair, "the agent that is given the task; it decides whether to plan and to review");
+    this.rootField = field(
+      "Runs on",
+      rootPair,
+      "the agent that opens; tell it the task in its pane, and it decides whether to plan and to review"
+    );
 
     this.runsList = el("div", "quick-runs");
     this.runsField = field("Unfinished runs", this.runsList, "resume or stop a run from here when none of its panes is left");
@@ -288,12 +294,9 @@ export class QuickFormSection {
     this.base.placeholder = "default branch";
     this.base.spellcheck = false;
     this.roundsField = field(`Review rounds (${QUICK_ROUNDS.min}–${QUICK_ROUNDS.max})`, this.rounds);
+    this.minutesField = field(`Time bound (min, ${QUICK_MINUTES.min}–${QUICK_MINUTES.max})`, this.minutes);
     const bounds = el("div", "dlg-row dlg-grid");
-    bounds.append(
-      this.roundsField,
-      field(`Time bound (min, ${QUICK_MINUTES.min}–${QUICK_MINUTES.max})`, this.minutes),
-      field("Branch from", this.base)
-    );
+    bounds.append(this.roundsField, this.minutesField, field("Branch from", this.base));
 
     this.perms = el("select", "dlg-select");
     for (const [value, label] of [
@@ -310,10 +313,11 @@ export class QuickFormSection {
 
     this.stepsField = field("Steps", stepsRow, "orrerix relays between them and tells you when the run ends");
     this.presetField = field("Instruction preset", presetRow, "your own saved instructions, offered wherever you work");
+    this.taskField = field("Task", this.task);
     this.el.append(
       this.runsField,
       field("How", modeRow),
-      field("Task", this.task),
+      this.taskField,
       this.rootField,
       this.stepsField,
       this.rows.plan.wrap,
@@ -329,13 +333,22 @@ export class QuickFormSection {
 
   /** Lay the form out for the chosen mode.
    *
-   *  In a described run the human gives the task and nothing else: there are
-   *  no steps to switch on and no instruction boxes, because whether to plan,
-   *  and what to tell each helper, is the agent's call. The three CLI rows
-   *  stay — they say what each KIND of helper runs on, if it is opened. */
+   *  In a described run the form asks for no task at all (#3723): the agent
+   *  opens idle and the human tells it in its pane. There are no steps to
+   *  switch on and no instruction boxes either, because whether to plan, and
+   *  what to tell each helper, is the agent's call. The three CLI rows stay —
+   *  they say what each KIND of helper runs on, if it is opened — and so do
+   *  the limits, which there apply to each task the agent is given. */
   private applyMode(): void {
     const described = this.mode === "describe";
     this.rootField.hidden = !described;
+    // Hidden, not cleared: switching back to Steps finds the text still there.
+    this.taskField.hidden = described;
+    const range = `${QUICK_MINUTES.min}–${QUICK_MINUTES.max}`;
+    const minutesLabel = this.minutesField.querySelector(".dlg-label");
+    if (minutesLabel) {
+      minutesLabel.textContent = described ? `Time bound per task (min, ${range})` : `Time bound (min, ${range})`;
+    }
     this.stepsField.hidden = described;
     this.presetField.hidden = described;
     for (const step of QUICK_STEPS) {

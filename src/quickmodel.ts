@@ -49,8 +49,10 @@ export const QUICK_STEP_CLIS: Record<QuickStep, readonly string[]> = {
 /** The two ways to run a quick task (#3679).
  *
  *  - `steps`: orrerix relays between a planner, a worker and a reviewer itself.
- *  - `describe`: ONE agent is given the task and decides for itself whether to
- *    plan, who works and who reviews; the panes it opens are its helpers. */
+ *  - `describe`: ONE agent opens idle and is given the task in its own pane
+ *    (#3723); it decides for itself whether to plan, who works and who
+ *    reviews, and the panes it opens are its helpers. The form asks for no
+ *    task in this mode. */
 export type QuickMode = "steps" | "describe";
 
 export const QUICK_MODES: readonly QuickMode[] = ["steps", "describe"];
@@ -183,11 +185,15 @@ export function planQuickStart(values: QuickFormValues): QuickPlan {
   if (!repo) {
     return { ok: false, error: "A quick task needs a repository — pick one first.", focus: "repo" };
   }
-  const task = values.task.trim();
-  if (!task) {
+  const described = values.mode === "describe";
+  // #3723: the task is the steps mode's. There the engine relays it into the
+  // first pane and has no agent to tell, so it is required. A described run's
+  // agent opens idle and is told in its own pane, so nothing is asked for and
+  // nothing is sent — whatever the hidden box may still be holding.
+  const task = described ? "" : values.task.trim();
+  if (!described && !task) {
     return { ok: false, error: "Describe the task — that is the one thing a quick task needs.", focus: "task" };
   }
-  const described = values.mode === "describe";
   if (described && !QUICK_ROOT_CLIS.includes(values.root.cli)) {
     return {
       ok: false,
@@ -233,9 +239,9 @@ export function planQuickStart(values: QuickFormValues): QuickPlan {
     // A step that is off sends no instructions: the form may still be holding
     // text for it, and text for a pane that will never open is not a request.
     // …and instructions belong to the steps mode alone. In a described run
-    // the task is the only text the human gives: the helpers run on their
-    // roles' own instructions, and the agent that opens them says what it
-    // wants of each.
+    // the human gives no text here at all — the task is said in the agent's
+    // pane — so the helpers run on their roles' own instructions, and the
+    // agent that opens them says what it wants of each.
     instructions: !described && quickStepOn(values, step) ? values.steps[step].instructions.trim() : "",
   });
   return {

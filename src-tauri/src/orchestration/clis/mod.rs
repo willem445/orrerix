@@ -161,6 +161,41 @@ impl SessionBaseline {
     }
 }
 
+/// **Whether a pane's session watch must wait for the pane's own first tool
+/// call** rather than start at the spawn (#3723).
+///
+/// Every freshly spawned pane but one is typed a kickoff, so its CLI starts a turn — and
+/// writes its session — within seconds of the spawn, and a watch that starts
+/// then is looking at a store in which the pane's own session is about to be
+/// the new one. An idle quick root is typed nothing. Its CLI may not write a
+/// session until the human's first message, which can be an hour away, and
+/// for all of that time a watch would be looking for "a new session in this
+/// directory" with the pane's own not there to find.
+///
+/// That only matters where somebody else's session can turn up in the same
+/// store and the same directory, which is one variant:
+///
+/// - [`SessionBaseline::Codex`] — the store is the HUMAN's, shared with their
+///   own terminal sessions, and a quick root's directory is their checkout. A
+///   `codex` they start there while the root waits is new, in that directory
+///   and unclaimed: the watch would bind it, usage would be read from it, and
+///   a Resume would re-open their conversation as the root. Deferred. Once
+///   the root has made a tool call its own session exists, so the search
+///   finds that one — or finds two and answers `Contested`, never a guess.
+/// - [`SessionBaseline::OpenCode`] — the store is this GROUP's own. No
+///   session of the human's is ever in it. Not deferred.
+/// - [`SessionBaseline::Copilot`] — the store is the human's, but copilot
+///   writes its session a few seconds into boot whether or not it is typed
+///   anything, so the window is what it always was. Deferring would widen it:
+///   copilot's search takes the NEWEST new session, and a later one of the
+///   human's would outrank the root's. Not deferred.
+///
+/// A pane that was typed a kickoff is never deferred, whatever its CLI.
+#[doc(hidden)] // pub for integration tests
+pub fn defers_session_watch(idle_start: bool, baseline: &SessionBaseline) -> bool {
+    idle_start && matches!(baseline, SessionBaseline::Codex { .. })
+}
+
 /// The outcome of one poll of a session store.
 ///
 /// `Contested` and `Unreadable` exist so that giving up can say *why*: a pane

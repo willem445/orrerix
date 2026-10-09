@@ -149,6 +149,10 @@ pub struct OrchRegistry {
     /// exactly once and can never interleave with a mint that would then be
     /// overwritten by it.
     pub(super) agent_seq_seeded: AtomicBool,
+    /// Set once, when the app begins to shut down — see
+    /// [`note_shutdown`](Self::note_shutdown). Never cleared: a process that
+    /// has started killing its panes does not come back.
+    pub(super) shutting_down: AtomicBool,
     /// Serializes the whole agent-id mint: seed → `fetch_add` → persist (#524).
     ///
     /// Held across all three deliberately. Persisting outside the critical
@@ -1329,6 +1333,27 @@ pub struct OrchRegistry {
 }
 
 impl OrchRegistry {
+    /// **The app is shutting down** — called by the window's `Destroyed`
+    /// handler BEFORE it kills the panes (#3723).
+    ///
+    /// A pane's exit is reported with whether somebody asked for it. A quit
+    /// asks for all of them at once, through `PtyManager::kill_all`, and that
+    /// sweep does not mark its exits the way a single `kill` does: they reach
+    /// the registry as exits nobody asked for. Anything that reads that flag
+    /// to tell a crash from a close has to be able to ask "or is this the
+    /// shutdown?", and this is what it asks.
+    ///
+    /// An atomic, not a lock: it is written once, by one thread, and read on
+    /// the pane waiters' threads.
+    pub fn note_shutdown(&self) {
+        self.shutting_down.store(true, Ordering::SeqCst);
+    }
+
+    /// Whether [`note_shutdown`](Self::note_shutdown) has been called.
+    pub(in crate::orchestration) fn is_shutting_down(&self) -> bool {
+        self.shutting_down.load(Ordering::SeqCst)
+    }
+
     pub fn new(root: PathBuf) -> Self {
         let _ = fs::create_dir_all(&root);
         Self {
@@ -1349,6 +1374,7 @@ impl OrchRegistry {
             // Seeded from disk on the first mint, not here — see `seq`'s doc.
             seq: AtomicU32::new(0),
             agent_seq_seeded: AtomicBool::new(false),
+            shutting_down: AtomicBool::new(false),
             agent_seq_persist: TrackedMutex::new_ranked("agent_seq_persist", lockorder::AGENT_SEQ_PERSIST, ()),
             delivery: TrackedMutex::new("delivery", HashMap::new()),
             last_delivery: Arc::new(TrackedMutex::new("last_delivery", HashMap::new())),

@@ -1,6 +1,6 @@
 # Quick orchestration — a plan, work, review run with no orchestrator
 
-Issue #3679. User page: `docs/features/quick-orchestration.md`.
+Issues #3679 and #3723. User page: `docs/features/quick-orchestration.md`.
 
 A **quick task** is one short-lived run for one task: an optional plan, the
 work, an optional review, and a bounded loop between the worker and the
@@ -10,10 +10,11 @@ run finishes, parks, or needs them.
 
 There are two ways to run one. In the **steps** mode ("way 1" in the issue)
 orrerix relays between the steps itself; §1–§12 describe it. In the
-**describe** mode ("way 2") one agent is given the task and decides for itself
-whether to plan and review; §15 describes it and the capability class it
-needed. §16 is how a run is reached when none of its panes is left, which
-applies to both.
+**describe** mode ("way 2") one agent opens idle, is given its tasks in its own
+pane, and decides for itself whether to plan and review; §15 describes it and
+the capability class it needed, and §17 argues its lifecycle — the idle start,
+what begins a task, and what a second one means. §16 is how a run is reached
+when none of its panes is left, which applies to both.
 
 ## 1. Why a state machine in the engine, and not a small orchestrator
 
@@ -55,7 +56,8 @@ other group and holding **no root pane**. Three things about it are deliberate.
 pane while its run is still resumable — it is parked, or its first pane has not
 opened. So `next_group_id` also skips a group whose quick run has not ended.
 Without that, the next launch on the repository was handed the run's group and
-overwrote its record.
+overwrote its record. An idle described run (§17) has not ended either, and its
+group is held the same way until its root's pane goes.
 
 ## 3. The states
 
@@ -68,13 +70,23 @@ pane's `report`.
 | `work-wait` | worker | its `done` → `review-wait`, or → `satisfied` when the review step is off |
 | `review-wait` | reviewer | `approved` → `satisfied`; `request_changes` → `fix-wait`, or → `held` on the last round |
 | `fix-wait` | worker | its `done` → `review-wait` |
-| `root-wait` | the root of a described run | its `done` → `satisfied` (§15) |
+| `root-wait` | the root of a described run | its `done` → `root-idle` (§15, §17) |
+| `root-idle` | nobody | the root's first helper → `root-wait`; Stop, or its pane closing → `cancelled` (§17) |
 | `held` | nobody | Resume → the state it came from; Stop → `cancelled` |
 | `satisfied` | nobody | terminal |
 | `cancelled` | nobody | terminal |
 
 `quickdrive::transition` lists every arc and refuses the rest; a unit test walks
-all sixty-four pairs against that list.
+every pair of states against that list.
+
+The states are of four kinds, and each state is exactly one: **working** (the
+five `…-wait` states — somebody holds the turn), **parked** (`held`), **idle**
+(`root-idle`) and **terminal**. Only a working run is read against a clock or
+parked by a restart, and only a working run stays on the tick's list — an idle
+one is on it just until its root's pane has opened. Only a working or parked
+run is "unfinished".
+`root-idle` is the one state that is none of the other three, which is why it
+is asked about on its own (`is_idle`) rather than folded into a neighbour.
 
 **A reviewer approves by saying `approved` and by no other word.** Its plain
 `done`, or any other outcome, is `request_changes`. The one exit that would hand
@@ -111,7 +123,7 @@ hand-back re-opens its session (§6).
 | Bound | Value | Read by |
 | --- | --- | --- |
 | review rounds | 1–3, default 3 | the `review-wait` arc; the round being answered is the last when `review_rounds + 1` reaches it |
-| run time | 5–1440 minutes, default 240 | every working state, last |
+| run time | 5–1440 minutes, default 240 | every working state, last; in a described run it is a TASK's, counted from when the task begins (§17) |
 | planner / reviewer / fix turn | 60 minutes | that state's own clock |
 
 The first pass (`work-wait`) has no clock of its own. It *is* the task, and the
@@ -135,6 +147,8 @@ the limit that parked the run would make the button a no-op.
 
 `<group-dir>/quick_drive.json`, schema version 1, written through
 `fsatomic::atomic_write`. One run per file: a quick group is minted for one run.
+A described run's tasks are not runs of their own — the one record is re-armed
+for each (§17.4).
 
 Unknown fields are preserved at all three levels (file, run, pane). An unknown
 state or hold-reason word is refused, a missing version is refused, and so is a
@@ -182,6 +196,7 @@ pane for a report to fall through to:
 | another pane of the run | recorded; told it is not its turn |
 | any pane, run held | recorded; told the run is held |
 | any pane, run ended | recorded; told the run has ended |
+| a described run's root, run idle | recorded; told no task is in progress |
 | an agent the run does not own | recorded; told nothing is listening |
 
 Every one is audited `qd-consumed`. None is typed into another pane as-is.
@@ -307,7 +322,7 @@ a pane and a spawn waits on the frontend:
 | `orch_quick_start(req)` | `orch-control` | mints the group, records the run, opens no pane |
 | `orch_quick_status(group_id)` | `orch-read` | a pure read of the run |
 | `orch_quick_control(group_id, action, text?)` | `orch-control` | `step`, `stop`, `resume`, `handoff`, `note` |
-| `orch_quick_list()` | `orch-read` | every run that has not ended, newest first (§16) |
+| `orch_quick_list()` | `orch-read` | every run that is working or held, newest first (§16) |
 
 **Starting is two calls on purpose.** A spawned pane is placed by the group its
 tab is bound to, and the frontend can only bind once it has the group id. So
@@ -335,6 +350,10 @@ The plan named `orch_quick_cancel` and `orch_quick_resume` separately; they are
 - **Note** types a line into the pane holding the turn and carries it again in
   the next brief, so the side that takes over reads it too.
 
+A described run has no hand-off — its agent decides who works — and an idle one
+takes no note: there is no task to attach it to, and the human is in the pane.
+Both are refused with a sentence that says so.
+
 `orch_quick_control` refuses a group that is not a quick group before it reads
 anything. Holding a valid `GroupId` is not membership.
 
@@ -345,6 +364,10 @@ by orrerix) and, in the app, one desktop toast. The item this run raised before
 is withdrawn first, so a run that parks, resumes and parks again leaves the
 human one thing to read. A resume and a stop withdraw it too.
 
+A described run's finished tasks are the exception, on purpose (§17.4): each
+raises a notice of its own, and a later task does not take an earlier one's
+back. A hold's notice is still one per hold.
+
 Nothing is killed at the end. The panes are the human's to read, type into or
 close, which is why this is its own exit rather than `release_driven_pane`.
 
@@ -354,7 +377,8 @@ Every pane dies with the process, so a record saying "the worker holds the
 turn" names a pane that no longer exists. **Nothing is re-opened unasked.** On
 its first tick a process scans the orchestration root for quick groups and
 parks each working run on `restart`, with one notice. A run that was already
-parked is left as it was.
+parked is left as it was. An idle described run is ENDED instead, with no
+notice (§17.5): nothing was in progress, and its pane is not coming back.
 
 Resume then needs the group in memory, and after a restart no group is until
 something launches or resumes it. `qd_ensure_group_loaded` reads **that
@@ -382,6 +406,8 @@ file.
 - `src/quickruns.ts` polls a run's status **only while it is working**, through
   the poll gate. A parked run moves when the human moves it, which refreshes it
   directly, and a finished one never moves. So a finished task leaves no timer.
+  An idle described run is not polled either; it leaves idle on the backend's
+  own account, so the backend says so (`orch-quick-changed`, §17.6).
 - `src/quickpresets.ts` owns the saved instruction presets:
   `quickpresets.json` in the app's state directory, beside `sshprofiles.json`.
   They are the user's, not a repository's. Every write re-reads the file and
@@ -434,6 +460,28 @@ branch, and by the brief.
     listed with says so. `message_orchestrator` replies that a message was
     NOT saved when the run's messages file is full.
 15. The launcher's result gains `quick-resume` (§16).
+16. `quick_drive.json` gains the state word `root-idle` and one defaulted
+    field, `task_seq`. The schema version does not move (§17.7).
+17. `orch_quick_start` with `mode: "describe"` takes no task and refuses one;
+    `task` is defaulted on the request. A described run's root is opened with
+    nothing typed (§17.1).
+18. A described run's `report(done)` ends a TASK: the run returns to
+    `root-idle`, and `spawn_agent` is no longer refused after it. The root's
+    first successful `spawn_agent`, `fork_session` or `send_prompt` while idle
+    begins a task, and that call's answer gains a paragraph stating its limits.
+19. A helper spawned in a described run's group with no `base` is cut from the
+    run's own (§17.3).
+20. A run's status gains `task_seq` and `last_note`. `orch_quick_list` leaves
+    an idle run out. `orch_quick_control` refuses `handoff` on a described run
+    and `note` on an idle one.
+21. A new backend event, `orch-quick-changed` (`{ group_id }`).
+22. `templates/quick.md` and `templates/quick-root.md` are rewritten:
+    the first for an agent with no task yet, the second as the message a
+    RESUMED task's root is typed. Four audit actions join the vocabulary:
+    `qd-opened`, `qd-task-begun`, `qd-closed`, `qd-session-watch`.
+23. An idle run whose root's CLI exits by itself is held on `unresumable`
+    (§17.5). On codex, an idle root's session watch starts at its first tool
+    call instead of at its spawn (§17.8).
 
 ## 14. Residuals
 
@@ -449,18 +497,20 @@ branch, and by the brief.
   human set one.
 - **The watchdog** is forced off for a quick group: its notice is addressed
   to an orchestrator, and no quick group has one. A described run's root is
-  bounded by the run's own clock instead.
+  bounded by its task's clock instead, and by nothing while it is idle.
 - **A session rejoined by hand** into a quick group is an agent the run does
   not own. Its report is recorded and answered; it moves nothing.
 - **The needs-you card** carries the run's notice as text. Resume and Stop are
   on the pane menu and in the launcher's list (§16), not on the card.
 
-## 15. The second mode — one agent given the task
+## 15. The second mode — one agent, given its tasks in its pane
 
-In describe mode the human writes the task and nothing else. One pane opens.
-The agent in it decides whether the task wants a plan and a review, opens the
-helpers it needs, reads what they report, relays between them, and ends the run
-by reporting.
+In describe mode the human writes nothing on the form but where and on what.
+One pane opens, idle, and the human tells the agent in it what they want — as
+they would any agent pane. The agent decides whether the task wants a plan and
+a review, opens the helpers it needs, reads what they report, relays between
+them, and ends the task by reporting. Then it waits for the next one. §17
+argues that lifecycle; this section is the class and the run around it.
 
 ### 15.1 A class of its own
 
@@ -470,14 +520,16 @@ with more tools, or an orchestrator with fewer, and it is neither:
 | | Lead | Quick root | Orchestrator |
 | --- | --- | --- | --- |
 | Opened by | the human, in their own launcher | orrerix, for a run the human started | orrerix |
-| First message | none; the human types | the task | the orchestrator kickoff |
+| First message | none; the human types | none; the human types the task | the orchestrator kickoff |
 | May open | workers | workers, reviewers, planners | every roster block |
-| Its `report` | has none | **the end of the run** | has none |
+| Its `report` | has none | **the end of a task** | has none |
 | Board, merge queue, verdicts, issue comments, questions to the human | none | none | all |
-| Ends | when the human closes it | when it reports, or at a bound | never |
+| Ends | when the human closes it | when the human closes it or stops it; a task ends when it reports, or is held at a bound | never |
 
-A lead is the human's own pane, so it has nothing to report and nobody to
-report to. An orchestrator holds exactly the tools a quick run must not have,
+A quick root is close to a lead since #3723 — both are a pane a human types
+into — and it is still not one. A lead is the human's own pane, so it has
+nothing to report and nobody to report to; a quick root has a task with an end,
+limits that bind it, and a notice the human is owed when it finishes. An orchestrator holds exactly the tools a quick run must not have,
 and removing them by a hint would make capability a function of data, which is
 the thing #222 exists to rule out. So the difference is a class.
 
@@ -505,9 +557,11 @@ changing on disk tells it nothing. So when a described run is held — at its
 time bound, on a provider limit, for any reason — two things happen besides the
 notice to the human: one line is typed into the root's pane saying the run is
 held and why, and `spawn_agent` and `fork_session` refuse it until the run is
-resumed. A run that has ended refuses them for good. `send_prompt` and
-`get_output` are left alone, so a held root can still read what its helpers
-did and tell one to stop.
+resumed. A run the human STOPPED refuses them for good. A task that finished
+refuses nothing: the run is idle, and the next helper the root opens begins the
+next task (§17.4). `send_prompt` and `get_output` are left alone, so a held
+root can still read what its helpers did and tell one to stop — and a held
+root's `send_prompt` begins no task and lifts no hold.
 
 ### 15.2 What it may call
 
@@ -557,9 +611,10 @@ second root, outside the cap.
 
 ### 15.4 The run
 
-`orch_quick_start` with `mode: "describe"` records a run in `root-wait`, with
-`described` set, and adds the root's block to the built-in roster. That is the
-one place a quick block is ever minted.
+`orch_quick_start` with `mode: "describe"` records a run in `root-idle`, with
+`described` set and no task, and adds the root's block to the built-in roster.
+That is the one place a quick block is ever minted. The step that follows opens
+the root's pane and types nothing into it (§17.1).
 
 **The root's helpers are not sides of the run.** In the steps mode every pane is
 one, and `qd_owner` answers for all of them. In a described run it answers for
@@ -570,16 +625,17 @@ worker. The one caller that must not fall through is a quick root the record
 does not name, because the relay's target would be itself; it is answered as a
 stranger.
 
-The root's `report(done)` moves the run to `satisfied` and is typed into no
-pane. Its note is the account of the run and is what the notice carries.
-`blocked` parks the run on `root-blocked`; Resume gives the turn back to the
-same pane and says why. Stop types one line into the root, because a root is
-mid-decision when a run is stopped and learns nothing from a record changing.
-Nothing is killed in either case.
+The root's `report(done)` ends the task: the run moves back to `root-idle`,
+and the report is typed into no pane. Its note is the account of the task and
+is what the notice carries. `blocked` parks the run on `root-blocked`; Resume
+gives the turn back to the same pane and says why. Stop types one line into the
+root, because a root is mid-decision when a run is stopped and learns nothing
+from a record changing. Nothing is killed in any of these.
 
-**If the root's pane closes, its helpers are closed with it**, and the run parks
-on `root-gone`. Helpers left running would be working towards a report with no
-recipient. Their sessions and worktrees are still there.
+**If the root's pane closes, its helpers are closed with it.** Helpers left
+running would be working towards a report with no recipient; their sessions
+and worktrees are still there. With a task in progress the run parks on
+`root-gone`. With none, the run is simply over (§17.5).
 
 The root runs in the repository itself, with no worktree and **no branch**. That
 last part is load-bearing: a delegate may close only a pull request whose head
@@ -595,8 +651,10 @@ a root is told to have the worker commit instead.
 
 ### 15.5 Restart
 
-A described run parks on `restart` like any other, and Resume re-opens the
-root's own session. One thing is different. The roster in `group.json` is read
+A described run with a task in progress parks on `restart` like any other, and
+Resume re-opens the root's own session and types the resume message
+(`quick-root.md`). An idle one is ended instead (§17.5). One more thing is
+different. The roster in `group.json` is read
 back through the workflow vocabulary, which has no word for the root's kind —
 deliberately — so the root's block is not in what a restart reads. The reattach
 rebuilds it from the run's own record (`root_cli`, `root_model`), for that
@@ -644,7 +702,8 @@ The decisions fall into four groups:
   root is spawned by orrerix like any agent, so codex can host one.
 - **The round bound is an instruction.** The record counts no rounds for a
   described run, because the reviews happen between the root and its helpers.
-  The root is told the bound; the time bound is the one the engine enforces.
+  The root is told the bound, in the answer of the call that begins each task;
+  the time bound is the one the engine enforces.
 - **A root that reports `done` while a helper is still working** leaves that
   helper running. Nothing is killed at the end of a run, in either mode; the
   panes are the human's.
@@ -661,8 +720,9 @@ Resume and Stop are on a pane's menu, and a run can outlive every pane it had:
 close them, or quit and reopen the app. The run is then parked, on disk, with
 nothing on screen that leads to it.
 
-**The launcher's Quick task form lists the runs that have not ended**, each with
-Stop and, when it is held, Resume. `orch_quick_list` reads them off the run
+**The launcher's Quick task form lists the runs that are working or held**, each
+with Stop and, when it is held, Resume. An idle described run is not on it: it
+has nothing in progress to resume or stop (§17.5). `orch_quick_list` reads them off the run
 records under the orchestration root, newest first, with each run's repository.
 
 The alternative was a button on the run's needs-you item, and the list was
@@ -690,3 +750,372 @@ past that deadline — the wait is derived from a mirror of the constant, pinned
 against `tuning.rs` — and then shows the reason in the form and stops the run.
 A run that is still `busy` after the whole wait is not stopped, since a step is
 still holding it; the form says it was left as it is and where to find it.
+
+## 17. The idle start, and what a task is
+
+Issue #3723. As first shipped, describe mode took the task on the launcher form
+and typed it into the root as its first message. The run then *was* that task:
+it began when the form was submitted and ended, for good, when the root
+reported. That made the root unlike every other pane a human opens — they could
+not talk it through first, the clock ran while they thought, and one task used
+the pane up.
+
+So the root now opens idle, and a run is a pane that takes tasks. Five
+decisions follow from that, and each had more than one defensible shape.
+
+### 17.1 Nothing is typed, where the launch already carries the instructions
+
+A root's role instructions do not need a first message to arrive. Since #416
+`persona_inject` puts the block's contract on the CLI's own system-prompt layer
+at launch, for every block:
+
+| CLI | How the instructions reach it | What is typed |
+| --- | --- | --- |
+| claude | a generated agent file named on `--agent` — the whole contract (if that directory cannot be written, `--append-system-prompt-file`) | nothing |
+| opencode | an agent entry whose prompt is a contract file — the whole contract | nothing |
+| pi | `--append-system-prompt` naming a contract file — the whole contract | nothing |
+| codex | `developer_instructions` in the profile it is launched with — the whole contract | nothing |
+| copilot | a generated agent file named on `--agent` — a slim copy: the mechanics core and a pointer to the full file | nothing |
+| gemini | nothing; it has no such seam | one message: where its instructions are, and to wait |
+
+The rule is one pure function, `idle_start_types_nothing(role, task, cli,
+carrier)`, and `fresh_kickoff` is the one place both spawn arms (PTY and
+structured) ask it, so they cannot answer differently. All four have to hold: a
+quick root; no task; a CLI with a launch seam; and a contract that really is on
+it for this launch. The last is not the same as the third. A contract file that
+could not be written leaves the carrier at `KickoffOnly` on any CLI, and that
+pane is typed the same one message gemini's is.
+
+**That message is not a task.** It names the agent, points at its instructions
+file, and ends "No task is given here. After reading the instructions, say in
+one line that you are ready, and wait: the human will tell you what they want
+in this pane." A root with no instructions would be worse than a root typed one
+line, and a pointer is the smallest line that fixes it.
+
+Copilot's slim copy is enough to wait on. `mechanics_core`'s quick arm — which
+is what that copy embeds — opens by saying the agent is the root, was opened
+idle, and takes its tasks from the human in the pane; the full file is one read
+away when a task arrives.
+
+**`persona_inject` reports gemini's carrier as full.** It has no branch for
+gemini, falls through to the generated-file arm, and sets the carrier that arm
+sets — for a file gemini's launch never names. That is not fixed here; the rule
+does not rest on it, because it asks about the seam separately
+(`NO_SYSTEM_LAYER_CLIS`).
+
+### 17.2 A task begins when the root first puts a helper to work
+
+The time limit must not count the pane sitting idle, so something has to say
+when work started. The candidates:
+
+- **The human's first message.** It is the truest signal, and no hook that
+  reports it exists on every CLI that can host a root. It is also too early:
+  the minutes a human and an agent spend settling what is wanted are exactly
+  the ones the limit should not charge for.
+- **The root's first `spawn_agent`.** Engine-observed, on every CLI. But
+  nothing is closed when a task ends, so a second task is often begun by
+  prompting a helper that is still open — and a run that only noticed spawns
+  would leave that task with no clock, and its `done` with nothing to end.
+- **The root's first `spawn_agent`, `fork_session` or `send_prompt` while
+  idle** — the three calls that hand a helper something to do. This is the
+  rule. It is what "work starts" means for this class: a root may not edit, so
+  delegating is the only work it does.
+
+`list_agents`, `get_output`, `group_usage`, `kill_agent`, `rename_agent` and
+`focus_agent` begin nothing. A root may look around, and clear up after the
+last task, without a clock starting.
+
+**The clock starts after the call succeeds.** The dispatch funnel asks
+`qd_root_acted` once a tool has answered `Ok`. A spawn blocks until its pane
+has opened, and a task is not charged for that — the reason a state's clock
+starts at delivery rather than at the arc (§3). A call that was refused began
+nothing. The funnel is the one place that knows a call succeeded, and the hook
+is a few lines there so that `mcp.rs`, at its line budget, carries no rule.
+
+`begin_task` stamps the record's clock at that moment and the run joins the
+tick's candidate list. Before it, the run is in `root-idle`: `decide` answers
+nothing for it and no bound is read. It is on that list only until the step
+that opens its root's pane has run, and off it from then on. A pane left
+waiting for a year costs no wake.
+
+**Only `root-idle` begins a task.** A working run is already on one. A held run
+is not moved by its root acting — `send_prompt` is deliberately open to a held
+root so it can tell a helper to stop, and that must neither lift the hold nor
+start a clock. Only the human's Resume moves a hold.
+
+**And only the run's own root begins one.** The hook is told who called, off the
+caller's token, and a quick root the record does not name as its current one
+begins nothing. `qd_owner` already answers such a pane as a stranger (§15.4);
+its helper is opened, because the spawn rule is the class's, but the run's
+clock is not its to start.
+
+### 17.3 The limits reach the root without a first message
+
+The first message used to carry three numbers. They now arrive where each is
+needed:
+
+- **The time bound and the round bound** ride on the answer of the call that
+  begins the task — "This is the start of a task in this quick run (task 2).
+  Its limits: …". That is the moment they start to apply, and it repeats for
+  each task. The resume message restates them.
+- **The base branch** is no longer the root's to pass. A spawn in a described
+  run's group that names no `base` is cut from the run's own
+  (`qd_helper_base`), applied where the worktree is cut. A base the root does
+  name still wins.
+
+The alternative was a placeholder in `quick.md`, rendered from the run's
+record. But a block's instructions are rendered twice: into a FILE when the
+group is created, which is before the record exists, and onto the system
+prompt at spawn, which is after. A value read from the record would have been
+there in one and empty in the other — and a copilot root reads the file. It is
+the class of ordering defect behind #3161, and the template's golden cannot
+see a rendered value to catch it. Saying the numbers at the moment they bind
+needs no placeholder at all.
+
+### 17.4 A second task is the same pane's next one
+
+The root's `done` ends a task and returns the run to `root-idle`. The pane, the
+helpers and the group are as they were, and the next helper the root puts to
+work begins the next task.
+
+- **One record, re-armed.** No new record and no new group begins: the pane is
+  bound to its group, and the file holds one run. `task_seq` counts the tasks
+  begun. `begin_task` restamps the clock and drops the last task's account —
+  its note, its pull request, the id of its notice — from the record. It drops
+  `task` too: only a record from the build before this one carries a task
+  text (§17.7), it describes the task that record was started with, and left
+  in place it would be quoted in the notice of every later task.
+- **Limits apply per task.** Each gets the whole time bound from its own
+  start, and the same round bound.
+- **Each finished task raises its own notice**, and a later task does not
+  withdraw an earlier one's. The notice says where finished work is, and that
+  stays true. They are numbered from the second on — "(task 2 in this pane)" —
+  so two do not read as one notice twice.
+- **Helpers stay open** and count against the cap. The root is told to reuse
+  one with `send_prompt` or end it with `kill_agent` before opening another.
+- **A report made while idle ends nothing**, and is answered in those words
+  rather than with "it is not this pane's turn", which promises a brief that
+  will never come.
+
+`qd_root_spawn_refusal` had refused a root "for good once its run had ended",
+and after a `done` that made a second task impossible. It now has exactly two
+refusals, the two a human caused or has been told about:
+
+| The run is | `spawn_agent` / `fork_session` |
+| --- | --- |
+| idle, or on a task | allowed |
+| held | refused until the human resumes it — unchanged, and what makes a bound bind (§15.1) |
+| stopped | refused for good |
+
+**Stop stays the end of the run, not of the task.** It could have meant "stop
+this task and go back to idle". But a root is mid-loop when a human reaches for
+Stop, and from idle its very next spawn would begin a new task: Stop would
+bind nothing, which is the #3712 finding in another shape. A human who wants to
+redirect rather than end has a better tool now — the pane takes their message.
+
+One ordering is worth knowing. A root that reports `done` and opens a helper
+before the step has acted on the report is still on the old task when that
+spawn lands, so the spawn begins nothing; the next call does.
+
+### 17.5 A pane nobody gave a task to leaves nothing behind
+
+An idle run is one where every task has finished, or none was given. There is
+nothing in it to resume and nothing to stop, so it is treated as nothing:
+
+- **It is not polled** once its pane is open — not by the tick (§17.2) and not
+  by the window (§17.6).
+- **It is not on the list of unfinished runs.** `orch_quick_list` lists working
+  and held runs. A run joins the list when a task begins and leaves it when the
+  task is done.
+- **Closing its root's pane ends it.** The pane-exit path asks `qd_root_exited`,
+  which moves an idle run to `cancelled` with no notice. Nothing was
+  interrupted. A notice a finished task had raised is left where it is.
+- **A restart ends it too**, for the same reason: `qd_reconcile` parks a
+  working run and ends an idle one. Its group id is then free.
+
+**A root that goes by itself is a different thing, and parks.** "Closed" above
+means orrerix or the human ended the pane, which the exit path is told
+(`expected`). A CLI that exits on its own is not the human being done with it,
+and for an idle root it is the ordinary shape of a failed launch: the root is
+recorded the moment its pane binds, with nothing typed and so nothing waiting
+for the CLI to boot, which means a CLI that dies at boot — a wrong model, not
+signed in — dies after it is recorded. Ending the run there would make
+every such launch a pane that vanished with no reason given. So an unexpected
+exit holds the run on `unresumable`, quoting what the pane went out saying;
+the human is told, the run is on the list, and Resume opens a fresh root.
+
+That includes a human who quits the CLI from inside it rather than closing the
+pane. The two are told apart by who ended the process, not by exit code: a CLI
+that prints an error and exits zero is a failed launch too.
+
+**Quitting the app is neither, and has to be said out loud.** "Who ended the
+process" is `expected`, and only a single pane's `kill` sets it. A quit ends
+every pane through `PtyManager::kill_all`, which does not, so each of those
+exits reaches the registry looking exactly like a CLI that died by itself —
+and would park every idle run the human had open, with a high-urgency notice
+and a toast as the window closed, and a run under Unfinished runs at the next
+start that nothing would ever end. So the window's `Destroyed` handler tells
+the registry first (`note_shutdown`), and from then on an idle run is left
+exactly as it is. The next start finds it idle and ends it, which is the
+"restart ends it" of the list above. The flag is the registry's rather than a
+change to `kill_all`: marking a quit's exits as expected would change what
+every other reader of that flag is told, and the shutdown log with them.
+
+One window is left by recording at bind, and it is closed where it opens. A
+pane that dies in the two statements between the spawn returning and the run
+recording its root is not matched by the exit path — there is no root on the
+record yet. So the hand-over looks once more after it has recorded the root,
+and parks the run the same way if the pane is already gone.
+
+With a task in progress none of that applies and §10 and §15.4 hold as before:
+the run parks on `root-gone` or `restart`, the human is told, and Resume
+re-opens the root's session.
+
+So `root-idle` has two holds: a root pane that could not be opened, and one
+that opened and then went by itself. Both park like any first pane that
+failed, with the reason quoted, and Resume asks for the pane again.
+
+The open itself is `qd_hand_over`, the function every other turn's pane goes
+through, with one difference: its delivery step opens the pane and types
+nothing (`qd_open_root`). The store, the "run moved while the pane was
+opening" case and the park with the refusal quoted are the same lines for an
+idle open as for a brief, and the spawn with its one-root backstop is shared
+with a resumed task's (`qd_first_root_pane`).
+
+`quick_start` now marks the group as known to this process *before* it writes
+the marker that makes the group findable. The start-up scan treats a marked
+group it does not know as an earlier process's; for a steps run that was a
+needless `restart` hold in a narrow window, and for an idle run it would have
+been an ending.
+
+### 17.6 The window
+
+- **The form** hides the task field in describe mode and sends no task,
+  whatever the hidden box still holds. `planQuickStart` requires a task in
+  steps mode exactly as before. The time-bound field reads "per task".
+- **The chip** reads `quick · idle`, untinted. Its tooltip says what the pane
+  is for and when the limit starts, and — once a task has finished there —
+  what the agent said. It claims no turn, and its menu is empty: closing the
+  pane is the whole of ending an idle run.
+- **`orch-quick-changed`.** The window polls a run only while it is working,
+  and an idle run leaves idle on the backend's account, when its root opens a
+  helper. Nothing in the window would notice. So the backend emits this event
+  when a task begins, when a step takes an arc, and when an idle root's pane
+  closes, and the window re-reads a run it already shows. It is the only thing
+  that wakes an idle chip.
+- **The first step's answer.** A `busy` step is "still opening" for a working
+  run *or an idle one*. Read as a failure, it would have had the launcher stop
+  a described run under its own pane.
+
+### 17.7 The record across builds
+
+`quick_drive.json` stays at schema version 1. It gains one state word,
+`root-idle`, and one defaulted field, `task_seq`. A version bump was the
+alternative and was not taken: `Unsupported` means "do not operate, do not
+write", which would have made every record this build writes — a task in
+progress included — unreadable to the build before it, to protect it from one
+word.
+
+**A record from the build before this one loads here.** That build started a
+described run in `root-wait` with the task on the record. It reads as a task in
+progress: bounded by its own clock, parked by a restart, resumable. Its task
+text is kept for as long as that task lasts — shown on the chip and the list,
+and quoted in the resume message, since a root re-opened cold would otherwise
+have no task at all. Its `done` returns the run to idle like any other, and the
+text goes when the next task begins (§17.4). One that had already ended is
+still ended.
+`a_described_record_from_before_the_idle_start_still_loads_as_a_task_in_progress`
+reads that shape from a literal, not from this build's serializer.
+
+**What the build before this one does with a record from here:**
+
+| The record is | That build |
+| --- | --- |
+| on a task (`root-wait`), held from one, or stopped | reads it. `task_seq` is preserved as an unknown field. The task is empty, so its chip and list row have no text and its resume message quotes an empty task. Its root's `done` ends the run for good, as that build's did. |
+| idle (`root-idle`), or held from idle | refuses the state word: "quick_drive.json does not parse". The run is not listed and its controls error. That build then no longer holds the group id, so a later launch on the same repository can claim it and overwrite the record. |
+
+Nothing in progress is lost in the second row — an idle run has no task — and
+`an_idle_record_round_trips_under_a_state_word_older_builds_do_not_know` pins
+the word, since the row rests on it.
+
+### 17.8 Whose session an idle root's is
+
+orrerix learns a pane's session, on the CLIs that mint their own, by watching
+the CLI's session store for a NEW session in the pane's directory. A typed
+kickoff starts a turn within seconds, so the watch and the session it is
+looking for arrive together. An idle root is typed nothing, and its CLI may
+not write a session until the human's first message.
+
+On one CLI that gap was a hazard rather than a delay. **Codex's store is the
+human's own**, shared with the sessions they start in their terminal, and a
+quick root's directory is their checkout. A `codex` they started there while
+the root waited was new, in that directory and unclaimed — the one candidate
+there was. The watch would have bound it to the root: usage read from the
+human's session, and a Resume re-opening their conversation as the root.
+
+So on codex an idle root's watch is **not started at the spawn**. It is held,
+with the baseline taken before the spawn, and started by the root's first
+answered tool call (`qd_root_acted`). By then the root's CLI is running a
+turn, so its own session exists, and a stranger's can no longer be the only
+candidate: the search finds the root's, or finds two and answers `Contested`,
+which is never a guess. A watch held for a root that goes is dropped with it.
+
+`defers_session_watch` is the rule, and it is this narrow on purpose:
+
+| Store | Whose | Idle root's watch |
+| --- | --- | --- |
+| codex | the human's, shared | deferred to the root's first tool call |
+| opencode | the group's own — no session of the human's is ever in it | at the spawn, as before |
+| copilot | the human's, but written a few seconds into boot whether or not anything is typed | at the spawn, as before. Deferring would widen the window: its search takes the newest new session, and a later one of the human's would outrank the root's |
+
+Claude and pi are handed their session id at launch, and gemini's sessions are
+not tracked, so none of the three has a watch at all.
+
+The alternative was to start the watch at the human's first input in the
+pane and take the baseline then. That would settle the contested case as well,
+since a baseline taken at that moment already holds the human's session. It
+was not chosen, for two reasons. The registry has no event for a pane's input:
+the pty layer keeps a last-input time, which something would have to poll for
+as long as the pane sat idle — the cost §17.5 rules out. And a baseline taken
+a moment too early reopens the hazard with nothing to show for it, whereas a
+tool call is observed by the engine and cannot come before the turn it is
+part of.
+
+### 17.9 Residuals
+
+- **Gemini is typed one message.** It is the pointer of §17.1 and carries no
+  task. A CLI whose contract file cannot be written is typed the same one.
+- **A codex root that never calls a tool has no session recorded.** Its watch
+  starts at its first answered tool call (§17.8), so a root that only talks —
+  or does work in its pane, against its instructions — is never watched, and
+  its usage is not counted. Before the watch was deferred it ran from the
+  spawn. A task needs a helper, and a helper needs a tool call, so a root
+  doing what it is for is not affected.
+- **A contested codex session stays unrecorded.** If the human did start their
+  own codex in the repository while the root waited, the search sees two and
+  binds neither (§17.8). The root then has no recorded session, so a task
+  interrupted by a restart or a closed pane cannot be resumed; the hold says
+  so. That is the safe direction, and the price of it.
+- **On opencode, a late first message can leave a session unrecorded.** It may
+  write its session only at the first turn, and orrerix watches for ten
+  minutes after the pane opens. A root first spoken to later than that has no
+  recorded session, with the same consequence. Deferring its watch as codex's
+  is deferred would fix that, and was not done here: nothing of the human's
+  can be bound in a store that is the group's own, so it is a missing
+  convenience and not a hazard.
+- **Quitting the CLI from inside an idle pane holds the run** (§17.5), where
+  closing the pane ends it. Stop, or closing the pane, clears it.
+- **Copilot's autopilot consent is the human's to answer.** orrerix answers
+  that dialog while typing a kickoff. With nothing typed, it appears on the
+  human's first message instead.
+- **A root that never delegates is never on a clock.** The bound starts with
+  the first helper. A root that answers in its pane — or does work there,
+  against its instructions — is bounded as a lead is: by a human being in the
+  pane.
+- **A helper's late report can begin a task.** It is typed into an idle root's
+  pane, and if the root answers it by prompting a helper, that is a task
+  nobody asked for. It is bounded and it ends with a notice like any other.
+- **Finished-task notices accumulate**, one per task, until the human clears
+  them.
+- **Helpers left open show the run's chip.** A status is painted on every pane
+  of its group, so a helper still open after a task reads `quick · idle` too.

@@ -178,16 +178,17 @@ pub enum Role {
     /// The root of its group: a lead group has no orchestrator, and a lead pane
     /// is what a child's `report` is typed into ([`Role::is_root`]).
     Lead,
-    /// The **quick root** (#3679): the one agent a DESCRIBED quick run is given
-    /// to. It decides for itself whether the task wants a plan and a review,
-    /// opens the worker, reviewer and planner panes it needs, reads what they
-    /// report, and ends the run with its own `report`.
+    /// The **quick root** (#3679): the one agent of a DESCRIBED quick run. It
+    /// opens idle and the human gives it its tasks in its pane (#3723); for
+    /// each it decides whether the task wants a plan and a review, opens the
+    /// worker, reviewer and planner panes it needs, reads what they report,
+    /// and ends the task with its own `report`.
     ///
     /// **A class of its own, and neither of the two it resembles.** It is not
     /// a [`Role::Lead`]: a lead is a pane the HUMAN launched and drives, so it
-    /// takes no first message, never reports, and may open workers only; the
-    /// quick root is opened by orrerix with the task as its first message, may
-    /// open the three delegate classes, and its `report` is the run's end. It
+    /// never reports and may open workers only; the quick root is opened by
+    /// orrerix for a run the human started, may open the three delegate
+    /// classes, and its `report` is the end of a task with limits. It
     /// is not a [`Role::Orchestrator`] with tools stripped by a hint either —
     /// that would make capability a function of data, which #222 forbids, and
     /// an orchestrator holds exactly what a quick run must not: a board, a

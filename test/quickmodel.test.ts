@@ -91,6 +91,28 @@ test("a step's instructions are sent exactly when that step is on", () => {
   assert.equal(noReview.request.work.instructions, "keep the diff small", "work is always on");
 });
 
+test("a described run asks for no task and sends none (#3723)", () => {
+  // The form's task box is hidden in this mode, and whatever it still holds —
+  // text typed before the mode was switched — is not a task to send: the
+  // agent opens idle and is told in its own pane.
+  for (const task of ["", "   \n ", "add a --json flag to the list command"]) {
+    const plan = planQuickStart(form({ mode: "describe", task }));
+    assert.ok(plan.ok, `a described run with task ${JSON.stringify(task)} is accepted`);
+    assert.equal(plan.request.task, "", "and no task is sent");
+    assert.equal(plan.request.mode, "describe");
+  }
+  // The control: the steps mode's rule did not move with it.
+  const steps = planQuickStart(form({ task: " \n " }));
+  assert.deepEqual([steps.ok, !steps.ok && steps.focus], [false, "task"]);
+  const kept = planQuickStart(form());
+  assert.equal(kept.ok && kept.request.task, "add a --json flag to the list command");
+  // Everything else a described run needs is still asked for.
+  const noRepo = planQuickStart(form({ mode: "describe", task: "", repo: " " }));
+  assert.equal(!noRepo.ok && noRepo.focus, "repo");
+  const noMinutes = planQuickStart(form({ mode: "describe", task: "", minutes: null }));
+  assert.equal(!noMinutes.ok && noMinutes.focus, "minutes");
+});
+
 test("an empty repository or task is refused, naming the field", () => {
   const noRepo = planQuickStart(form({ repo: "   " }));
   assert.deepEqual([noRepo.ok, !noRepo.ok && noRepo.focus], [false, "repo"]);
@@ -275,7 +297,7 @@ test("the setup card names no agent for a quick task — it launches up to three
 
 // ── describe mode (#3679 way 2) ─────────────────────────────────────────────
 
-test("a described run sends the task, the agent it runs on, and no instructions", () => {
+test("a described run sends the agent it runs on, and no task and no instructions", () => {
   const plan = planQuickStart(form({ mode: "describe", planStep: true, reviewStep: false }));
   assert.ok(plan.ok);
   assert.equal(plan.request.mode, "describe");
@@ -285,11 +307,12 @@ test("a described run sends the task, the agent it runs on, and no instructions"
   assert.equal(plan.request.plan_step, false);
   assert.equal(plan.request.review_step, false);
   // The three rows are sent as the helpers' CLIs and models, with no text: in
-  // this mode the task is the only thing the human says.
+  // this mode the human says nothing on the form — the task is told to the
+  // agent in its pane.
   assert.deepEqual(plan.request.plan, { cli: "claude", model: "", instructions: "" });
   assert.deepEqual(plan.request.work, { cli: "codex", model: "gpt-5", instructions: "" });
   assert.deepEqual(plan.request.review, { cli: "pi", model: "", instructions: "" });
-  assert.equal(plan.request.task, "add a --json flag to the list command");
+  assert.equal(plan.request.task, "", "the form's text is not sent as a task in this mode");
 });
 
 test("a described run checks every helper's CLI, because its agent may open any of them", () => {

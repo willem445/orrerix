@@ -30,8 +30,9 @@
 //! `rename_agent`); `group_usage`; and `report`.
 //!
 //! `report` is the one a lead does not hold, and it is why this is not a lead:
-//! the quick root's `report` is intercepted by the run (`qd_owner`) as the
-//! run's END. Everything that could land, publish or decide on the human's
+//! the quick root's `report` is intercepted by the run (`qd_owner`) as the END
+//! of the task in progress (#3723 — the pane then waits for the next one).
+//! Everything that could land, publish or decide on the human's
 //! behalf is absent: the task board, the merge queue, `review_verdict`,
 //! `post_issue_comment`, `ask_human`, `request_attention`, the notify, lock,
 //! mailbox, state and channel tools, the to-do list. So is
@@ -81,12 +82,13 @@ pub(super) fn gate(name: &str) -> Result<(), String> {
         return Ok(());
     }
     Err(format!(
-        "permission denied: {name} is not on a quick run's surface — you were given one task. \
-         You open helpers (spawn_agent, kind worker | reviewer | planner), drive them \
-         (send_prompt / get_output / kill_agent / focus_agent / rename_agent / fork_session / \
-         list_agents), read group_usage, and end the run with report. A quick run has no task \
-         board, no merge queue, no verdict and no issue comment, and nobody above you to \
-         message: if you cannot go on, report(outcome=blocked) and the human is told"
+        "permission denied: {name} is not on a quick run's surface — the human gives you tasks \
+         in this pane and you see each one done. You open helpers (spawn_agent, kind worker | \
+         reviewer | planner), drive them (send_prompt / get_output / kill_agent / focus_agent / \
+         rename_agent / fork_session / list_agents), read group_usage, and end each task with \
+         report. A quick run has no task board, no merge queue, no verdict and no issue \
+         comment, and nobody above you to message: before a task has begun, ask the human in \
+         this pane; once it has, report(outcome=blocked) and they are told"
     ))
 }
 
@@ -158,29 +160,35 @@ fn spawn_agent_tool() -> Value {
          \
          Guardrails apply: the live-agent cap and spawn-rate limit the human set for this run. \
          To send a helper back to work, use send_prompt on the pane it already has rather than \
-         opening another.",
+         opening another. \
+         \
+         Opening or prompting a helper while no task is in progress BEGINS a task: its time \
+         bound starts then, and this call's answer states the task's limits.",
         json!({
             "name": { "type": "string", "description": "Short display name for the pane" },
             "kind": { "type": "string", "enum": ["worker", "reviewer", "planner"], "description": "Capability class. One of the three; anything else is refused with the reason. REQUIRED." },
             "task": { "type": "string", "description": "Full task brief; empty = an idle pane awaiting send_prompt." },
             "branch": { "type": "string", "description": "Branch name for a worker's worktree (default agent/<id>)" },
-            "base": { "type": "string", "description": "Start-point for the worktree branch (default: the repo's default branch, fetched fresh from origin)." },
+            "base": { "type": "string", "description": "Start-point for the worktree branch (default: the branch the human set for this quick run, else the repo's default branch, fetched fresh from origin)." },
         }),
         &["task", "kind"])
 }
 
-/// `report` as a quick root sees it: the run's end, not a message to anyone.
+/// `report` as a quick root sees it: the end of a TASK (#3723), not a message
+/// to anyone and not the end of the pane.
 fn report_tool() -> Value {
     tool("report",
-        "END THE RUN. You are the one agent this quick task was given to, so your report is not \
-         typed into any pane: orrerix reads it as the end of the run and tells the human. \
-         outcome=done when the task is finished — put in `note` where the work is (the branch, \
-         and the pull request if one was opened) and anything left open. outcome=blocked when \
-         you cannot go on — put in `note` the one thing the human has to decide or fix; the run \
-         is then held and they can resume it. Report once. A report(progress) moves nothing. \
-         After a done report your helpers' panes and yours stay open for the human to read.",
+        "END THE TASK. You are the agent the human gives this quick run's tasks to, so your \
+         report is not typed into any pane: orrerix reads it as the end of the task in \
+         progress and tells the human. outcome=done when the task is finished — put in `note` \
+         where the work is (the branch, and the pull request if one was opened) and anything \
+         left open. outcome=blocked when you cannot go on — put in `note` the one thing the \
+         human has to decide or fix; the run is then held and they can resume it. Report once \
+         per task. A report(progress) moves nothing, and a report made while no task is in \
+         progress ends nothing. After a done report your helpers' panes and yours stay open: \
+         wait in this pane for the human's next task.",
         json!({
-            "outcome": { "type": "string", "enum": ["done", "blocked"], "description": "done ends the run; blocked holds it for the human." },
+            "outcome": { "type": "string", "enum": ["done", "blocked"], "description": "done ends the task; blocked holds the run for the human." },
             "note": { "type": "string", "description": "Where the work is and what is left open (done), or the one blocking fact (blocked). Hard-capped at ~500 chars." },
             "ref": { "type": "string", "description": "The pull request, if a helper opened one, e.g. \"#123\"." },
         }),

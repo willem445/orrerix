@@ -800,7 +800,7 @@ impl OrchRegistry {
             if !r.described || !r.state().is_idle() || !own_root {
                 return Ok((false, None));
             }
-            match r.begin_task(now) {
+            match r.begin_task(r.started_ms.min(now)) {
                 Ok(seq) => Ok((true, Some((seq, r.clone())))),
                 Err(_) => Ok((false, None)),
             }

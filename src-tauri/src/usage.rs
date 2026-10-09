@@ -608,7 +608,7 @@ impl TranscriptFold {
         // This request's prompt length: everything it was sent, which is the
         // same sum `latest_context_tokens` reads off the newest turn.
         let prompt = t.input_tokens + t.cache_creation_tokens + t.cache_read_tokens;
-        self.first_context.get_or_insert(prompt);
+        self.first_context = Some(prompt);
         if let Some(ttl) = claude_write_ttl(usage) {
             self.write_ttl = Some(ttl);
         }

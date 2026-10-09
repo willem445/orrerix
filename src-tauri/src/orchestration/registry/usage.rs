@@ -1200,8 +1200,7 @@ impl OrchRegistry {
             // row's provenance, never branched on a CLI's name. The CURRENT
             // model, because the next prompt goes to the model the pane is on,
             // which on claude is not always the one `model` names (#3415).
-            let quote = s
-                .estimated
+            let quote = true
                 .then(|| s.current_model.as_deref().or(s.model.as_deref()))
                 .flatten()
                 .and_then(|m| crate::usage::price_quote(m).map(|q| (m, q)));

@@ -1256,20 +1256,28 @@ impl OrchRegistry {
                 // #3831: the next-prompt estimate's inputs, all RESOLVED here
                 // so the frontend keeps no price or tokenizer table
                 // (`src/promptcost.ts`, `docs/design/prompt-cost.md`).
+                //
+                // ONE nested object, and only on a LIVE row. The estimate is
+                // about a pane's next prompt, and a row whose agent is gone
+                // has none — and this row is also what the MCP `group_usage`
+                // tool hands an agent ten at a time (`summarize_group_usage`),
+                // mostly historical ones, so eight flat keys on every row
+                // would be context every such call pays for and nothing reads.
+                //
                 // `context_tokens` is the context the newest turn was sent —
-                // the reading this tick already made for the usage series, so
-                // a row that is not live has none. Every field is `null` where
-                // it is not known; none is ever a zero standing in for that.
-                "context_tokens": live
-                    .then(|| context_signals.get(&s.agent_id).and_then(|c| c.tokens))
-                    .flatten(),
-                "first_context_tokens": s.first_context_tokens,
-                "price_model": quote.as_ref().map(|(m, _)| *m),
-                "price_per_mtok": quote.as_ref().map(|(_, q)| q.price),
-                "price_long_prompt": quote.as_ref().and_then(|(_, q)| q.long_prompt),
-                "price_basis": quote.as_ref().map(|(_, q)| q.basis),
-                "price_dated": quote.as_ref().map(|_| crate::usage::PRICE_TABLE_DATED),
-                "prompt_chars_per_token": quote.as_ref().map(|(_, q)| q.chars_per_token),
+                // the reading this tick already made for the usage series.
+                // Every field is `null` where it is not known; none is ever a
+                // zero standing in for that.
+                "prompt_cost": live.then(|| json!({
+                    "context_tokens": context_signals.get(&s.agent_id).and_then(|c| c.tokens),
+                    "first_context_tokens": s.first_context_tokens,
+                    "price_model": quote.as_ref().map(|(m, _)| *m),
+                    "price_per_mtok": quote.as_ref().map(|(_, q)| q.price),
+                    "price_long_prompt": quote.as_ref().and_then(|(_, q)| q.long_prompt),
+                    "price_basis": quote.as_ref().map(|(_, q)| q.basis),
+                    "price_dated": quote.as_ref().map(|_| crate::usage::PRICE_TABLE_DATED),
+                    "chars_per_token": quote.as_ref().map(|(_, q)| q.chars_per_token),
+                })),
                 "tokens": {
                     "input": s.input_tokens,
                     "output": s.output_tokens,

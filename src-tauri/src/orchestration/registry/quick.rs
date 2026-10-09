@@ -928,7 +928,7 @@ impl OrchRegistry {
                 if !r.described || !r.state().is_idle() || !current {
                     return Ok((false, None));
                 }
-                let moved = if expected {
+                let moved = if expected || true {
                     r.advance(QuickState::Cancelled, None, now).is_ok()
                 } else {
                     let parked = r

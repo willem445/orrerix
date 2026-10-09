@@ -9,11 +9,13 @@ import assert from "node:assert/strict";
 
 import {
   composeCostLine,
+  costContextFor,
   estimatePromptCost,
   estimateTokens,
   figureText,
   formatCostTokens,
   formatUsd,
+  gapTitleWithEstimate,
   promptCostFor,
   promptCostRows,
   type CostContext,
@@ -41,6 +43,7 @@ const reading = (over: Partial<PromptCostReading> = {}): PromptCostReading => ({
   priceBasis: "listed",
   priceDated: "2026-10-09",
   charsPerToken: 2.5,
+  ttlMinutes: 60,
   ttlSource: "session",
   compacting: false,
   ...over,
@@ -274,7 +277,7 @@ const strip = (cost: object | null | undefined, compaction?: string, ttlSource?:
           {
             id: "a1",
             ...(cost === undefined ? {} : { prompt_cost: cost }),
-            ...(ttlSource === undefined ? {} : { cache_ttl_source: ttlSource }),
+            ...(ttlSource === undefined ? {} : { cache_ttl_source: ttlSource, cache_ttl_minutes: 60 }),
           },
         ],
       },
@@ -315,6 +318,7 @@ test("the reading is read off the pane's own usage row, absent fields as unknown
     priceBasis: null,
     priceDated: null,
     charsPerToken: null,
+    ttlMinutes: null,
     ttlSource: null,
     compacting: false,
   };
@@ -384,12 +388,163 @@ test("a compact in flight is read off the roster, and only the in-flight phases 
   assert.doesNotMatch(calm[calm.length - 1].label, /compact in flight/);
 });
 
+// ── a pane whose chip has no reading ────────────────────────────────────────
+
+test("a pane whose chip reads no state is still priced: cold, warm and fresh, none called now", () => {
+  // The pane the feature is most wanted on: just restored, context and price
+  // known at once, and no request seen yet, so its chip reads `cache —`. The
+  // figures are the history alone (400k of context, 50k first turn, Opus 5.5
+  // at the hour's write rate), worked by hand:
+  //   cold  400,000 x $8    / 1M = $3.20
+  //   warm  400,000 x $0.20 / 1M = $0.08
+  //   fresh  50,000 x $8    / 1M = $0.40
+  const r = reading();
+  const c = costContextFor({ reading: r, chip: null, promptVisible: true, promptChars: 0, attachments: 0 });
+  assert.deepEqual(c, {
+    state: "unknown",
+    ttlMinutes: 60,
+    coldInMs: null,
+    unknownWhy: "no-request",
+    promptVisible: true,
+    promptChars: 0,
+    attachments: 0,
+  });
+  assert.ok(c !== null);
+  const e = estimatePromptCost(r, { state: c.state, ttlMinutes: c.ttlMinutes }, 0);
+  assert.equal(e.now, null, "no figure is 'now'");
+  near(e.cold!.usd, 3.2);
+  near(e.warm!.usd, 0.08);
+  near(e.fresh!.usd, 0.4);
+
+  const rows = promptCostRows(r, e, c);
+  assert.deepEqual(
+    rows.map((row) => row.label),
+    [
+      "Next prompt — estimate, input side only",
+      "Cache state unknown: no request seen on this pane yet",
+      "If the cache is cold: ≈ 400k written · ~$3.20",
+      "If it is still warm: ≈ 400k read · ~$0.08",
+      "Same prompt in a fresh agent: ≈ 50k written · ~$0.40",
+      "Inputs: context 400k · nothing typed · claude-opus-5-5 list price 2026-10-09 · 1h cache writes",
+    ]
+  );
+  // It says WHY the state is unknown, in words that fit a restored pane.
+  assert.equal(
+    rows[1].reason,
+    "orrerix has not seen this pane make a request since it started watching it — after a restart, or just after its session was identified — so it does not know how long ago the last one was, and so not whether the cache is still warm. Both cases are priced below; the pane's next request settles which."
+  );
+  // No wake row sits above these on a pane with no chip reading, so the warm
+  // row does not point at one. Control: with a chip reading it does.
+  assert.doesNotMatch(rows[3].reason, /last wake/);
+  assert.match(rowsFor(r, ctx())[1].reason, /The last wake above is what a real request on this pane read and wrote./);
+  // Nothing on the surface claims a present state.
+  assert.doesNotMatch(rows.map((row) => row.label).join("\n"), /Send now|\bnow\b|inferred\)/);
+  // The compose line carries the same three figures and says the state is unknown.
+  assert.equal(
+    composeCostLine(r, e, c)?.text,
+    "est. next: cold 400k written · ~$3.20  |  warm 400k read · ~$0.08  |  fresh 50k written · ~$0.40 (cache state unknown)"
+  );
+  // The write rate still follows the row's TTL: the same pane on a five-minute
+  // TTL prices the cold figure at $5 a million, not $8.
+  const r5 = reading({ ttlMinutes: 5 });
+  const c5 = costContextFor({ reading: r5, chip: null, promptVisible: true, promptChars: 0, attachments: 0 });
+  near(estimatePromptCost(r5, { state: c5!.state, ttlMinutes: c5!.ttlMinutes }, 0).cold!.usd, 2.0);
+});
+
+test("the cache — chip's tooltip says the estimate is a click away only where there is one", () => {
+  const missing = "No request has been recorded for this pane yet.";
+  assert.equal(
+    gapTitleWithEstimate(missing, true),
+    "No request has been recorded for this pane yet. Click for what the next prompt would cost."
+  );
+  // A pane that cannot be priced keeps the chip's own words: the click opens nothing.
+  assert.equal(gapTitleWithEstimate(missing, false), missing);
+});
+
+test("with no chip reading and no context there is nothing to show", () => {
+  const noContext = reading({ contextTokens: null });
+  const args = { promptVisible: true, promptChars: 0, attachments: 0 };
+  // A copilot pane, or one whose session is not identified: `cache —` and no
+  // context. Nothing is priced and nothing is said.
+  assert.equal(costContextFor({ reading: noContext, chip: null, ...args }), null);
+  // Control 1: the same missing context WITH a chip reading is still shown —
+  // that pane gets the row that names what is missing.
+  const withChip = costContextFor({ reading: noContext, chip: { state: "hot", ageMs: 1_000 }, ...args });
+  assert.equal(withChip?.state, "hot");
+  // Control 2: no chip reading WITH a context is shown, state unknown.
+  assert.equal(costContextFor({ reading: reading(), chip: null, ...args })?.state, "unknown");
+});
+
+test("the state and the time left are the chip's, the TTL is the row's, and each unknown has its reason", () => {
+  const args = { promptVisible: false, promptChars: 0, attachments: 0 };
+  const min = 60_000;
+  // Cooling on a 60-minute TTL at 50 minutes old: ten minutes left.
+  const cooling = costContextFor({ reading: reading(), chip: { state: "cooling", ageMs: 50 * min }, ...args });
+  assert.deepEqual([cooling?.state, cooling?.coldInMs, cooling?.ttlMinutes, cooling?.unknownWhy], ["cooling", 10 * min, 60, null]);
+  // The TTL is taken off the reading, so a different row TTL moves the answer.
+  const short = costContextFor({ reading: reading({ ttlMinutes: 55 }), chip: { state: "cooling", ageMs: 50 * min }, ...args });
+  assert.equal(short?.coldInMs, 5 * min);
+  // Past the TTL the time left is zero, never negative.
+  assert.equal(costContextFor({ reading: reading(), chip: { state: "cooling", ageMs: 70 * min }, ...args })?.coldInMs, 0);
+  // Only cooling carries a time left.
+  assert.equal(costContextFor({ reading: reading(), chip: { state: "hot", ageMs: 1 * min }, ...args })?.coldInMs, null);
+
+  // An age with no TTL: the state is unknown because no lifetime is known.
+  const noTtl = costContextFor({ reading: reading({ ttlMinutes: null, ttlSource: null }), chip: { state: "unknown", ageMs: 9 * min }, ...args });
+  assert.equal(noTtl?.unknownWhy, "no-ttl");
+  const noTtlRows = rowsFor(reading({ ttlMinutes: null, ttlSource: null }), noTtl!);
+  assert.equal(noTtlRows[1].label, "Cache state unknown: no cache TTL is known for this pane");
+  assert.match(noTtlRows[1].reason, /No cache lifetime is known for this pane's CLI/);
+  // No age at all: unknown because no request has been seen.
+  assert.equal(
+    costContextFor({ reading: reading(), chip: { state: "unknown", ageMs: null }, ...args })?.unknownWhy,
+    "no-request"
+  );
+  // A known state has no reason to give.
+  assert.equal(costContextFor({ reading: reading(), chip: { state: "cold", ageMs: 90 * min }, ...args })?.unknownWhy, null);
+});
+
+test("images queued in the compose strip are said to be left out, on the row and on the line", () => {
+  const r = reading();
+  const withImages = (attachments: number, promptChars: number) => ctx({ attachments, promptChars });
+  const inputs = (c: CostContext) => {
+    const rows = rowsFor(r, c);
+    return rows[rows.length - 1];
+  };
+  const line = (c: CostContext) =>
+    composeCostLine(r, estimatePromptCost(r, { state: c.state, ttlMinutes: c.ttlMinutes }, c.promptChars), c)?.text ?? "";
+
+  // Two images beside a typed draft.
+  assert.equal(
+    inputs(withImages(2, 2_500)).label,
+    "Inputs: context 400k · typed ≈ 1k · 2 images attached, not counted · claude-opus-5-5 list price 2026-10-09 · 1h cache writes"
+  );
+  assert.match(inputs(withImages(2, 2_500)).reason, /sent as file paths for the agent to read; neither those lines nor what reading the images costs is in these figures/);
+  assert.match(line(withImages(2, 2_500)), / incl\. ≈1k typed \(2 images not counted\)$/);
+  // An images-only draft is not "nothing to send".
+  assert.match(inputs(withImages(1, 0)).label, /nothing typed · 1 image attached, not counted/);
+  assert.match(line(withImages(1, 0)), / \(1 image not counted\)$/);
+  // The figures themselves do not move: the images are in none of them.
+  assert.deepEqual(rowsFor(r, withImages(2, 2_500))[1], rowsFor(r, withImages(0, 2_500))[1]);
+  // Control: no images, no mention anywhere.
+  assert.doesNotMatch(inputs(withImages(0, 2_500)).label + inputs(withImages(0, 2_500)).reason + line(withImages(0, 2_500)), /image/);
+});
+
 // ── words ───────────────────────────────────────────────────────────────────
 
 /** The surface an orchestrator pane's menu is shown on: a hot hour-long cache
  *  and 2,500 characters in the compose strip. */
 function ctx(over: Partial<CostContext> = {}): CostContext {
-  return { state: "hot", ttlMinutes: 60, coldInMs: null, promptVisible: true, promptChars: 2_500, ...over };
+  return {
+    state: "hot",
+    ttlMinutes: 60,
+    coldInMs: null,
+    unknownWhy: null,
+    promptVisible: true,
+    promptChars: 2_500,
+    attachments: 0,
+    ...over,
+  };
 }
 
 const rowsFor = (r: PromptCostReading, c: CostContext) =>
@@ -413,9 +568,11 @@ test("the menu rows name the state they assume, tokens first", () => {
   assert.equal(cold[1], "Send now (cache cold, inferred): ≈ 401k written · ~$3.21");
   assert.equal(cold[2], "Had it stayed warm: ≈ 400k read + 1k written · ~$0.09");
   // No state claimed: neither row is called "now".
-  const unknown = rowsFor(reading(), ctx({ state: "unknown", ttlMinutes: null })).map((r) => r.label);
-  assert.equal(unknown[1], "If the cache is warm: ≈ 400k read + 1k written · ~$0.09");
-  assert.match(unknown[2], /^If it is cold: ≈ 401k written/);
+  // No state claimed: a row says so, then cold, then warm, and neither is "now".
+  const unknown = rowsFor(reading(), ctx({ state: "unknown", unknownWhy: "no-request" })).map((r) => r.label);
+  assert.equal(unknown[1], "Cache state unknown: no request seen on this pane yet");
+  assert.equal(unknown[2], "If the cache is cold: ≈ 401k written · ~$3.21");
+  assert.equal(unknown[3], "If it is still warm: ≈ 400k read + 1k written · ~$0.09");
   assert.doesNotMatch(unknown.join("\n"), /Send now/);
 });
 
@@ -495,11 +652,14 @@ test("the compose line is one line: now, the other state, and fresh", () => {
       .join("\n")
   );
   const cold = line(ctx({ state: "cold" }));
-  assert.match(cold?.text ?? "", /^est. next: now 401k written · ~\$3\.21 {2}\| {2}warm 400k read \+ 1k written/);
+  assert.match(cold?.text ?? "", /^est\. next: now 401k written · ~\$3\.21 {2}\| {2}warm 400k read \+ 1k written/);
   // No state claimed: the first figure is called warm, not now.
-  const unknown = line(ctx({ state: "unknown", ttlMinutes: null }));
-  assert.match(unknown?.text ?? "", /^est. next: warm 400k read/);
-  assert.doesNotMatch(unknown?.text ?? "", /now/);
+  const unknown = line(ctx({ state: "unknown", unknownWhy: "no-request" }));
+  assert.equal(
+    unknown?.text,
+    "est. next: cold 401k written · ~$3.21  |  warm 400k read + 1k written · ~$0.09  |  fresh 51k written · ~$0.41 incl. ≈1k typed (cache state unknown)"
+  );
+  assert.doesNotMatch(unknown?.text ?? "", /\bnow\b/);
   // Nothing typed: no "incl." tail.
   assert.doesNotMatch(line(ctx({ promptChars: 0 }))?.text ?? "", /incl\./);
 });

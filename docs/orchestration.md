@@ -4202,7 +4202,9 @@ from the launcher, a lead pane, and each orchestration agent. A launcher pane ge
 orrerix identity as it opens, so its usage can be read. claude, pi, copilot and codex
 get the full identity when channel tools are on. Any other agent pane is adopted as a
 delivery-only member, and nothing is added to its command line. A terminal pane has no
-chip at all. A pane restored after a restart shows its chip again after its next request.
+chip at all. A pane restored after a restart resumes its session, so its chip comes back
+with the age that session had on record, usually `cold`. A session with nothing on record
+reads `cache —` until its next request.
 
 **`cache —`** is the muted chip for a pane the chip cannot read. Its tooltip names the
 missing piece:
@@ -4309,9 +4311,17 @@ What the figures are, and are not:
   table does not know; a newer version of a known family is priced at that family's
   highest current price and says so.
 - **No reading, no figure.** A pane whose CLI records no context size shows "No context
-  reading for this pane yet" instead of a number. A pane whose chip reads `cache —` has no
-  estimate at all, in the menu or under the compose strip. That includes a pane restored
-  after a restart, until its next request.
+  reading for this pane yet" instead of a number.
+- **No cache state, no "now".** Where orrerix cannot say whether the cache is warm, you get
+  all three figures anyway, cold first, under a row that says the state is unknown and why.
+  That is a pane whose chip reads `cache —` because no request has been seen on it yet, and
+  a pane whose CLI has no known cache lifetime. Clicking a `cache —` chip opens the estimate
+  when the pane's context is known, and its tooltip says so. It opens nothing when the
+  context is not known.
+- **Attached images are not counted.** The estimate covers the text in the compose strip.
+  Images you attach are sent as file paths for the agent to read, and neither those lines
+  nor the cost of reading them is in the figures. The line and the menu say so when images
+  are queued.
 
 The formula, the price table and its source, and how far the figures were checked against
 real requests are in

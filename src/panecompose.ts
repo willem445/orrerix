@@ -393,8 +393,17 @@ export class PaneCompose {
     this.renderChips();
   }
 
+  /** How many images are queued for the next send. The next-prompt estimate
+   *  says they are not in its figures (#3831). */
+  get queuedImageCount(): number {
+    return this.attachments.length;
+  }
+
   /** Rebuild the thumbnail-chip row from `this.attachments`. */
   private renderChips(): void {
+    // Every change to the queue passes through here, and none of them fires
+    // the textarea's `input` event, so the cost line is redrawn from here too.
+    this.refreshCostLine();
     const chips = this.composeChips;
     if (!chips) return;
     chips.replaceChildren();

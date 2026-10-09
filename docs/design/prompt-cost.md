@@ -36,8 +36,28 @@ the estimate prices the **input side of the next request** three ways:
 
 `write` is the 1-hour rate when `T` is 60 minutes or more, and the 5-minute rate
 otherwise. "Now" is whichever of warm and cold the chip's state says applies:
-warm while the chip reads `hot` or `cooling`, cold once it reads `cold`. Where the
-chip claims no state, neither figure is called "now" and both are shown.
+warm while the chip reads `hot` or `cooling`, cold once it reads `cold`.
+
+**Where no cache state is known, all three figures are still shown and none is
+called "now".** There are two such cases, and the surface says which:
+
+- **No request has been seen on the pane yet.** Its chip reads `cache —`. This
+  is a pane whose session has nothing on record: one just identified, or one
+  restored after a restart whose session this store has never watched. Its
+  context and its price are known at once, and this is the moment the estimate
+  is most wanted, by a human back at a pane that has probably gone cold. So the
+  cold figure, the warm figure and the fresh-agent figure are shown, cold first,
+  under a row that reads "Cache state unknown: no request seen on this pane yet".
+- **No cache lifetime is known for the pane's CLI.** Its chip reads `idle 12m`.
+  The row reads "Cache state unknown: no cache TTL is known for this pane".
+
+A pane with no chip reading **and** no context reading shows nothing: there is
+nothing to price, and nothing to say that the chip's own tooltip does not.
+
+A restored pane is not always in the first case. A usage row is keyed by
+session id and its activity is persisted with it, so a pane that resumes a
+session with a request on record gets its chip back at once, with the age that
+session had, usually `cold`. It then has a state like any other pane.
 
 `F` is measured, not assumed. It is the first counted turn's own input, cache-read
 and cache-written tokens together: the CLI's system prompt, its tools, the repo's
@@ -56,7 +76,7 @@ second copy is a second place for the answer to drift.
 | `C` | the context reading the usage tick already makes each pass for the usage series (`agent_context_signals_for_group`) | a CLI with no token record (copilot); a session not yet identified |
 | `F` | each transcript fold records its first counted turn (`SessionUsage::first_context_tokens`), persisted on the usage row | opencode, whose session row is a running total with no per-turn record |
 | price | `usage::price_quote` for the row's current model | any model the table does not list; any row whose CLI reports its own dollars |
-| `T`, the cache state | the chip's own reading | a CLI with no TTL and nothing detected |
+| `T`, the cache state | the chip's own reading; the TTL beside it is the usage row's resolved `cache_ttl_minutes` | a CLI with no TTL and nothing detected; a pane no request has been seen on yet. Both still show all three figures, with none called "now" |
 | characters per token | resolved beside the price | wherever the price is |
 | `P` | the compose strip's text | every pane without a compose strip |
 
@@ -96,6 +116,14 @@ The typed text is visible only in the compose strip, which only an orchestrator
 pane has. Text typed into a CLI's own input box never reaches orrerix. Everywhere
 else the estimate is for the history alone, and the menu says "typed prompt not
 visible — add its length yourself".
+
+**Images attached in the compose strip are not counted.** They are sent as
+"Attached image: <path>" lines, which the agent then reads with a tool. Neither
+those lines nor what reading the images costs is in any figure, and that cost is
+not knowable here: it depends on the images and on how the model reads them. The
+inputs row says "N images attached, not counted" and the compose line ends with
+"(N images not counted)", so an images-only draft does not read as nothing to
+send.
 
 ## The price table
 
@@ -169,6 +197,8 @@ table is in the chip menu, on the row it applies to or in that row's tooltip.
 | a subscription pays no per-token price | "list price", with the model and the date; tokens come first on every row |
 | Haiku 5.5's price flips at 100,000 tokens | the tier each figure was priced at is named |
 | the version is not in the table | "its family's highest current price is used and the figure may be high" |
+| the cache state is not known | no figure is called "now"; a row says "Cache state unknown" and why, and the compose line ends "(cache state unknown)" |
+| images are attached to the draft | "N images attached, not counted" on the inputs row; "(N images not counted)" on the compose line |
 
 ### What was measured
 
@@ -229,14 +259,13 @@ call per keystroke.
   pane, a lead pane and a plain agent pane adopted at spawn are looked up under
   the same identity the chip uses (`cacheIdentityOfPane`), and their rows carry
   the same `prompt_cost` object.
-- **Nothing, on a pane whose chip reads `cache —`.** That chip means there is no
-  reading: no identity, no usage row, no token record, or no request observed
-  yet. The estimate takes its cache state and its TTL from the chip's reading,
-  so with none it shows nothing, in the menu and on the compose line alike,
-  rather than figures with no state behind them. The cost of that rule is a
-  pane restored after a restart: its context and price are known at once, but
-  it shows no estimate until its next request is observed, exactly as its chip
-  shows no age until then.
+- **On a pane whose chip reads `cache —`, the estimate alone, where the context
+  is known.** Clicking that chip opens a menu of the estimate's rows and nothing
+  else: there is no wake on record and nothing to compact from there. On an
+  orchestrator pane the compose line shows too. The chip's tooltip ends "Click
+  for what the next prompt would cost", since nothing else about a muted chip
+  says it opens anything. Where the context is not known either, the click
+  opens nothing, as it did before, and the tooltip does not offer it.
 - **The compose strip**, on orchestrator panes: one line under the box, with the
   same rows as its tooltip. It shares the status line's fixed-height slot rather
   than taking a row, so the strip is exactly as tall as before and the terminal
@@ -249,9 +278,11 @@ There is no timer. The line is recomputed when the draft changes, coalesced to
 one per animation frame, and on each strip delivery, which is the read the chip
 already rides.
 
-One function, `PaneBadges.promptCostView`, builds the estimate for both surfaces.
-It takes the cache state and the TTL from the chip's own reading, so the estimate
-and the chip cannot be on different TTLs. How that TTL is resolved, including the
+One function, `PaneBadges.promptCostView`, builds the estimate for both surfaces,
+and every decision in it is `costContextFor`'s, in `promptcost.ts`, where it is
+tested. The cache state is the chip's own. The TTL is the usage row's resolved
+`cache_ttl_minutes`, the one field the chip reads too, so the estimate and the
+chip cannot be on different TTLs, and a pane with no chip reading still has one. How that TTL is resolved, including the
 lifetime read off a session's own cache writes, is in
 [cache-age.md](cache-age.md#the-ttl-table-and-where-it-lives).
 
@@ -296,6 +327,9 @@ frontend: against a backend that sends neither, the menu says what is missing.
   it holds and one where it does not; the write rate either side of the hour;
   which figure is "now"; nothing typed; an unknown `F`, an unknown `C`, no price
   and an uncountable prompt, each staying unknown; the tier; the strip lookup;
-  and the words on both surfaces.
+  the pane with no chip reading, priced with no state claimed, with its exact
+  rows, figures and reason; the pane with no chip reading and no context, which
+  shows nothing; which unknown each reason belongs to; attached images; and the
+  words on both surfaces.
 - The menu rows and the compose-strip line are DOM wiring over that module,
   validated by hand (see the PR).

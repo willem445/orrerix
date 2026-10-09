@@ -13,6 +13,11 @@
 //          plus the typed prompt, all written
 //
 // "Now" is whichever of warm and cold the chip's inferred state says applies.
+// Where the chip claims no state — no cache lifetime is known, or no request
+// has been seen on the pane yet, which is every pane just after a restart —
+// all three figures are still shown, none is called "now", and the surface
+// says the state is unknown and why. That is the case the estimate matters
+// most in: a human back at a pane that has probably gone cold.
 //
 // WHAT IT CANNOT KNOW, each said on the surface that shows the figure:
 //   - the OUTPUT. Nothing here prices a reply nobody has written yet.
@@ -95,6 +100,9 @@ export interface PromptCostRow {
   readonly id: string;
   /** An object on a live row; null on a historical one. */
   readonly prompt_cost?: PromptCostInputs | null;
+  /** The row's resolved cache TTL — the SAME field the chip reads
+   *  (`cacheage.ts`), so the two cannot be on different lifetimes. */
+  readonly cache_ttl_minutes?: number | null;
   /** Which rung resolved the row's `cache_ttl_minutes`. */
   readonly cache_ttl_source?: string | null;
 }
@@ -131,7 +139,11 @@ export interface PromptCostReading {
   readonly priceBasis: string | null;
   readonly priceDated: string | null;
   readonly charsPerToken: number | null;
-  /** Which rung resolved the chip's TTL: `block`, `session`, `cli`, or null. */
+  /** The row's resolved cache TTL in minutes, or null where none is known. It
+   *  is carried here, and not only on the chip's reading, because a pane whose
+   *  chip has NO reading still has one, and the write rate depends on it. */
+  readonly ttlMinutes: number | null;
+  /** Which rung resolved that TTL: `block`, `session`, `cli`, or null. */
   readonly ttlSource: string | null;
   /** A compaction is in flight on this pane, so `contextTokens` — the last
    *  turn's — may already be stale. */
@@ -146,6 +158,11 @@ const COMPACTING: ReadonlySet<string> = new Set(["armed", "awaiting_evidence", "
  *  negative or not a number is "not known" — never coerced to zero. */
 function count(v: number | null | undefined): number | null {
   return typeof v === "number" && Number.isFinite(v) && v >= 0 ? v : null;
+}
+
+/** A finite number above zero, or null. */
+function positive(v: number | null | undefined): number | null {
+  return typeof v === "number" && Number.isFinite(v) && v > 0 ? v : null;
 }
 
 /** This pane's reading out of the strip snapshot, or `null` when the strip does
@@ -175,7 +192,8 @@ export function promptCostFor(
     longPrompt: cost.price_long_prompt ?? null,
     priceBasis: cost.price_basis ?? null,
     priceDated: cost.price_dated ?? null,
-    charsPerToken: typeof cpt === "number" && Number.isFinite(cpt) && cpt > 0 ? cpt : null,
+    charsPerToken: positive(cpt),
+    ttlMinutes: positive(row.cache_ttl_minutes),
     ttlSource: row.cache_ttl_source ?? null,
     compacting: phase !== undefined && COMPACTING.has(phase),
   };
@@ -333,10 +351,71 @@ export interface CostContext {
   readonly ttlMinutes: number | null;
   /** Ms until the chip reads cold, when it is cooling; else null. */
   readonly coldInMs: number | null;
+  /** Why no cache state is claimed, when `state` is `unknown`; else null.
+   *  `no-request`: no request has been seen on the pane yet, so its age is not
+   *  known. `no-ttl`: its age is known and no cache lifetime is. */
+  readonly unknownWhy: "no-request" | "no-ttl" | null;
   /** Whether typed text is visible to orrerix on this pane (a compose strip).
    *  Where it is not, the estimate is for the history alone and says so. */
   readonly promptVisible: boolean;
   readonly promptChars: number;
+  /** Images queued in the compose strip. They are sent as file paths the
+   *  agent then reads, and are in no figure here. */
+  readonly attachments: number;
+}
+
+/** What the surface knows, built from the pane's reading and its chip — or
+ *  `null` for a pane there is nothing worth showing on.
+ *
+ *  `chip` is the chip's state and age when the chip has a reading, and null
+ *  when it reads `cache —`. A pane with no chip reading is still priced when
+ *  its context is known: the state is then `unknown`, and every surface shows
+ *  the three figures with none called "now". It is `null` only when there is
+ *  no chip reading AND no context, where there is nothing to price and nothing
+ *  to say — a copilot pane, or one whose session is not identified yet.
+ *
+ *  The TTL is the reading's, which is the usage row's own resolved field. */
+export function costContextFor(input: {
+  readonly reading: PromptCostReading;
+  readonly chip: { readonly state: CostCacheState; readonly ageMs: number | null } | null;
+  readonly promptVisible: boolean;
+  readonly promptChars: number;
+  readonly attachments: number;
+}): CostContext | null {
+  const { reading, chip } = input;
+  if (chip === null && reading.contextTokens === null) return null;
+  const state: CostCacheState = chip === null ? "unknown" : chip.state;
+  const ttlMinutes = reading.ttlMinutes;
+  const ageMs = chip === null ? null : chip.ageMs;
+  return {
+    state,
+    ttlMinutes,
+    coldInMs:
+      state === "cooling" && ttlMinutes !== null && ageMs !== null ? Math.max(0, ttlMinutes * 60_000 - ageMs) : null,
+    unknownWhy: state !== "unknown" ? null : ageMs === null ? "no-request" : "no-ttl",
+    promptVisible: input.promptVisible,
+    promptChars: input.promptChars,
+    attachments: input.attachments,
+  };
+}
+
+/** The row that says no cache state is claimed, and why. */
+const UNKNOWN_ROW: Record<"no-request" | "no-ttl", CostRow> = {
+  "no-request": {
+    label: "Cache state unknown: no request seen on this pane yet",
+    reason:
+      "orrerix has not seen this pane make a request since it started watching it — after a restart, or just after its session was identified — so it does not know how long ago the last one was, and so not whether the cache is still warm. Both cases are priced below; the pane's next request settles which.",
+  },
+  "no-ttl": {
+    label: "Cache state unknown: no cache TTL is known for this pane",
+    reason:
+      "No cache lifetime is known for this pane's CLI, so no warm or cold state can be inferred from how long it has been quiet. Both cases are priced below.",
+  },
+};
+
+/** `2 images`, `1 image`. */
+function imagesText(n: number): string {
+  return `${n} image${n === 1 ? "" : "s"}`;
 }
 
 function minutesText(ms: number): string {
@@ -430,9 +509,13 @@ export function promptCostRows(r: PromptCostReading, e: PromptCostEstimate, c: C
         "The estimate needs the size of the context the pane's last turn was sent, and this pane's CLI has not recorded one orrerix can read.",
     });
   } else {
+    // The wake row sits above these only in a menu opened on a chip that has
+    // a reading. A pane no request has been seen on has no wake to point at.
+    const wake =
+      c.unknownWhy === "no-request" ? "" : " The last wake above is what a real request on this pane read and wrote.";
     const warmWhy =
-      "If the cache is still warm (inferred, not observed): the whole context is read from the cache and the typed prompt is written to it. " +
-      "The last wake above is what a real request on this pane read and wrote." +
+      "If the cache is still warm (inferred, not observed): the whole context is read from the cache and the typed prompt is written to it." +
+      wake +
       tierNote(warm, r);
     const coldWhy =
       "With the cache expired, the whole context is written to it again. " + writeNote(e, c, r) + tierNote(cold, r);
@@ -447,10 +530,13 @@ export function promptCostRows(r: PromptCostReading, e: PromptCostEstimate, c: C
       rows.push({ label: `Send now (cache cold, inferred): ≈ ${figureText(cold)}`, reason: coldWhy });
       rows.push({ label: `Had it stayed warm: ≈ ${figureText(warm)}`, reason: warmWhy });
     } else {
-      // No TTL, or no request observed: the chip claims no state, so neither
-      // figure is called "now".
-      rows.push({ label: `If the cache is warm: ≈ ${figureText(warm)}`, reason: warmWhy });
-      rows.push({ label: `If it is cold: ≈ ${figureText(cold)}`, reason: coldWhy });
+      // No TTL, or no request observed: no state is claimed, so neither figure
+      // is called "now", and a row says so and why. Cold first: a pane nobody
+      // has watched make a request is likelier cold than warm, and it is the
+      // figure that decides whether a fresh agent would be cheaper.
+      rows.push(UNKNOWN_ROW[c.unknownWhy ?? "no-request"]);
+      rows.push({ label: `If the cache is cold: ≈ ${figureText(cold)}`, reason: coldWhy });
+      rows.push({ label: `If it is still warm: ≈ ${figureText(warm)}`, reason: warmWhy });
     }
   }
   if (e.fresh === null) {
@@ -510,15 +596,28 @@ function inputsRow(r: PromptCostReading, e: PromptCostEstimate, c: CostContext):
   } else {
     parts.push("no list price");
   }
+  if (c.attachments > 0) parts.splice(2, 0, `${imagesText(c.attachments)} attached, not counted`);
   parts.push(`${e.writeMinutes === 60 ? "1h" : "5m"} cache writes`);
   if (r.compacting) parts.push("compact in flight");
+  const images =
+    c.attachments > 0
+      ? " Images attached in the compose strip are sent as file paths for the agent to read; neither those lines nor what reading the images costs is in these figures."
+      : "";
   const stale = r.compacting
     ? " A compaction is in flight on this pane: the context is the last turn's and may have dropped since."
     : " The context is the last turn's; if the CLI has compacted on its own since, it is smaller.";
   return {
     label: `Inputs: ${parts.join(" · ")}`,
-    reason: `${typed.reason}${stale} ${writeNote(e, c, r)}`,
+    reason: `${typed.reason}${images}${stale} ${writeNote(e, c, r)}`,
   };
+}
+
+/** The `cache —` chip's tooltip on a pane that can still be priced: what the
+ *  chip already says is missing, then where the estimate is. Without it the
+ *  only sign that the muted chip opens anything is clicking it. `priced` is
+ *  whether `costContextFor` gave the pane a context. */
+export function gapTitleWithEstimate(gapTitle: string, priced: boolean): string {
+  return priced ? `${gapTitle} Click for what the next prompt would cost.` : gapTitle;
 }
 
 /** The compose strip's one line, and its tooltip. `null` when there is nothing
@@ -533,10 +632,14 @@ export function composeCostLine(
   c: CostContext
 ): { text: string; title: string } | null {
   if (e.warm === null || e.cold === null) return null;
-  const now = e.now === "cold" ? e.cold : e.warm;
-  const other = e.now === "cold" ? e.warm : e.cold;
-  const nowWord = e.now === null ? "warm" : "now";
-  const otherWord = e.now === "cold" ? "warm" : "cold";
+  // With a state: "now", then the other one. With none: cold, then warm, and
+  // the line says the state is unknown — it is read without its tooltip.
+  const parts: string[] =
+    e.now === null
+      ? [`cold ${figureText(e.cold)}`, `warm ${figureText(e.warm)}`]
+      : e.now === "cold"
+        ? [`now ${figureText(e.cold)}`, `warm ${figureText(e.warm)}`]
+        : [`now ${figureText(e.warm)}`, `cold ${figureText(e.cold)}`];
   // Text that is typed but cannot be counted is SAID on the line itself, not
   // only in the tooltip: the line is what is read while typing, and figures
   // that silently leave the draft out would read as including it.
@@ -546,11 +649,14 @@ export function composeCostLine(
       : e.promptTokens !== null
         ? ` incl. ≈${formatCostTokens(e.promptTokens)} typed`
         : " (typed not counted)";
-  const parts: string[] = [`${nowWord} ${figureText(now)}`, `${otherWord} ${figureText(other)}`];
   if (e.fresh !== null) parts.push(`fresh ${figureText(e.fresh)}`);
+  // Queued images are in no figure, and an images-only draft would otherwise
+  // read as an estimate of the whole send.
+  const images = c.attachments > 0 ? ` (${imagesText(c.attachments)} not counted)` : "";
+  const unknown = e.now === null ? " (cache state unknown)" : "";
   // "est." leads: the line is read at a glance, without its tooltip, and must
   // not pass for a measurement.
-  const text = `est. next: ${parts.join("  |  ")}${typed}`;
+  const text = `est. next: ${parts.join("  |  ")}${typed}${images}${unknown}`;
   const title = promptCostRows(r, e, c)
     .map((row) => `${row.label}\n  ${row.reason}`)
     .join("\n");

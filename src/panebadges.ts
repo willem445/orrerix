@@ -26,7 +26,9 @@ import {
   type CacheAgeReading,
 } from "./cacheage";
 import {
+  costContextFor,
   estimatePromptCost,
+  gapTitleWithEstimate,
   promptCostRows,
   type CostContext,
   type PromptCostEstimate,
@@ -104,6 +106,10 @@ export class PaneBadges {
    *  same strip delivery as `cacheReading`. Null when the strip does not cover
    *  the pane. */
   private costReading: PromptCostReading | null = null;
+  /** What the `cache —` chip's tooltip says is missing, while the chip reads
+   *  that; null whenever it reads anything else or is hidden. Kept so the
+   *  tooltip can be repainted when the estimate's inputs arrive after it. */
+  private gapTitle: string | null = null;
   /** Whether an `orch-mailbox-changed` PUSH has ever been applied to this pane.
    *  The seed read (`applyMailSeed`) is asynchronous and a push can land while
    *  it is in flight, so without this the seed's older number would overwrite a
@@ -534,6 +540,7 @@ export class PaneBadges {
   noteCacheAge(lookup: CacheAgeLookup, nowMs: number = Date.now()): void {
     const reading = lookup.reading;
     this.cacheReading = reading;
+    this.gapTitle = null;
     const facts = this.pane.facts();
     // A pane that runs no harness has no cache to report, so it wears no chip.
     // Every other pane with no reading wears the muted gap chip, and its tooltip
@@ -543,12 +550,12 @@ export class PaneBadges {
       return;
     }
     if (reading === null) {
-      const title = cacheGapTitle(lookup.gap, {
+      this.gapTitle = cacheGapTitle(lookup.gap, {
         cli: facts.harness,
         remote: this.pane.isSshPane,
         sessionKnown: facts.sessionId !== null,
       });
-      this.paintCacheChip(CACHE_GAP_LABEL, "gap", title);
+      this.paintGapChip();
       return;
     }
     const label = cacheChipLabel(reading, nowMs);
@@ -557,6 +564,13 @@ export class PaneBadges {
       return;
     }
     this.paintCacheChip(label, cacheState(reading, nowMs).state, cacheChipTitle(reading, nowMs));
+  }
+
+  /** Paint the `cache —` chip. Its tooltip names what is missing and, where
+   *  the pane can still be priced, that the estimate is a click away (#3831). */
+  private paintGapChip(): void {
+    if (this.gapTitle === null) return;
+    this.paintCacheChip(CACHE_GAP_LABEL, "gap", gapTitleWithEstimate(this.gapTitle, this.promptCostView() !== null));
   }
 
   /** Show the cache chip with this text, state and tooltip. Each part is
@@ -579,41 +593,47 @@ export class PaneBadges {
 
   /** Hand this pane the next-prompt estimate's inputs (#3831), or `null` when
    *  the strip does not cover it. Called on every strip delivery, beside
-   *  `noteCacheAge`. Nothing is rendered here: the menu reads it when opened,
-   *  and the compose strip's line is refreshed by the pane right after. */
+   *  `noteCacheAge`. The menu reads it when opened, and the compose strip's
+   *  line is refreshed by the pane right after. The one thing painted here is
+   *  the `cache —` chip's tooltip, which says whether a click opens the
+   *  estimate and so depends on this reading, which arrives after the chip's. */
   notePromptCost(reading: PromptCostReading | null): void {
     this.costReading = reading;
+    this.paintGapChip();
   }
 
   /** The next-prompt estimate for this pane as it stands at `nowMs` (#3831):
    *  the reading, the three figures, and what the surface showing them knows.
-   *  `null` when there is no usage row or no chip reading to take the cache
-   *  state from.
+   *  `null` when there is no usage row, or nothing worth showing on one.
    *
    *  One place builds this, for the chip's menu and the compose strip's line
    *  both, so the two cannot be computed from different TTLs or different
-   *  typed text. The state and the TTL are the CHIP's own reading — the estimate
-   *  never resolves a TTL of its own. The typed text is the compose strip's,
-   *  which only an orchestrator pane has; everywhere else it is not visible
-   *  and the estimate is for the history alone. */
+   *  typed text. Every decision is `costContextFor`'s, where it is tested; this
+   *  only gathers what the pane holds. The cache STATE is the chip's when the
+   *  chip has a reading. When it reads `cache —` there is none, and the pane
+   *  is still priced if its context is known, with no state claimed: that is a
+   *  pane just restored, which is where the estimate is most wanted. The TTL is
+   *  the usage row's own resolved field, the one the chip reads. The typed text
+   *  and the queued images are the compose strip's, which only an orchestrator
+   *  pane has; everywhere else the text is not visible and the estimate is for
+   *  the history alone. */
   promptCostView(
     nowMs: number = Date.now()
   ): { reading: PromptCostReading; estimate: PromptCostEstimate; context: CostContext } | null {
     const reading = this.costReading;
+    if (reading === null) return null;
     const cache = this.cacheReading;
-    if (reading === null || cache === null) return null;
-    const { state, ageMs } = cacheState(cache, nowMs);
     const input = this.pane.compose.composeInput;
     const promptChars = input === null ? 0 : input.value.length;
-    const ttlMs = cache.ttlMinutes === null ? null : cache.ttlMinutes * 60_000;
-    const context: CostContext = {
-      state,
-      ttlMinutes: cache.ttlMinutes,
-      coldInMs: state === "cooling" && ttlMs !== null && ageMs !== null ? Math.max(0, ttlMs - ageMs) : null,
+    const context = costContextFor({
+      reading,
+      chip: cache === null ? null : cacheState(cache, nowMs),
       promptVisible: input !== null,
       promptChars,
-    };
-    const estimate = estimatePromptCost(reading, { state, ttlMinutes: cache.ttlMinutes }, promptChars);
+      attachments: this.pane.compose.queuedImageCount,
+    });
+    if (context === null) return null;
+    const estimate = estimatePromptCost(reading, { state: context.state, ttlMinutes: context.ttlMinutes }, promptChars);
     return { reading, estimate, context };
   }
 
@@ -624,9 +644,29 @@ export class PaneBadges {
    *  cannot do anything — never offered as a click that silently fails. */
   private openCacheMenu(x: number, y: number): void {
     const reading = this.cacheReading;
-    if (reading === null) return;
+    const cost = this.promptCostView();
     type CacheAction = "compact";
     const items: MenuItem<CacheAction>[] = [];
+    // #3831: the next prompt's input cost, three ways. Every row is read-only;
+    // its tooltip carries what the figure assumes. `promptcost.ts` writes the
+    // words, where they are tested.
+    const costItems: MenuItem<CacheAction>[] =
+      cost === null
+        ? []
+        : promptCostRows(cost.reading, cost.estimate, cost.context).map((row) => ({
+            label: row.label,
+            disabled: true,
+            reason: row.reason,
+          }));
+    if (reading === null) {
+      // The chip reads `cache —`: there is no wake on record and nothing to
+      // compact from here. If the pane can still be priced — its context is
+      // known, as on a pane just restored — the menu is the estimate alone;
+      // otherwise the click opens nothing, as before.
+      if (costItems.length === 0) return;
+      showContextMenu(x, y, costItems, () => {});
+      return;
+    }
     const wake = wakeCostLine(reading.lastWake);
     items.push({
       label: wake ?? "No wake recorded yet",
@@ -634,14 +674,8 @@ export class PaneBadges {
       reason: "Read-only: tokens the first request after the last quiet stretch read from the cache, wrote to it, and sent uncached.",
     });
     items.push({ label: "", separator: true });
-    // #3831: the next prompt's input cost, three ways. Every row is read-only;
-    // its tooltip carries what the figure assumes. `promptcost.ts` writes the
-    // words, where they are tested.
-    const cost = this.promptCostView();
-    if (cost !== null) {
-      for (const row of promptCostRows(cost.reading, cost.estimate, cost.context)) {
-        items.push({ label: row.label, disabled: true, reason: row.reason });
-      }
+    if (costItems.length > 0) {
+      items.push(...costItems);
       items.push({ label: "", separator: true });
     }
     const group = this.pane.orchGroup;

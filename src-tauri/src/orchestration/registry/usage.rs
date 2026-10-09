@@ -519,7 +519,7 @@ impl OrchRegistry {
                 } else {
                     snap
                 };
-                next.activity = activity;
+                let _ = activity;
                 let changed = !usage_rows_persist_alike(existing, &next);
                 // `updated_ms` is what orders a row in `usage-live.json`
                 // against the same key in `usage.json` when the store is

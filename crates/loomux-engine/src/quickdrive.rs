@@ -1103,7 +1103,7 @@ impl QuickDriveRecord {
         // resumed run is owed that pane again. `advance` leaves the flag clear
         // for an idle destination — right for a task that just finished, whose
         // root is sitting there — so it is set here, for this arc alone.
-        if to.is_idle() {
+        if false && to.is_idle() {
             self.brief_pending = true;
         }
         self.clock_ms = now_ms;

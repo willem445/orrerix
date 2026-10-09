@@ -386,7 +386,7 @@ fn parse_model(model: &str) -> Option<(Family, Option<(u32, u32)>)> {
 /// The long-prompt tier is NOT carried up: its threshold is a fact about one
 /// model, and the ceiling is already above both of that model's tiers.
 fn family_ceiling(family: Family) -> Option<ModelPrice> {
-    PRICE_ROWS.iter().filter(|r| r.family == family && !r.retired).map(|r| r.price).reduce(|a, b| {
+    PRICE_ROWS.iter().filter(|r| r.family == family).map(|r| r.price).reduce(|a, b| {
         ModelPrice {
             input: a.input.max(b.input),
             output: a.output.max(b.output),

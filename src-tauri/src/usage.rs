@@ -1230,7 +1230,7 @@ impl CodexFold {
                 // whole-prompt `input_tokens` (see `codex_tokens`).
                 let prompt = t.input_tokens + t.cache_creation_tokens + t.cache_read_tokens;
                 if prompt > 0 {
-                    self.first_context.get_or_insert(prompt);
+                    self.first_context = Some(prompt);
                 }
                 self.totals.input_tokens += t.input_tokens;
                 self.totals.output_tokens += t.output_tokens;

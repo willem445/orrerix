@@ -477,8 +477,11 @@ branch, and by the brief.
 21. A new backend event, `orch-quick-changed` (`{ group_id }`).
 22. `templates/quick.md` and `templates/quick-root.md` are rewritten:
     the first for an agent with no task yet, the second as the message a
-    RESUMED task's root is typed. Three audit actions join the vocabulary:
-    `qd-opened`, `qd-task-begun`, `qd-closed`.
+    RESUMED task's root is typed. Four audit actions join the vocabulary:
+    `qd-opened`, `qd-task-begun`, `qd-closed`, `qd-session-watch`.
+23. An idle run whose root's CLI exits by itself is held on `unresumable`
+    (§17.5). On codex, an idle root's session watch starts at its first tool
+    call instead of at its spawn (§17.8).
 
 ## 14. Residuals
 
@@ -878,7 +881,10 @@ work begins the next task.
 - **One record, re-armed.** No new record and no new group begins: the pane is
   bound to its group, and the file holds one run. `task_seq` counts the tasks
   begun. `begin_task` restamps the clock and drops the last task's account —
-  its note, its pull request, the id of its notice — from the record.
+  its note, its pull request, the id of its notice — from the record. It drops
+  `task` too: only a record from the build before this one carries a task
+  text (§17.7), it describes the task that record was started with, and left
+  in place it would be quoted in the notice of every later task.
 - **Limits apply per task.** Each gets the whole time bound from its own
   start, and the same round bound.
 - **Each finished task raises its own notice**, and a later task does not
@@ -927,13 +933,41 @@ nothing in it to resume and nothing to stop, so it is treated as nothing:
 - **A restart ends it too**, for the same reason: `qd_reconcile` parks a
   working run and ends an idle one. Its group id is then free.
 
+**A root that goes by itself is a different thing, and parks.** "Closed" above
+means orrerix or the human ended the pane, which the exit path is told
+(`expected`). A CLI that exits on its own is not the human being done with it,
+and for an idle root it is the ordinary shape of a failed launch: the root is
+recorded the moment its pane binds, with nothing typed and so nothing waiting
+for the CLI to boot, which means a CLI that dies at boot — a wrong model, not
+signed in — dies after it is recorded. Ending the run there would make
+every such launch a pane that vanished with no reason given. So an unexpected
+exit holds the run on `unresumable`, quoting what the pane went out saying;
+the human is told, the run is on the list, and Resume opens a fresh root.
+
+That includes a human who quits the CLI from inside it rather than closing the
+pane. The two are told apart by who ended the process, not by exit code: a CLI
+that prints an error and exits zero is a failed launch too.
+
+One window is left by recording at bind, and it is closed where it opens. A
+pane that dies in the two statements between the spawn returning and the run
+recording its root is not matched by the exit path — there is no root on the
+record yet. So the hand-over looks once more after it has recorded the root,
+and parks the run the same way if the pane is already gone.
+
 With a task in progress none of that applies and §10 and §15.4 hold as before:
 the run parks on `root-gone` or `restart`, the human is told, and Resume
 re-opens the root's session.
 
-The one hold out of `root-idle` is a root pane that could not be opened. It
-parks like any first pane that failed, with the refusal quoted — which is what
-the launcher shows in its form — and Resume asks for the pane again.
+So `root-idle` has two holds: a root pane that could not be opened, and one
+that opened and then went by itself. Both park like any first pane that
+failed, with the reason quoted, and Resume asks for the pane again.
+
+The open itself is `qd_hand_over`, the function every other turn's pane goes
+through, with one difference: its delivery step opens the pane and types
+nothing (`qd_open_root`). The store, the "run moved while the pane was
+opening" case and the park with the refusal quoted are the same lines for an
+idle open as for a brief, and the spawn with its one-root backstop is shared
+with a resumed task's (`qd_first_root_pane`).
 
 `quick_start` now marks the group as known to this process *before* it writes
 the marker that makes the group findable. The start-up scan treats a marked
@@ -972,9 +1006,11 @@ word.
 **A record from the build before this one loads here.** That build started a
 described run in `root-wait` with the task on the record. It reads as a task in
 progress: bounded by its own clock, parked by a restart, resumable. Its task
-text is kept, shown on the chip and the list, and quoted in the resume message
-— a root re-opened cold would otherwise have no task at all. Its `done` returns
-the run to idle like any other. One that had already ended is still ended.
+text is kept for as long as that task lasts — shown on the chip and the list,
+and quoted in the resume message, since a root re-opened cold would otherwise
+have no task at all. Its `done` returns the run to idle like any other, and the
+text goes when the next task begins (§17.4). One that had already ended is
+still ended.
 `a_described_record_from_before_the_idle_start_still_loads_as_a_task_in_progress`
 reads that shape from a literal, not from this build's serializer.
 
@@ -989,17 +1025,67 @@ Nothing in progress is lost in the second row — an idle run has no task — an
 `an_idle_record_round_trips_under_a_state_word_older_builds_do_not_know` pins
 the word, since the row rests on it.
 
-### 17.8 Residuals
+### 17.8 Whose session an idle root's is
+
+orrerix learns a pane's session, on the CLIs that mint their own, by watching
+the CLI's session store for a NEW session in the pane's directory. A typed
+kickoff starts a turn within seconds, so the watch and the session it is
+looking for arrive together. An idle root is typed nothing, and its CLI may
+not write a session until the human's first message.
+
+On one CLI that gap was a hazard rather than a delay. **Codex's store is the
+human's own**, shared with the sessions they start in their terminal, and a
+quick root's directory is their checkout. A `codex` they started there while
+the root waited was new, in that directory and unclaimed — the one candidate
+there was. The watch would have bound it to the root: usage read from the
+human's session, and a Resume re-opening their conversation as the root.
+
+So on codex an idle root's watch is **not started at the spawn**. It is held,
+with the baseline taken before the spawn, and started by the root's first
+answered tool call (`qd_root_acted`). By then the root's CLI is running a
+turn, so its own session exists, and a stranger's can no longer be the only
+candidate: the search finds the root's, or finds two and answers `Contested`,
+which is never a guess. A watch held for a root that goes is dropped with it.
+
+`defers_session_watch` is the rule, and it is this narrow on purpose:
+
+| Store | Whose | Idle root's watch |
+| --- | --- | --- |
+| codex | the human's, shared | deferred to the root's first tool call |
+| opencode | the group's own — no session of the human's is ever in it | at the spawn, as before |
+| copilot | the human's, but written a few seconds into boot whether or not anything is typed | at the spawn, as before. Deferring would widen the window: its search takes the newest new session, and a later one of the human's would outrank the root's |
+
+Claude and pi are handed their session id at launch, and gemini's sessions are
+not tracked, so none of the three has a watch at all.
+
+The alternative was to start the watch at the human's first input in the
+pane and take the baseline then. That would settle the contested case as well,
+since a baseline taken at that moment already holds the human's session. It
+was not chosen, for two reasons. The registry has no event for a pane's input:
+the pty layer keeps a last-input time, which something would have to poll for
+as long as the pane sat idle — the cost §17.5 rules out. And a baseline taken
+a moment too early reopens the hazard with nothing to show for it, whereas a
+tool call is observed by the engine and cannot come before the turn it is
+part of.
+
+### 17.9 Residuals
 
 - **Gemini is typed one message.** It is the pointer of §17.1 and carries no
   task. A CLI whose contract file cannot be written is typed the same one.
-- **A late first message can leave a session unrecorded.** Opencode and codex
-  may write their session only at the first turn, and orrerix watches for it
-  for ten minutes after the pane opens. A root first spoken to later than that
-  has no recorded session, so a task interrupted by a restart or a closed pane
-  cannot be resumed; the hold says so. Claude and pi are handed their session
-  id at launch and copilot writes one a few seconds into boot, so none of the
-  three is affected. Gemini's sessions are not tracked at all, which is not new.
+- **A contested codex session stays unrecorded.** If the human did start their
+  own codex in the repository while the root waited, the search sees two and
+  binds neither (§17.8). The root then has no recorded session, so a task
+  interrupted by a restart or a closed pane cannot be resumed; the hold says
+  so. That is the safe direction, and the price of it.
+- **On opencode, a late first message can leave a session unrecorded.** It may
+  write its session only at the first turn, and orrerix watches for ten
+  minutes after the pane opens. A root first spoken to later than that has no
+  recorded session, with the same consequence. Deferring its watch as codex's
+  is deferred would fix that, and was not done here: nothing of the human's
+  can be bound in a store that is the group's own, so it is a missing
+  convenience and not a hazard.
+- **Quitting the CLI from inside an idle pane holds the run** (§17.5), where
+  closing the pane ends it. Stop, or closing the pane, clears it.
 - **Copilot's autopilot consent is the human's to answer.** orrerix answers
   that dialog while typing a kickoff. With nothing typed, it appears on the
   human's first message instead.

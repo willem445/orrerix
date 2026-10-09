@@ -238,6 +238,13 @@ a task to costs nothing to leave open and nothing to close.
 If you close the pane while a task is in progress, its helpers are closed with
 it and the run is held. You can resume it from **Unfinished runs**.
 
+If the agent's program exits by itself — it crashed, or it could not start
+because of a wrong model or a missing sign-in — the run is held instead of
+ended, even with no task in progress. You get a needs-you item quoting the
+last thing the pane printed, and **Resume here** under **Unfinished runs**
+opens a fresh agent. Quitting the CLI from inside the pane counts as this too;
+close the pane instead when you are done with it.
+
 What the agent can and cannot do:
 
 - It can open a worker, a reviewer or a planner, and nothing else.
@@ -284,10 +291,15 @@ press Resume.
   last one is done.
 - **A Describe it time bound starts with the first helper.** An agent that
   never opens one is not on a clock.
-- **Opencode and codex record their session at the first message.** If you
-  give a Describe it agent on one of them its first task more than ten minutes
-  after the pane opened, a task interrupted by a restart or a closed pane
-  cannot be resumed.
+- **Opencode records its session at the first message.** If you give a
+  Describe it agent on opencode its first task more than ten minutes after the
+  pane opened, a task interrupted by a restart or a closed pane cannot be
+  resumed.
+- **On codex, do not start your own codex in the same repository while a
+  Describe it agent is waiting for its first task**, if you want that task to
+  be resumable. orrerix cannot tell the two new sessions apart, so it records
+  neither: your own session is never mistaken for the agent's, but a task
+  interrupted by a restart or a closed pane cannot then be resumed.
 - **On copilot, its own autopilot prompt is yours to answer** when it appears
   on your first message to a Describe it agent.
 - **A described run counts no review rounds itself.** The agent is told the

@@ -29,6 +29,38 @@ impl OrchRegistry {
             .unwrap_or(0)
     }
 
+    /// The key an agent's usage row is stored under: its CLI session id, else
+    /// `agent:<id>` (see [`UsageSnapshot::key`]). One spelling, because the
+    /// snapshot writes a row by it and [`Self::stored_detected_cache_ttl`]
+    /// finds that row again by it.
+    pub(in crate::orchestration) fn usage_key(entry: &AgentEntry) -> String {
+        entry.session_id.clone().unwrap_or_else(|| format!("agent:{}", entry.id))
+    }
+
+    /// The cache lifetime the usage tick last DETECTED for the row stored under
+    /// `key` (`UsageSnapshot::detected_cache_ttl_minutes`, #3831), for the
+    /// orchestrator's idle-compact backstop — the second caller of
+    /// `cacheage::resolve_ttl`, which must read the same middle rung the usage
+    /// row does or a pane's chip and its nudge would run on two TTLs.
+    ///
+    /// Read from the store already in memory, never from the disk: the backstop
+    /// runs on the compact-nudge loop, and a file read there to refine a
+    /// threshold would be the second poll `docs/design/cache-age.md` rules out.
+    /// A group whose store is not loaded answers `None`, and the ladder falls
+    /// to the CLI's conservative default. In the running app the usage tick
+    /// keeps every live group's store loaded, so that is the first seconds
+    /// after start and nothing else.
+    pub(in crate::orchestration) fn stored_detected_cache_ttl(&self, group: &GroupId, key: &str) -> Option<u32> {
+        self.usage_lock
+            .lock_safe()
+            .by_group
+            .get(group)?
+            .rows
+            .iter()
+            .find(|r| r.key == key)
+            .and_then(|r| r.detected_cache_ttl_minutes)
+    }
+
     /// Compute an agent's current usage from the best available source, in
     /// preference order: the CLI's own session record (token counts — exact,
     /// and readable even after the pane is gone) → a last-resort parse of the
@@ -40,10 +72,7 @@ impl OrchRegistry {
     /// choice per CLI is only meaningful against the real one.
     #[doc(hidden)] // pub for integration tests
     pub fn compute_usage_snapshot(&self, entry: &AgentEntry, cli: &str) -> UsageSnapshot {
-        let key = entry
-            .session_id
-            .clone()
-            .unwrap_or_else(|| format!("agent:{}", entry.id));
+        let key = Self::usage_key(entry);
         let role = entry.role.as_str();
         let mut snap = UsageSnapshot {
             key,
@@ -68,6 +97,9 @@ impl OrchRegistry {
             // Filled by the merge, which is the only place the previous
             // reading is in hand (#3407).
             activity: Default::default(),
+            // #3831: filled by the arms that fold a per-turn record.
+            first_context_tokens: None,
+            detected_cache_ttl_minutes: None,
         };
 
         // #2850 S3b — a structured pane reported its own figures, so nothing
@@ -119,6 +151,8 @@ impl OrchRegistry {
                         snap.estimated = true; // token-derived dollar estimate
                         snap.current_model = u.current_model;
                         snap.model = u.model;
+                        snap.first_context_tokens = u.first_context_tokens;
+                        snap.detected_cache_ttl_minutes = u.detected_cache_ttl_minutes;
                         return snap;
                     }
                 }
@@ -160,6 +194,8 @@ impl OrchRegistry {
                         snap.estimated = false; // priced by opencode, not by us
                         snap.current_model = u.current_model;
                         snap.model = u.model;
+                        snap.first_context_tokens = u.first_context_tokens;
+                        snap.detected_cache_ttl_minutes = u.detected_cache_ttl_minutes;
                         return snap;
                     }
                 }
@@ -214,6 +250,8 @@ impl OrchRegistry {
                         snap.estimated = false; // priced by pi, not by us
                         snap.current_model = u.current_model;
                         snap.model = u.model;
+                        snap.first_context_tokens = u.first_context_tokens;
+                        snap.detected_cache_ttl_minutes = u.detected_cache_ttl_minutes;
                         return snap;
                     }
                 }
@@ -269,6 +307,8 @@ impl OrchRegistry {
                         snap.estimated = true; // token-derived, and unpriced today
                         snap.current_model = u.current_model;
                         snap.model = u.model;
+                        snap.first_context_tokens = u.first_context_tokens;
+                        snap.detected_cache_ttl_minutes = u.detected_cache_ttl_minutes;
                         return snap;
                     }
                 }
@@ -1139,10 +1179,29 @@ impl OrchRegistry {
         let mut rows: Vec<Value> = Vec::new();
 
         for s in &snaps {
-            let ttl = loomux_engine::cacheage::effective_ttl_minutes(
+            // One resolver, three rungs: the block's declared TTL, then what the
+            // session's own cache writes show, then the CLI's default (#3831).
+            // `cache_idle_decide` calls it with the same three inputs.
+            let ttl = loomux_engine::cacheage::resolve_ttl(
                 rails.as_ref().and_then(|g| g.block(&s.block)).and_then(|b| b.cache_ttl_minutes),
+                s.detected_cache_ttl_minutes,
                 &s.cli,
             );
+            let (ttl, ttl_source) = (ttl.map(|(n, _)| n), ttl.map(|(_, src)| src));
+            // #3831, the next-prompt estimate's price. A row is priced off the
+            // table only when its OWN dollars are (`estimated`): that is the
+            // row saying its CLI bills by this table. A CLI that reports its
+            // own dollars (pi, opencode) is priced by something else, and its
+            // model id naming a Claude family — `anthropic/claude-opus-4-8`
+            // through pi — does not change who sets the price. Read off the
+            // row's provenance, never branched on a CLI's name. The CURRENT
+            // model, because the next prompt goes to the model the pane is on,
+            // which on claude is not always the one `model` names (#3415).
+            let quote = s
+                .estimated
+                .then(|| s.current_model.as_deref().or(s.model.as_deref()))
+                .flatten()
+                .and_then(|m| crate::usage::price_quote(m).map(|q| (m, q)));
             let tokens = s.input_tokens
                 + s.output_tokens
                 + s.cache_creation_tokens
@@ -1189,8 +1248,28 @@ impl OrchRegistry {
                 "last_active_ms": s.activity.last_active_ms,
                 "last_wake": s.activity.last_wake,
                 "cache_ttl_minutes": ttl,
+                // Which rung answered: `block`, `session` or `cli`. Shown
+                // beside the TTL so a reading is never mistaken for a setting.
+                "cache_ttl_source": ttl_source,
                 "cache_cooling_after_ms": ttl.map(loomux_engine::cacheage::cooling_after_ms),
                 "compact_supported": compact_command_for(&s.cli).is_some(),
+                // #3831: the next-prompt estimate's inputs, all RESOLVED here
+                // so the frontend keeps no price or tokenizer table
+                // (`src/promptcost.ts`, `docs/design/prompt-cost.md`).
+                // `context_tokens` is the context the newest turn was sent —
+                // the reading this tick already made for the usage series, so
+                // a row that is not live has none. Every field is `null` where
+                // it is not known; none is ever a zero standing in for that.
+                "context_tokens": live
+                    .then(|| context_signals.get(&s.agent_id).and_then(|c| c.tokens))
+                    .flatten(),
+                "first_context_tokens": s.first_context_tokens,
+                "price_model": quote.as_ref().map(|(m, _)| *m),
+                "price_per_mtok": quote.as_ref().map(|(_, q)| q.price),
+                "price_long_prompt": quote.as_ref().and_then(|(_, q)| q.long_prompt),
+                "price_basis": quote.as_ref().map(|(_, q)| q.basis),
+                "price_dated": quote.as_ref().map(|_| crate::usage::PRICE_TABLE_DATED),
+                "prompt_chars_per_token": quote.as_ref().map(|(_, q)| q.chars_per_token),
                 "tokens": {
                     "input": s.input_tokens,
                     "output": s.output_tokens,

@@ -532,7 +532,7 @@ impl OrchRegistry {
         // #3723: an idle described run has no task for a report to end. Said
         // in its own words rather than left to "it is not this pane's turn",
         // which promises a brief that will never come.
-        if run.state().is_idle() {
+        if false && run.state().is_idle() {
             return "recorded in the audit log. No task is in progress in this quick run, so \
                     there is nothing for a report to end or to hold — a task begins when you \
                     first open or prompt a helper. If you have something to tell the human, say \

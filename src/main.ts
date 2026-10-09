@@ -14,6 +14,7 @@ import { AgentsView } from "./agentsview";
 import { rosterIdleFor } from "./rosteridle";
 import { cacheAgeFor, cacheIdentityOfPane } from "./cacheage";
 import { reportHumanSession } from "./humansession";
+import { promptCostFor } from "./promptcost";
 import {
   ensureOutputRouter,
   onPtyExit,
@@ -4129,7 +4130,14 @@ void (async () => {
         pane.noteRosterIdle(rosterIdleFor(strip, pane.orchGroupId, pane.orchAgentId));
         // #3407: the cache-age chip rides the same read. Every pane is told, for
         // the reason above — a pane that lost its binding must drop its chip.
-        pane.noteCacheAge(cacheAgeFor(strip, cacheIdentityOfPane(pane)));
+        // One identity for both lookups: a pane's orchestration identity, else
+        // its channel-agent one, which is how a solo pane is found (#3831).
+        const identity = cacheIdentityOfPane(pane);
+        pane.noteCacheAge(cacheAgeFor(strip, identity));
+        // #3831: the next-prompt estimate's inputs are fields on the same usage
+        // row, so they ride the same read under the same identity. After the
+        // chip's reading, which the estimate takes its cache state from.
+        pane.notePromptCost(promptCostFor(strip, identity?.group ?? null, identity?.agentId ?? null));
       }
     }
     refreshAgents();

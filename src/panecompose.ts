@@ -23,6 +23,7 @@ import {
   steerBoxHeight,
 } from "./steer";
 import { showToast } from "./toast";
+import { composeCostLine } from "./promptcost";
 import { isAppShortcut } from "./shortcuts";
 import { icon } from "./icons.ts";
 // The one top-level VALUE edge between satellites: the two icons below read it at
@@ -58,6 +59,11 @@ export class PaneCompose {
   composeInput: HTMLTextAreaElement | null = null;
   private composeStatus: HTMLElement | null = null;
   composeStatusTimer: number | undefined;
+  /** The next-prompt cost line (#3831), sharing the status slot's fixed height. */
+  private composeCost: HTMLElement | null = null;
+  /** The pending animation frame for a cost-line refresh, so a burst of
+   *  `input` events schedules one. */
+  private costFrame: number | undefined;
   /** Thumbnail-chip row for images pasted/attached into the strip (#72); hidden
    *  until the first image is queued. */
   private composeChips: HTMLElement | null = null;
@@ -309,15 +315,39 @@ export class PaneCompose {
     const chips = document.createElement("div");
     chips.className = "orch-compose-chips";
 
-    // Fixed-height slot (see .orch-compose-status): always in layout, so
+    // Fixed-height slot (see .orch-compose-foot): always in layout, so
     // showing/hiding a rejected-send message never changes the strip's height
     // and never resizes .pane-term / the PTY.
+    //
+    // #3831: the next-prompt cost line shares that ONE slot rather than taking
+    // a row of its own. Both children are positioned over the slot, so the
+    // strip is exactly as tall as it was before the line existed; a rejected
+    // send's message takes the slot while it shows (the CSS hides the cost
+    // line under `.show`), because an error outranks an estimate.
+    const foot = document.createElement("div");
+    foot.className = "orch-compose-foot";
     const status = document.createElement("div");
     status.className = "orch-compose-status";
+    const cost = document.createElement("div");
+    cost.className = "orch-compose-cost";
+    foot.append(status, cost);
 
-    strip.append(row, chips, status);
+    // Recompute the line as the draft changes — coalesced to one per animation
+    // frame, so a held key or a large paste costs one estimate, not one per
+    // event. No timer: the only other trigger is a strip delivery
+    // (`refreshCostLine`, from `Pane.notePromptCost`).
+    input.addEventListener("input", () => {
+      if (this.costFrame !== undefined) return;
+      this.costFrame = requestAnimationFrame(() => {
+        this.costFrame = undefined;
+        this.refreshCostLine();
+      });
+    });
+
+    strip.append(row, chips, foot);
     this.composeInput = input;
     this.composeStatus = status;
+    this.composeCost = cost;
     this.composeChips = chips;
     this.pane.el.appendChild(strip);
     // Set the box's initial one-line height explicitly (it's attached now), so
@@ -506,6 +536,34 @@ export class PaneCompose {
     // the auto-grow (#100), so reflow explicitly — a dictated multi-line prompt
     // must expand the box, not sit clipped at one row until the human types.
     this.growCompose();
+    this.refreshCostLine(); // same reason: no `input` event, so no frame was scheduled
+  }
+
+  /** Redraw the strip's next-prompt cost line (#3831) from the pane's current
+   *  readings and the draft as it stands. Called on a strip delivery and, one
+   *  frame after, on each change to the draft; a pane with no strip is a no-op.
+   *
+   *  Text only. The line sits in a fixed-height slot, so nothing here can
+   *  change the strip's height or the terminal's (hard constraint 1), and it is
+   *  idempotent on the rendered text so a delivery that changes nothing does
+   *  not touch the DOM. `promptcost.ts` writes the words, where they are
+   *  tested. */
+  refreshCostLine(): void {
+    const el = this.composeCost;
+    if (!el) return;
+    const view = this.pane.badges.promptCostView();
+    const line = view === null ? null : composeCostLine(view.reading, view.estimate, view.context);
+    const text = line?.text ?? "";
+    const title = line?.title ?? "";
+    if (el.textContent !== text) el.textContent = text;
+    if (el.title !== title) el.title = title;
+  }
+
+  /** Drop a pending cost-line redraw. Called when the pane is disposed. */
+  cancelCostFrame(): void {
+    if (this.costFrame === undefined) return;
+    cancelAnimationFrame(this.costFrame);
+    this.costFrame = undefined;
   }
 
   /** Show a transient status line under the strip (errors only — a successful
@@ -538,6 +596,7 @@ export class PaneCompose {
     if (!text) return;
     input.value = "";
     this.growCompose(); // collapse the (now empty) box back to one line
+    this.refreshCostLine(); // the draft is gone, and clearing `.value` fires no `input`
     this.attachments = [];
     this.renderChips();
     this.composeStatus?.classList.remove("show");
@@ -553,6 +612,7 @@ export class PaneCompose {
       if (input.value === "") {
         input.value = draft;
         this.growCompose(); // regrow to fit the restored draft
+        this.refreshCostLine();
       }
       if (this.attachments.length === 0) {
         this.attachments = queued;

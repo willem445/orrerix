@@ -8,6 +8,7 @@
 
 import type { WakeCostReading } from "./cacheage";
 import { reportHumanSession } from "./humansession";
+import type { PromptCostInputs } from "./promptcost";
 import { invoke, listen } from "./transport.ts";
 import type { Grid } from "./grid";
 import type { Pane, PaneEvents } from "./pane";
@@ -1970,6 +1971,15 @@ export interface AgentUsage {
   cache_cooling_after_ms?: number | null;
   last_wake?: WakeCostReading | null;
   compact_supported?: boolean;
+  /** #3831. Which rung resolved `cache_ttl_minutes`: `block` (the workflow
+   *  block's own key), `session` (read off the session's cache writes) or
+   *  `cli` (the CLI's default); null with an unknown TTL. */
+  cache_ttl_source?: string | null;
+  /** #3831, the next-prompt estimate's inputs (`promptcost.ts`), all RESOLVED
+   *  by the backend so the frontend keeps no price or tokenizer table. An
+   *  object on a LIVE row and null on a historical one, which has no next
+   *  prompt; absent from a backend that predates it. See `PromptCostInputs`. */
+  prompt_cost?: PromptCostInputs | null;
 }
 
 /** Aggregated per-group cost/usage (backend `orch_group_usage`), with a live

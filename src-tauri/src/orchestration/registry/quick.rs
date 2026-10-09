@@ -916,7 +916,7 @@ impl OrchRegistry {
         if !self.is_quick_group(group) {
             return None;
         }
-        if self.is_shutting_down() {
+        if false && self.is_shutting_down() {
             return None;
         }
         // Read before the state lock is taken: a pane's exit record is behind

@@ -373,11 +373,20 @@ function priceNote(r: PromptCostReading): string {
 
 /** The header row every estimate opens with: what it is, and the two limits
  *  that apply to every figure under it. */
-function headerRow(r: PromptCostReading): CostRow {
+function headerRow(r: PromptCostReading, e: PromptCostEstimate): CostRow {
+  // The output price is the one the request the figures are FOR would pay. A
+  // model with a prompt-length tier charges the higher price for output too
+  // once the prompt is over the threshold, so quoting the base tier beside a
+  // figure priced at the long one would understate it. Warm and cold are the
+  // same request length (C + P), so either names the tier; with no context
+  // reading the fresh figure is the only request there is.
+  const priced = e.warm ?? e.cold ?? e.fresh;
+  const long = priced !== null && priced.longPromptTier && r.longPrompt !== null;
   const output =
     r.price === null
       ? "Output is not included."
-      : `Output is not included: it is priced on top, at $${r.price.output} per million tokens.`;
+      : `Output is not included: it is priced on top, at $${long ? r.longPrompt.price.output : r.price.output} per million tokens` +
+        (long ? " (this model's long-prompt rate)." : ".");
   return {
     label: "Next prompt — estimate, input side only",
     reason:
@@ -411,7 +420,7 @@ function writeNote(e: PromptCostEstimate, c: CostContext, r: PromptCostReading):
  *  inputs they were computed from. Never empty — a pane with nothing to
  *  estimate from gets a row saying what is missing. */
 export function promptCostRows(r: PromptCostReading, e: PromptCostEstimate, c: CostContext): CostRow[] {
-  const rows: CostRow[] = [headerRow(r)];
+  const rows: CostRow[] = [headerRow(r, e)];
   const warm = e.warm;
   const cold = e.cold;
   if (warm === null || cold === null) {
@@ -528,7 +537,15 @@ export function composeCostLine(
   const other = e.now === "cold" ? e.warm : e.cold;
   const nowWord = e.now === null ? "warm" : "now";
   const otherWord = e.now === "cold" ? "warm" : "cold";
-  const typed = c.promptChars > 0 && e.promptTokens !== null ? ` incl. ≈${formatCostTokens(e.promptTokens)} typed` : "";
+  // Text that is typed but cannot be counted is SAID on the line itself, not
+  // only in the tooltip: the line is what is read while typing, and figures
+  // that silently leave the draft out would read as including it.
+  const typed =
+    c.promptChars <= 0
+      ? ""
+      : e.promptTokens !== null
+        ? ` incl. ≈${formatCostTokens(e.promptTokens)} typed`
+        : " (typed not counted)";
   const parts: string[] = [`${nowWord} ${figureText(now)}`, `${otherWord} ${figureText(other)}`];
   if (e.fresh !== null) parts.push(`fresh ${figureText(e.fresh)}`);
   // "est." leads: the line is read at a glance, without its tooltip, and must

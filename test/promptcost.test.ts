@@ -197,6 +197,18 @@ test("a typed prompt that cannot be counted is left out and said so", () => {
   const inputs = rows[rows.length - 1];
   assert.match(inputs.label, /typed 7000 chars, not counted/);
   assert.match(inputs.reason, /left out of the figures rather than guessed/);
+  // The compose line says so ITSELF — it is what is read while typing, and its
+  // tooltip is not. Without the notice the line is byte-identical to the one
+  // for an empty draft.
+  const typed = composeCostLine(r, e, ctx({ promptChars: 7_000 }));
+  const empty = composeCostLine(r, estimatePromptCost(r, hot60, 0), ctx({ promptChars: 0 }));
+  assert.match(typed?.text ?? "", / \(typed not counted\)$/);
+  assert.doesNotMatch(typed?.text ?? "", /incl\./);
+  assert.doesNotMatch(empty?.text ?? "", /typed/, "nothing typed, nothing said about typing");
+  assert.notEqual(typed?.text, empty?.text);
+  // Control: a prompt that CAN be counted is counted, and wears no such notice.
+  const counted = composeCostLine(reading(), estimatePromptCost(reading(), hot60, 2_500), ctx());
+  assert.doesNotMatch(counted?.text ?? "", /not counted/);
 });
 
 test("a tiered model is priced at the tier the whole request falls in", () => {
@@ -229,9 +241,27 @@ test("a tiered model is priced at the tier the whole request falls in", () => {
   const fresh = rows.find((row) => row.label.startsWith("Same prompt in a fresh agent"));
   assert.match(now?.reason ?? "", /long-prompt rate: the request is over 100k tokens/);
   assert.match(fresh?.reason ?? "", /standard rate: the request is not over 100k tokens/);
-  // A model with no tier says nothing about one.
+  // The OUTPUT price the header quotes is the tier's too: over the threshold
+  // the vendor charges the higher price for output as well, so $0.5 beside a
+  // figure priced at the long tier would understate it fivefold.
+  assert.match(rows[0].reason, /priced on top, at \$2\.5 per million tokens \(this model's long-prompt rate\)\./);
+  assert.doesNotMatch(rows[0].reason, /\$0\.5 per million/);
+  // At the threshold itself the request is still on the standard tier.
+  const atRows = promptCostRows(r, at, ctx({ state: "cold", ttlMinutes: 5, promptChars: 1_000 }));
+  assert.match(atRows[0].reason, /priced on top, at \$0\.5 per million tokens\./);
+  assert.doesNotMatch(atRows[0].reason, /long-prompt rate/);
+  // With no context reading the only request priced is the fresh agent's, and
+  // the header follows THAT request's tier: over the threshold, then under it.
+  const noC = (first: number) => {
+    const rr = { ...r, contextTokens: null, firstContextTokens: first };
+    return promptCostRows(rr, estimatePromptCost(rr, cold5, 0), ctx({ state: "cold", ttlMinutes: 5, promptChars: 0 }))[0].reason;
+  };
+  assert.match(noC(100_001), /\$2\.5 per million tokens \(this model's long-prompt rate\)/);
+  assert.match(noC(100_000), /\$0\.5 per million tokens\./);
+  // A model with no tier says nothing about one, in the header or anywhere.
   const flat = promptCostRows(reading(), estimatePromptCost(reading(), hot60, 0), ctx());
   assert.doesNotMatch(flat.map((row) => row.reason).join("\n"), /long-prompt rate|standard rate/);
+  assert.match(flat[0].reason, /priced on top, at \$20 per million tokens\./);
 });
 
 // ── the strip lookup ────────────────────────────────────────────────────────

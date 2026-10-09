@@ -158,13 +158,13 @@ table is in the chip menu, on the row it applies to or in that row's tooltip.
 
 | way it is wrong | what the surface says |
 |---|---|
-| output tokens are unknown | the header: "estimate, input side only", and that output is priced on top at the model's output rate |
+| output tokens are unknown | the header: "estimate, input side only", and that output is priced on top, at the output rate of the price tier the request falls in |
 | a tool-heavy turn re-reads the context once per tool call | "It is one request: a turn with N tool calls reads the cache about N times" |
 | 5-minute or 1-hour cache | which write rate was used, the TTL it follows, and where that TTL came from |
 | the CLI compacts on its own | the context is "the last turn's"; with a compact in flight, "compact in flight" and "may have dropped since" |
 | the chip errs toward hot | the warm figure is "if the cache is still warm (inferred, not observed)" |
 | the warm model assumes the whole context is read | it points at the last wake, shown above it in the same menu: what a real request read and wrote |
-| typed text is not tokens | `≈`, and that it is counted from its length, with the characters-per-token used |
+| typed text is not tokens | `≈`, and that it is counted from its length, with the characters-per-token used; where it cannot be counted, "typed … not counted" in the menu and "(typed not counted)" on the compose line itself |
 | `F` includes that session's first prompt | stated, with `F`'s size |
 | a subscription pays no per-token price | "list price", with the model and the date; tokens come first on every row |
 | Haiku 5.5's price flips at 100,000 tokens | the tier each figure was priced at is named |
@@ -230,7 +230,9 @@ call per keystroke.
   same rows as its tooltip. It shares the status line's fixed-height slot rather
   than taking a row, so the strip is exactly as tall as before and the terminal
   above it is never resized (CLAUDE.md constraint 1). A rejected send's message
-  takes the slot while it shows.
+  takes the slot while it shows. What the line leaves out it says on the line,
+  not only in the tooltip: a draft that cannot be counted ends it with "(typed
+  not counted)", because the line is what is read while typing.
 
 There is no timer. The line is recomputed when the draft changes, coalesced to
 one per animation frame, and on each strip delivery, which is the read the chip

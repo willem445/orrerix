@@ -1187,7 +1187,7 @@ impl OrchRegistry {
             // `cache_idle_decide` calls it with the same three inputs.
             let ttl = loomux_engine::cacheage::resolve_ttl(
                 rails.as_ref().and_then(|g| g.block(&s.block)).and_then(|b| b.cache_ttl_minutes),
-                s.detected_cache_ttl_minutes,
+                None,
                 &s.cli,
             );
             let (ttl, ttl_source) = (ttl.map(|(n, _)| n), ttl.map(|(_, src)| src));

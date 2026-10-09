@@ -243,7 +243,8 @@ because of a wrong model or a missing sign-in — the run is held instead of
 ended, even with no task in progress. You get a needs-you item quoting the
 last thing the pane printed, and **Resume here** under **Unfinished runs**
 opens a fresh agent. Quitting the CLI from inside the pane counts as this too;
-close the pane instead when you are done with it.
+close the pane instead when you are done with it. Quitting orrerix does not: an
+idle run just ends, with no needs-you item (see **After a restart**).
 
 What the agent can and cannot do:
 
@@ -295,6 +296,9 @@ press Resume.
   Describe it agent on opencode its first task more than ten minutes after the
   pane opened, a task interrupted by a restart or a closed pane cannot be
   resumed.
+- **On codex, the agent's session and usage are recorded from the first
+  orrerix tool it uses**, which is normally opening a helper. A Describe it
+  agent on codex that only talks to you is not counted in the run's usage.
 - **On codex, do not start your own codex in the same repository while a
   Describe it agent is waiting for its first task**, if you want that task to
   be resumable. orrerix cannot tell the two new sessions apart, so it records

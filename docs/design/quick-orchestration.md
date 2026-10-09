@@ -948,6 +948,19 @@ That includes a human who quits the CLI from inside it rather than closing the
 pane. The two are told apart by who ended the process, not by exit code: a CLI
 that prints an error and exits zero is a failed launch too.
 
+**Quitting the app is neither, and has to be said out loud.** "Who ended the
+process" is `expected`, and only a single pane's `kill` sets it. A quit ends
+every pane through `PtyManager::kill_all`, which does not, so each of those
+exits reaches the registry looking exactly like a CLI that died by itself —
+and would park every idle run the human had open, with a high-urgency notice
+and a toast as the window closed, and a run under Unfinished runs at the next
+start that nothing would ever end. So the window's `Destroyed` handler tells
+the registry first (`note_shutdown`), and from then on an idle run is left
+exactly as it is. The next start finds it idle and ends it, which is the
+"restart ends it" of the list above. The flag is the registry's rather than a
+change to `kill_all`: marking a quit's exits as expected would change what
+every other reader of that flag is told, and the shutdown log with them.
+
 One window is left by recording at bind, and it is closed where it opens. A
 pane that dies in the two statements between the spawn returning and the run
 recording its root is not matched by the exit path — there is no root on the
@@ -1072,6 +1085,12 @@ part of.
 
 - **Gemini is typed one message.** It is the pointer of §17.1 and carries no
   task. A CLI whose contract file cannot be written is typed the same one.
+- **A codex root that never calls a tool has no session recorded.** Its watch
+  starts at its first answered tool call (§17.8), so a root that only talks —
+  or does work in its pane, against its instructions — is never watched, and
+  its usage is not counted. Before the watch was deferred it ran from the
+  spawn. A task needs a helper, and a helper needs a tool call, so a root
+  doing what it is for is not affected.
 - **A contested codex session stays unrecorded.** If the human did start their
   own codex in the repository while the root waited, the search sees two and
   binds neither (§17.8). The root then has no recorded session, so a task

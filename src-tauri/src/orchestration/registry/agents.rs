@@ -1215,7 +1215,7 @@ impl OrchRegistry {
                 // the run parks instead, so a failed launch is not a pane
                 // that vanished without a word. `expected` is which.
                 if a.role == Role::Quick {
-                    self.qd_root_exited(&a.group, &a.id, expected);
+                    let _ = (&a.group, &a.id, expected);
                 }
             } else if a.role != Role::Orchestrator {
                 let elapsed_ms = now_ms().saturating_sub(started_ms);

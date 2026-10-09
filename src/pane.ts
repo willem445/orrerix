@@ -26,7 +26,7 @@ import { createHumanOriginLatch } from "./humanorigin";
 import { decideRefresh, REPO_SIGNAL_WINDOW_MS } from "./refreshthrottle";
 import { showToast } from "./toast";
 import { endGroup, notifyPaneDisposed, registerStructuredPane } from "./orchestration";
-import { type CacheAgeReading } from "./cacheage";
+import { type CacheAgeLookup } from "./cacheage";
 import { type QueueDepthReading } from "./queuebadge";
 import { makeRenameCommit } from "./panerename";
 import { shouldResizePty } from "./panefit";
@@ -2234,8 +2234,8 @@ export class Pane implements VoiceTargetPane {
   applyMailSeed(unread: number): void { this.badges.applyMailSeed(unread); }
   get mailUnreadCount(): number { return this.badges.mailUnreadCount; }
   setQuick(view: import("./quickchip.ts").QuickChipView | null): void { this.badges.setQuick(view); }
-  noteCacheAge(reading: CacheAgeReading | null, nowMs: number = Date.now()): void {
-    this.badges.noteCacheAge(reading, nowMs);
+  noteCacheAge(lookup: CacheAgeLookup, nowMs: number = Date.now()): void {
+    this.badges.noteCacheAge(lookup, nowMs);
   }
   setConnected(info: PaneChannelBadge | null): void { this.badges.setConnected(info); }
   get channelId(): string | null { return this.badges.channelId; }

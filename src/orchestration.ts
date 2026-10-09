@@ -3007,8 +3007,30 @@ export const soloBind = (agentId: string, ptyId: number): Promise<void> =>
  *  this feature, or on a CLI the human didn't opt into channel tools for) as
  *  a delivery-only member, on its first Connect gesture. Idempotent by pty:
  *  re-adopting an already-adopted pty returns its existing agent id. */
-export const soloAdopt = (ptyId: number, name: string, cwd: string): Promise<{ agent_id: string }> =>
-  invoke<{ agent_id: string }>("orch_solo_adopt", { ptyId, name, cwd });
+export const soloAdopt = (
+  ptyId: number,
+  name: string,
+  cwd: string,
+  cli?: string | null,
+  sessionId?: string | null
+): Promise<{ agent_id: string }> =>
+  invoke<{ agent_id: string }>("orch_solo_adopt", {
+    ptyId,
+    name,
+    cwd,
+    cli: cli ?? null,
+    sessionId: sessionId ?? null,
+  });
+
+/** Record a solo or lead pane's session id (#3831), so the cache-age chip can
+ *  read its usage from its own transcript. The launcher calls it once the id
+ *  is known: at bind for a claude or pi pane (the id is minted on the command
+ *  line), and on the frontend's session-identified hook for a CLI that names
+ *  its session later. The backend refuses an id already set, a delegate, and an
+ *  id that is not one path component, so a caller treats a refusal as "not
+ *  recorded" and moves on. */
+export const humanPaneSession = (agentId: string, sessionId: string): Promise<void> =>
+  invoke("orch_human_pane_session", { agentId, sessionId });
 
 /** What `orch_fork_agent` answers: the fork's agent id, pane name, and its
  *  session id when the CLI's fork names the child up front (claude per L1,

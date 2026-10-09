@@ -12,6 +12,7 @@ import {
   cacheChipLabel,
   cacheGapTitle,
   cacheIdentityFor,
+  cacheIdentityOfPane,
   cacheChipTitle,
   cacheState,
   formatAge,
@@ -174,6 +175,9 @@ test("a pane's cache identity is its orchestration agent, else its channel agent
   assert.deepEqual(cacheIdentityFor(orch, channel), orch, "an orchestration identity wins");
   assert.deepEqual(cacheIdentityFor(null, channel), channel, "a solo or adopted pane is keyed by its channel agent");
   assert.equal(cacheIdentityFor(null, null), null, "a terminal pane has neither");
+  const solo = { orchGroupId: null, orchAgentId: null, channelAgentGroupId: "__solo__", channelAgentAgentId: "solo-3" };
+  assert.deepEqual(cacheIdentityOfPane(solo), channel, "a solo pane reads its channel identity off the pane");
+  assert.equal(cacheIdentityOfPane({ ...solo, channelAgentAgentId: null }), null, "half an identity is no identity");
 });
 
 test("the tooltip names exactly what is missing", () => {

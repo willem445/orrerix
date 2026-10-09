@@ -12,7 +12,7 @@ import { SessionBrowser, timeAgo } from "./sessions";
 import { LeftPanel } from "./leftpanel";
 import { AgentsView } from "./agentsview";
 import { rosterIdleFor } from "./rosteridle";
-import { cacheAgeFor } from "./cacheage";
+import { cacheAgeFor, cacheIdentityOfPane } from "./cacheage";
 import {
   ensureOutputRouter,
   onPtyExit,
@@ -80,6 +80,8 @@ import {
   cancelPendingConnect,
   soloPrepare,
   soloBind,
+  soloAdopt,
+  humanPaneSession,
   leadPrepare,
   leadBind,
   quickStart,
@@ -694,6 +696,10 @@ function eventsFor(ws: Workspace): PaneEvents {
       if (facts.sessionId === null) return;
       const sessionId = facts.sessionId;
       void sessionLog.rekey(pane.key, sessionId, Date.now()).then(() => recordPaneSession(pane));
+      // #3831: a solo or lead pane whose CLI named its session after the pane was
+      // registered. From now on the cache-age chip reads its transcript.
+      const humanAgent = humanPaneAgentId(pane);
+      if (humanAgent !== null) void bindHumanPaneSession(humanAgent, sessionId);
     },
   };
 }
@@ -2894,16 +2900,56 @@ async function bindLeadIfNeeded(ws: Workspace, pane: Pane, spec: AgentLaunchSpec
   } catch (err) {
     showToast(`"${spec.name}" opened, but its lead briefing didn't arrive: ${String(err)}`, "error");
   }
+  // #3831: the lead's session, so its cache-age chip reads its own transcript.
+  if (pane.sessionId !== null) await bindHumanPaneSession(spec.lead.agentId, pane.sessionId);
 }
 
 async function bindSoloIfNeeded(pane: Pane, spec: AgentLaunchSpec): Promise<void> {
-  if (!spec.channelAgent || pane.ptyId === null) return;
+  if (pane.ptyId === null) return;
+  if (spec.channelAgent) {
+    const agentId = spec.channelAgent.agentId;
+    try {
+      await soloBind(agentId, pane.ptyId);
+    } catch {
+      /* best-effort — the pane just won't be channel-connectable until adopted */
+    }
+    // A session the launcher minted onto the command line (claude, pi) is
+    // recorded now, so the pane's usage reads from its own transcript from its
+    // first request (#3831).
+    if (pane.sessionId !== null) await bindHumanPaneSession(agentId, pane.sessionId);
+    return;
+  }
+  // #3831: every other harness agent pane is adopted at spawn, so the cache-age
+  // chip has an identity to read. A lead has its own (`bindLeadIfNeeded`), and a
+  // pane whose CLI the frontend does not know has no harness to read.
+  const cli = pane.agentCli;
+  if (spec.lead || cli === null) return;
   try {
-    await soloBind(spec.channelAgent.agentId, pane.ptyId);
+    const adopted = await soloAdopt(pane.ptyId, spec.name, spec.cwd ?? "", cli, pane.sessionId);
+    pane.setChannelAgent({ group: SOLO_GROUP, agentId: adopted.agent_id, role: "solo", canSend: false });
   } catch {
-    /* best-effort — the pane just won't be channel-connectable until adopted */
+    /* best-effort — the pane is adopted on its first Connect gesture, as before */
   }
 }
+
+/** Record a solo or lead pane's session id with the backend (#3831).
+ *  Best-effort: the backend refuses an id already set, and the pane keeps the
+ *  one it has. */
+function bindHumanPaneSession(agentId: string, sessionId: string): Promise<void> {
+  return humanPaneSession(agentId, sessionId).catch(() => {
+    /* best-effort — see the doc comment above */
+  });
+}
+
+/** The agent a solo or lead pane's session is recorded against (#3831), or null
+ *  for every other pane: a delegate learns its session from its own CLI through
+ *  the watcher, and must not get a second source. */
+function humanPaneAgentId(pane: Pane): string | null {
+  if (pane.orchRole === "lead") return pane.orchAgentId;
+  if (pane.channelAgentRole === "solo") return pane.channelAgentAgentId;
+  return null;
+}
+
 
 /** Start the solo-pane copilot autopilot consent watcher (#364) for a
  *  just-spawned pane, fire-and-forget. Deliberately independent of
@@ -4082,7 +4128,7 @@ void (async () => {
         pane.noteRosterIdle(rosterIdleFor(strip, pane.orchGroupId, pane.orchAgentId));
         // #3407: the cache-age chip rides the same read. Every pane is told, for
         // the reason above — a pane that lost its binding must drop its chip.
-        pane.noteCacheAge(cacheAgeFor(strip, pane.orchGroupId, pane.orchAgentId));
+        pane.noteCacheAge(cacheAgeFor(strip, cacheIdentityOfPane(pane)));
       }
     }
     refreshAgents();

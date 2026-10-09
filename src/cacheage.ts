@@ -52,6 +52,8 @@ export type CacheState = "hot" | "cooling" | "cold" | "unknown";
 /** The usage row fields this module reads — structural, see the header. */
 export interface CacheUsageRow {
   readonly id: string;
+  /** The usage source the row was read from (`transcript`, `none`, `statusline`, …). */
+  readonly source?: string;
   readonly last_active_ms?: number | null;
   readonly cache_ttl_minutes?: number | null;
   readonly cache_cooling_after_ms?: number | null;
@@ -66,27 +68,101 @@ export interface CacheStripReading {
   >;
 }
 
-/** This pane's reading out of the strip snapshot, or `null` when the strip does
- *  not cover it — no orchestration identity, a group the strip did not carry or
- *  refused, or an agent with no usage row. Null is "nothing to show", never a
- *  zero age. */
-export function cacheAgeFor(
-  strip: CacheStripReading,
-  group: string | null,
-  agentId: string | null
-): CacheAgeReading | null {
-  if (group === null || agentId === null) return null;
-  const rows = strip.groups[group]?.usage?.live_agents;
-  if (rows === undefined) return null;
-  const row = rows.find((r) => r.id === agentId);
-  if (row === undefined) return null;
+/** A pane's identity as the strip keys it: the group and the agent id. */
+export interface CacheIdentity {
+  readonly group: string;
+  readonly agentId: string;
+}
+
+/** The one identity the strip lookup keys on (#3831): a pane's orchestration
+ *  identity when it has one (a worker or a lead), else its channel-agent
+ *  identity (a solo or adopted pane, whose group is `__solo__`). Null for a pane
+ *  with neither — a terminal, or an SSH pane whose session lives on another host. */
+export function cacheIdentityFor(orch: CacheIdentity | null, channel: CacheIdentity | null): CacheIdentity | null {
+  return orch ?? channel;
+}
+
+/** A pane's cache identity, read off its own fields (#3831). Structural, so a
+ *  `Pane` satisfies it without this module importing the pane. A solo pane's
+ *  `orchGroupId` is null, so its channel identity is the one that answers. */
+export function cacheIdentityOfPane(pane: {
+  readonly orchGroupId: string | null;
+  readonly orchAgentId: string | null;
+  readonly channelAgentGroupId: string | null;
+  readonly channelAgentAgentId: string | null;
+}): CacheIdentity | null {
+  const { orchGroupId: og, orchAgentId: oa, channelAgentGroupId: cg, channelAgentAgentId: ca } = pane;
+  return cacheIdentityFor(
+    og !== null && oa !== null ? { group: og, agentId: oa } : null,
+    cg !== null && ca !== null ? { group: cg, agentId: ca } : null
+  );
+}
+
+/** Why a pane has no reading (#3831). Each names the rung the lookup could not
+ *  reach:
+ *  - `no-identity`: the pane has no orrerix identity to look up;
+ *  - `no-row`: the strip carries no usage row for it;
+ *  - `no-tokens:<source>`: the row's source keeps no per-request token record
+ *    (`statusline` for copilot, `none` before any request has landed);
+ *  - `no-request-yet`: the row has a source, but no request has been observed
+ *    since its first sighting (or the backend predates the source field). */
+export type CacheGap = "no-identity" | "no-row" | "no-request-yet" | `no-tokens:${string}`;
+
+/** The lookup's answer: a reading, or the reason there is none — exactly one. */
+export type CacheAgeLookup =
+  | { readonly reading: CacheAgeReading; readonly gap: null }
+  | { readonly reading: null; readonly gap: CacheGap };
+
+/** The muted label a pane with no reading wears. The tooltip says why. */
+export const CACHE_GAP_LABEL = "cache —";
+
+/** This pane's reading out of the strip snapshot, or the reason it has none.
+ *  Null is "nothing to show", never a zero age. A row carries a reading only
+ *  once a request has been observed on it. */
+export function cacheAgeFor(strip: CacheStripReading, identity: CacheIdentity | null): CacheAgeLookup {
+  const none = (gap: CacheGap): CacheAgeLookup => ({ reading: null, gap });
+  if (identity === null) return none("no-identity");
+  const rows = strip.groups[identity.group]?.usage?.live_agents;
+  if (rows === undefined) return none("no-row");
+  const row = rows.find((r) => r.id === identity.agentId);
+  if (row === undefined) return none("no-row");
+  if (row.last_active_ms === null || row.last_active_ms === undefined) {
+    if (row.source === "statusline" || row.source === "none") return none(`no-tokens:${row.source}`);
+    return none("no-request-yet");
+  }
   return {
-    lastActiveMs: row.last_active_ms ?? null,
-    ttlMinutes: row.cache_ttl_minutes ?? null,
-    coolingAfterMs: row.cache_cooling_after_ms ?? null,
-    lastWake: row.last_wake ?? null,
-    compactSupported: row.compact_supported === true,
+    reading: {
+      lastActiveMs: row.last_active_ms,
+      ttlMinutes: row.cache_ttl_minutes ?? null,
+      coolingAfterMs: row.cache_cooling_after_ms ?? null,
+      lastWake: row.last_wake ?? null,
+      compactSupported: row.compact_supported === true,
+    },
+    gap: null,
   };
+}
+
+/** What a pane with no reading is missing, in the words its tooltip shows
+ *  (#3831). `cli` is the pane's harness name, null when it has none; `remote`
+ *  is whether it is an SSH pane; `sessionKnown` is whether its session id is
+ *  known to the frontend. */
+export function cacheGapTitle(
+  gap: CacheGap,
+  facts: { readonly cli: string | null; readonly remote: boolean; readonly sessionKnown: boolean }
+): string {
+  const unidentified = "The session has not been identified yet, so there is no transcript to read.";
+  const noRequest = "No request has been recorded for this pane yet.";
+  if (gap === "no-identity") {
+    return facts.remote
+      ? "Remote session: its transcript lives on the remote host, so orrerix cannot read its requests."
+      : "This pane is not registered with orrerix, so its requests cannot be read.";
+  }
+  if (gap === "no-row") return "orrerix has no usage record for this pane yet.";
+  if (gap === "no-request-yet") return facts.sessionKnown ? noRequest : unidentified;
+  if (gap === "no-tokens:statusline") {
+    return `${facts.cli ?? "This CLI"} writes no token record that orrerix can read, so it cannot see this pane's requests.`;
+  }
+  return facts.sessionKnown ? noRequest : unidentified;
 }
 
 /** The inferred state at `nowMs`, with the age it was judged on.

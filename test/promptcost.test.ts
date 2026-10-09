@@ -426,7 +426,7 @@ test("the compose line is one line: now, the other state, and fresh", () => {
   const hot = line(ctx());
   assert.equal(
     hot?.text,
-    "next ≈ now 400k read + 1k written · ~$0.09  |  cold 401k written · ~$3.21  |  fresh 51k written · ~$0.41 incl. ≈1k typed"
+    "est. next: now 400k read + 1k written · ~$0.09  |  cold 401k written · ~$3.21  |  fresh 51k written · ~$0.41 incl. ≈1k typed"
   );
   assert.doesNotMatch(hot?.text ?? "", /\n/);
   // The tooltip is the menu's own rows, so the two surfaces cannot disagree.
@@ -437,11 +437,11 @@ test("the compose line is one line: now, the other state, and fresh", () => {
       .join("\n")
   );
   const cold = line(ctx({ state: "cold" }));
-  assert.match(cold?.text ?? "", /^next ≈ now 401k written · ~\$3\.21 {2}\| {2}warm 400k read \+ 1k written/);
+  assert.match(cold?.text ?? "", /^est. next: now 401k written · ~\$3\.21 {2}\| {2}warm 400k read \+ 1k written/);
   // No state claimed: the first figure is called warm, not now.
   const unknown = line(ctx({ state: "unknown", ttlMinutes: null }));
-  assert.match(unknown?.text ?? "", /^next ≈ warm 400k read/);
-  assert.doesNotMatch(unknown?.text ?? "", /now/);
+  assert.match(unknown?.text ?? "", /^est. next: warm 400k read/);
+  assert.doesNotMatch(unknown?.text ?? "", /now/);
   // Nothing typed: no "incl." tail.
   assert.doesNotMatch(line(ctx({ promptChars: 0 }))?.text ?? "", /incl\./);
 });

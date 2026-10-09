@@ -531,7 +531,9 @@ export function composeCostLine(
   const typed = c.promptChars > 0 && e.promptTokens !== null ? ` incl. ≈${formatCostTokens(e.promptTokens)} typed` : "";
   const parts: string[] = [`${nowWord} ${figureText(now)}`, `${otherWord} ${figureText(other)}`];
   if (e.fresh !== null) parts.push(`fresh ${figureText(e.fresh)}`);
-  const text = `next ≈ ${parts.join("  |  ")}${typed}`;
+  // "est." leads: the line is read at a glance, without its tooltip, and must
+  // not pass for a measurement.
+  const text = `est. next: ${parts.join("  |  ")}${typed}`;
   const title = promptCostRows(r, e, c)
     .map((row) => `${row.label}\n  ${row.reason}`)
     .join("\n");

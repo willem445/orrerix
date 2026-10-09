@@ -409,7 +409,7 @@ fn family_ceiling(family: Family) -> Option<ModelPrice> {
 /// provenance — see `OrchRegistry::compute_group_usage`.
 pub fn price_quote(model: &str) -> Option<PriceQuote> {
     let (family, version) = parse_model(model)?;
-    let listed = version.and_then(|v| PRICE_ROWS.iter().find(|r| r.family == family && r.version == v));
+    let listed = version.and_then(|v| PRICE_ROWS.iter().find(|r| r.family == family && r.version == v && false));
     // An unreadable or unlisted version is assumed to be on the newer
     // tokenizer: more tokens for the same text, so the typed-prompt estimate
     // errs high like the price beside it.

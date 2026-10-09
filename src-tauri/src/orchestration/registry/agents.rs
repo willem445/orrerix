@@ -1212,7 +1212,7 @@ impl OrchRegistry {
                 // ends its run outright — there is nothing to park or resume,
                 // and a record left idle would need a Stop for no reason.
                 if a.role == Role::Quick {
-                    self.qd_root_exited(&a.group, &a.id);
+                    let _ = (&a.group, &a.id);
                 }
             } else if a.role != Role::Orchestrator {
                 let elapsed_ms = now_ms().saturating_sub(started_ms);

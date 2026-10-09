@@ -2641,9 +2641,11 @@ blocks:
     cache_ttl_minutes: 60   # this account is on Anthropic's 1-hour cache
 ```
 
-Leave it out to use the CLI's conservative default: 5 for claude and codex, and none for
-a CLI that routes to several providers. Set `0` to infer no cache state for the block at
-all. The value is whole minutes, from 0 to 1440 (a day), and anything larger refuses the
+Leave it out and orrerix uses the lifetime the pane's own session shows where its CLI
+records one (see [TTLs](#cache-age-how-long-a-pane-has-been-quiet) below), and otherwise
+the CLI's conservative default: 5 for claude and codex, and none for a CLI that routes to
+several providers. A value you declare here always wins over both. Set `0` to infer no
+cache state for the block at all. The value is whole minutes, from 0 to 1440 (a day), and anything larger refuses the
 file: no provider documents a longer cache. A block on a codex model with the 30-minute
 rule writes `30`. The key grants nothing and reaches no command line; it only moves the
 chip and the nudge.
@@ -4194,8 +4196,10 @@ provider documents. The inference leans slightly toward "hot", by about the leng
 last response, and the cooling stretch is sized to cover that. The chip rides the same
 snapshot read the tab strip already makes, so it costs no extra polling.
 
-**Click the chip** for two things:
+**Click the chip** for three things:
 
+- **What the next prompt will cost**, three ways. See
+  [below](#what-the-next-prompt-will-cost).
 - **What the last wake cost.** The first request after the last quiet stretch, split into
   tokens read from the cache, tokens written to it, and uncached input (plus a dollar
   estimate where one is known). A cold wake is mostly written; a warm one is mostly read.
@@ -4210,10 +4214,19 @@ snapshot read the tab strip already makes, so it costs no extra polling.
 
 The **Agents tab** shows the same label on each agent's row.
 
-**TTLs.** claude and codex default to **5 minutes**. That is the shortest lifetime their
-providers document, chosen so the chip never says "hot" over a cache that is gone. If
-your account gets a longer cache, say so on the block in `.orrerix/workflow.yml`: see
-[`cache_ttl_minutes:`](#telling-orrerix-a-blocks-cache-ttl-cache_ttl_minutes).
+**TTLs.** orrerix takes the first of these that answers:
+
+1. The block's own [`cache_ttl_minutes:`](#telling-orrerix-a-blocks-cache-ttl-cache_ttl_minutes)
+   in `.orrerix/workflow.yml`, if you declared one.
+2. What the pane's session shows. Claude Code records each cache write as a 5-minute or
+   a 1-hour write, so a claude pane on the 1-hour cache reads as 60 minutes with nothing
+   declared. That is what covers a pane with no workflow block at all. The session's most
+   recent cache write decides; if one request wrote to both, the shorter one counts.
+3. The CLI's default: **5 minutes** for claude and codex. That is the shortest lifetime
+   their providers document, chosen so the chip never says "hot" over a cache that is
+   gone.
+
+The chip's menu says which of the three it used.
 
 **The orchestrator compacts before it goes idle.** The orchestrator is told to compact
 before ending a turn with nothing in flight: no delegates, drives or watches. That way
@@ -4235,6 +4248,54 @@ flight, because orrerix knows when a watch expires but never when its CI will fi
 
 The design argument, the residuals and the tests are in
 [`docs/design/cache-age.md`](https://github.com/willem445/orrerix/blob/main/docs/design/cache-age.md).
+
+#### What the next prompt will cost
+
+A pane with a large context is cheap to keep talking to while its cache is warm and
+expensive once it is not. The chip's menu puts a figure on that before you send anything,
+so that "send now, or start a new agent" is a comparison of numbers:
+
+- **Send now**: the cost with the cache as the chip reads it. While it is `hot` or
+  `cooling`, the pane's context is read from the cache and your prompt is written to it.
+- **Once it is cold** (or, on a pane that is already cold, **Had it stayed warm**): the
+  other state, for comparison. Cold means the whole context is written to the cache
+  again.
+- **Same prompt in a fresh agent**: what the same prompt would cost in a new pane. It is
+  measured from this session's own first turn: the CLI's system prompt, its tools, your
+  repo's instruction files, and that session's first prompt.
+- **Inputs**: the context size, the typed prompt, the model and price date, and which
+  cache-write rate was used.
+
+Hover any row for what it assumes.
+
+On an **orchestrator pane** the same estimate also sits on one line under the compose
+strip, and moves as you type. On every other pane orrerix cannot see what you type into
+the CLI's own input box, so the figures are for the history alone and the menu says
+"typed prompt not visible".
+
+What the figures are, and are not:
+
+- **Tokens first, dollars second.** Tokens are exact for every account. Dollars are the
+  vendor's **list price**, with the model and the date the price was read. A subscription
+  pays no per-token price, so on one the dollars only show the relative size of the three
+  options.
+- **An estimate of the input side, for one request.** The reply's output is priced on top
+  and is not included. A turn that makes N tool calls reads the cache about N times.
+- **The cache state is inferred.** "Send now" is the warm figure only if the cache really
+  is still there. The last wake, shown above it in the same menu, is what a real request
+  on this pane read and wrote.
+- **Your typed prompt is counted by its length**, not tokenized, so it is rough. It is
+  normally a tiny part of the figure.
+- **No price, no dollars.** Only Claude models have a list price in orrerix's table. A
+  codex, pi or opencode pane shows tokens and no dollar figure. So does a Claude model the
+  table does not know; a newer version of a known family is priced at that family's
+  highest current price and says so.
+- **No reading, no figure.** A pane whose CLI records no context size shows "No context
+  reading for this pane yet" instead of a number.
+
+The formula, the price table and its source, and how far the figures were checked against
+real requests are in
+[`docs/design/prompt-cost.md`](https://github.com/willem445/orrerix/blob/main/docs/design/prompt-cost.md).
 
 ## Persistence & restart
 

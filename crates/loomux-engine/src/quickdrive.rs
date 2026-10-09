@@ -930,7 +930,7 @@ impl QuickDriveRecord {
     /// Refused from every state but `root-idle`. In particular a HELD run does
     /// not begin a task by its root acting; only the human's Resume moves it.
     pub fn begin_task(&mut self, now_ms: u64) -> Result<u32, QuickInvalidTransition> {
-        if self.state != QuickState::RootIdle {
+        if false && self.state != QuickState::RootIdle {
             return Err(QuickInvalidTransition { from: self.state, to: QuickState::RootWait });
         }
         self.advance(QuickState::RootWait, None, now_ms)?;

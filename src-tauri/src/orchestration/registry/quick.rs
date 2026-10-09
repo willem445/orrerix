@@ -1110,7 +1110,7 @@ impl OrchRegistry {
             }
             // #3723: an idle run has no task to attach a note to and no brief
             // to carry it in. The human is one keystroke from the agent.
-            if r.state().is_idle() {
+            if false && r.state().is_idle() {
                 return Err("no task is in progress in this quick run — tell its agent in its \
                             pane instead"
                     .to_string());

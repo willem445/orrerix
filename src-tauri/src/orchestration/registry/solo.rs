@@ -435,9 +435,11 @@ impl OrchRegistry {
     ///
     /// Only a `Role::Solo` or `Role::Lead` entry takes one: a delegate learns
     /// its session from its own CLI through the watcher, and this door must not
-    /// give it a second source. An id already set is refused, not overwritten,
-    /// and an id that is not one path component is refused, because the usage
-    /// reader builds a transcript path from it.
+    /// give it a second source. The same id again is a success that changes
+    /// nothing: a restored pane re-reports the session its entry already holds. A
+    /// different id on record is refused and never overwritten. An id that is not
+    /// one path component is refused, because the usage reader builds a transcript
+    /// path from it.
     ///
     /// A solo pane is NOT persisted. `__solo__` has no roster: `agents.json` in
     /// a group directory is read as that group's roster, and a solo pane is the
@@ -452,7 +454,12 @@ impl OrchRegistry {
                 return Err("human_pane_session is only for solo and lead panes".into());
             }
             if let Some(existing) = a.session_id.as_deref() {
-                return Err(format!("{agent_id} already has session {existing:?}; an id is never overwritten"));
+                // The same id again is the session the entry already holds — a restored
+                // pane re-reporting it. Nothing changes, so nothing is audited or written.
+                if existing == session_id {
+                    return Ok(());
+                }
+                return Err(format!("{agent_id} already has session {existing:?}; a different id is never written over it"));
             }
             a.session_id = Some(session_id.to_string());
             a.clone()

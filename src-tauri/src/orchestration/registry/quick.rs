@@ -795,7 +795,7 @@ impl OrchRegistry {
         // idle start can begin without a stranger's session being the only
         // one there is to find. Before the filter below — any tool will do.
         self.qd_start_deferred_watch(group, agent_id);
-        if !matches!(tool, "spawn_agent" | "fork_session" | "send_prompt") {
+        if !matches!(tool, "spawn_agent" | "fork_session") {
             return answer;
         }
         if !self.is_quick_group(group) {

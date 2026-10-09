@@ -1023,7 +1023,7 @@ pub struct UsageSnapshot {
     /// does not know and ignores it, and a newer build reading an older file
     /// reads `None`. `a_usage_file_from_before_the_prompt_cost_fields_loads_unchanged`
     /// pins both.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(default)]
     pub first_context_tokens: Option<u64>,
     /// The prompt-cache lifetime (minutes) the session's own records show its
     /// last cache write was made with (`SessionUsage::detected_cache_ttl_minutes`,
@@ -1032,7 +1032,7 @@ pub struct UsageSnapshot {
     /// (the merge keeps the stored row then) does not drop a pane back to its
     /// CLI's default TTL for that tick. Additive on `first_context_tokens`'s
     /// terms.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(default)]
     pub detected_cache_ttl_minutes: Option<u32>,
 }
 

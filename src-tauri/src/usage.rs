@@ -616,7 +616,7 @@ impl TranscriptFold {
             // Priced per REQUEST, on two axes a session-wide price cannot
             // carry (#3831): the prompt-length tier this request's own prompt
             // falls in, and which cache its writes went to.
-            self.cost += cost_of_split(&t, claude_write_1h_tokens(usage), &q.at(prompt));
+            self.cost += cost_of_split(&t, claude_write_1h_tokens(usage), &q.price);
             self.any_priced = true;
             let out = t.output_tokens;
             match &mut self.best_model {

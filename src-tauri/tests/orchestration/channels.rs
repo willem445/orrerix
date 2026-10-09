@@ -567,12 +567,12 @@ fn solo_prepare_builds_the_exact_per_cli_flag_strings_and_delivery_only_falls_ba
 #[test]
 fn solo_adopt_registers_a_delivery_only_member_and_is_idempotent_by_pty() {
     let (reg, _d) = test_registry();
-    let first = reg.solo_adopt(1001, "already running", "C:/tmp/x").unwrap();
+    let first = reg.solo_adopt(1001, "already running", "C:/tmp/x", None, None).unwrap();
     let id1 = first["agent_id"].as_str().unwrap().to_string();
     assert!(reg.agent(&id1).unwrap().token.is_empty(), "an adopted pane must never get a token");
     assert_eq!(reg.agent(&id1).unwrap().role, Role::Solo);
 
-    let second = reg.solo_adopt(1001, "already running", "C:/tmp/x").unwrap();
+    let second = reg.solo_adopt(1001, "already running", "C:/tmp/x", None, None).unwrap();
     assert_eq!(second["agent_id"], json!(id1), "re-adopting the same pty must not mint a second identity");
 }
 

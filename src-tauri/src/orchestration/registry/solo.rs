@@ -424,11 +424,6 @@ impl OrchRegistry {
         // no pty claim, no audit line.
         {
             let mut agents = self.agents.lock_safe();
-            if let Some(s) = session_id {
-                if let Some(holder) = Self::live_session_holder(agents.values(), s, None) {
-                    return Err(Self::session_held_error(s, &holder));
-                }
-            }
             agents.insert(agent_id.clone(), entry);
         }
         // Claim the pty as ONE decision, and let the loser of a race roll its

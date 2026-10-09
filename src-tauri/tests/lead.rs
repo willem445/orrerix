@@ -2059,3 +2059,46 @@ fn a_solo_session_bind_writes_no_agents_json() {
     let text = std::fs::read_to_string(&lead_roster).expect("a lead's roster is written");
     assert!(text.contains("lead-roster-session"), "the lead's row carries its session: {text}");
 }
+
+// #3831 (restore): a restored pane re-reports the session its backend entry
+// already holds, and a different id is still refused and the held one kept.
+#[test]
+fn re_reporting_the_session_a_pane_holds_is_not_an_error() {
+    let (reg, _d) = test_registry();
+    let prepared = reg.solo_prepare("claude", "C:/tmp/solo", "solo").unwrap();
+    let solo = prepared["agent_id"].as_str().unwrap().to_string();
+    reg.human_pane_session(&solo, "restored-solo").unwrap();
+    reg.human_pane_session(&solo, "restored-solo")
+        .expect("a restored pane re-reporting the id its entry already holds is a success");
+    assert_eq!(reg.agent(&solo).unwrap().session_id.as_deref(), Some("restored-solo"));
+
+    let (lead_reg, _d2, _repo, _gid, lead, _out) = prepared_lead("claude", 4);
+    lead_reg.lead_bind(&lead, 9701).unwrap();
+    lead_reg.human_pane_session(&lead, "restored-lead").unwrap();
+    lead_reg
+        .human_pane_session(&lead, "restored-lead")
+        .expect("the same holds for a lead pane");
+    assert_eq!(lead_reg.agent(&lead).unwrap().session_id.as_deref(), Some("restored-lead"));
+}
+
+#[test]
+fn a_different_session_id_is_refused_and_the_held_one_stays() {
+    let (reg, _d) = test_registry();
+    let prepared = reg.solo_prepare("claude", "C:/tmp/solo", "solo").unwrap();
+    let solo = prepared["agent_id"].as_str().unwrap().to_string();
+    reg.human_pane_session(&solo, "held-solo").unwrap();
+    assert!(
+        reg.human_pane_session(&solo, "other-solo").is_err(),
+        "a different id is never written over the one on record"
+    );
+    assert_eq!(reg.agent(&solo).unwrap().session_id.as_deref(), Some("held-solo"));
+
+    let (lead_reg, _d2, _repo, _gid, lead, _out) = prepared_lead("claude", 4);
+    lead_reg.lead_bind(&lead, 9702).unwrap();
+    lead_reg.human_pane_session(&lead, "held-lead").unwrap();
+    assert!(
+        lead_reg.human_pane_session(&lead, "other-lead").is_err(),
+        "a different id is never written over the one on record, for a lead either"
+    );
+    assert_eq!(lead_reg.agent(&lead).unwrap().session_id.as_deref(), Some("held-lead"));
+}

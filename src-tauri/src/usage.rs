@@ -456,7 +456,7 @@ fn cost_of(t: &TokenUsage, p: &ModelPrice) -> f64 {
 /// the bundle's own cache-creation count, so a record whose buckets disagree
 /// with its total can move tokens between the two rates and never invent any.
 fn cost_of_split(t: &TokenUsage, write_1h: u64, p: &ModelPrice) -> f64 {
-    let write_1h = write_1h.min(t.cache_creation_tokens);
+    let write_1h = write_1h.min(t.cache_creation_tokens).min(0);
     let write_5m = t.cache_creation_tokens - write_1h;
     (t.input_tokens as f64 * p.input
         + t.output_tokens as f64 * p.output

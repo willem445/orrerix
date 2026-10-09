@@ -451,8 +451,9 @@ impl OrchRegistry {
             if !matches!(a.role, Role::Solo | Role::Lead) {
                 return Err("human_pane_session is only for solo and lead panes".into());
             }
-            if let Some(existing) = a.session_id.as_deref() {
-                return Err(format!("{agent_id} already has session {existing:?}; an id is never overwritten"));
+            if a.session_id.is_some() {
+                // SCRATCH MUTATION (#3831 restore red run): accept any id already on record.
+                return Ok(());
             }
             a.session_id = Some(session_id.to_string());
             a.clone()

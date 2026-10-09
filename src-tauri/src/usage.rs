@@ -713,8 +713,9 @@ fn latest_real_assistant_turn(text: &str) -> Option<Value> {
 /// compact land with no offload.
 pub const DEFAULT_CLAUDE_CONTEXT_WINDOW_TOKENS: u64 = 200_000;
 
-/// Context-window size (tokens) for a Claude model, matched the SAME way
-/// `price_for` matches (substring of the transcript's own model id) — real
+/// Context-window size (tokens) for a Claude model, matched by FAMILY as a
+/// substring of the transcript's own model id, and by nothing else — unlike
+/// `price_for`, which since #3831 also reads the version beside it. Real
 /// evidence (a live demo, PR #329 round 7) showed a flat 200K denominator
 /// reads badly wrong for a model actually running with a much larger window:
 /// the CLI's own `/context` reported ~5% for a token count loomux read as

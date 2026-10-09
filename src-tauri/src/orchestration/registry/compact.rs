@@ -1920,8 +1920,9 @@ impl OrchRegistry {
     pub fn cache_idle_nudge_tick(&self, now: u64, context_percents: &HashMap<String, u32>) -> Vec<String> {
         // Three phases (review round 1, rev-std finding 1). GATHER takes every
         // registry snapshot, each on its own short lock, and holds none after.
-        // DECIDE reads only that snapshot plus the per-pane queue and the drive
-        // files, and writes nothing. APPLY is the only phase that mutates state:
+        // DECIDE reads only that snapshot plus the per-pane queue, the usage
+        // store already in memory (for a detected cache TTL, #3831) and the
+        // drive files, and writes nothing. APPLY is the only phase that mutates state:
         // latches, audit, delivery. So a decision can never observe its own
         // half-applied writes.
         let snap = self.cache_idle_gather(now);
@@ -1982,7 +1983,9 @@ impl OrchRegistry {
     /// DECIDE for [`Self::cache_idle_nudge_tick`]: for each candidate, either
     /// release its latch (evidence the idle stretch ended), fire (the pure
     /// [`loomux_engine::cacheage::idle_compact_should_fire`] plus the drive
-    /// files), or do nothing. Writes nothing. The drive files are read last,
+    /// files), or do nothing. Writes nothing. The TTL it decides on is the
+    /// usage row's own three-rung one, so it reads the in-memory usage store
+    /// for a candidate whose block declares none. The drive files are read last,
     /// and only for a pane that would otherwise fire.
     fn cache_idle_decide(&self, snap: CacheIdleSnapshot, context_percents: &HashMap<String, u32>) -> CacheIdlePlan {
         use loomux_engine::cacheage;

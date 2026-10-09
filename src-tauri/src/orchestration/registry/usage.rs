@@ -1246,7 +1246,8 @@ impl OrchRegistry {
                 "cost_usd": s.cost_usd,
                 "estimated": s.estimated,
                 // #3407: the cache-age chip's inputs. `cache_ttl_minutes` is
-                // RESOLVED here (block override, else the CLI's CliCaps row) so
+                // RESOLVED here (block override, else the session's detected
+                // lifetime, else the CLI's CliCaps row) so
                 // the frontend keeps no TTL table of its own; `null` = unknown.
                 "last_active_ms": s.activity.last_active_ms,
                 "last_wake": s.activity.last_wake,

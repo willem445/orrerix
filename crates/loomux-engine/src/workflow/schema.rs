@@ -146,7 +146,9 @@ pub struct Block {
     /// driver never carries one (see the parse validation).
     pub driver: Option<String>,
     /// The provider prompt-cache TTL, in minutes, this block's agent runs on
-    /// (the `cache_ttl_minutes:` key, #3407). `None` (absent) = the CLI's own
+    /// (the `cache_ttl_minutes:` key, #3407). `None` (absent) = not declared:
+    /// the lifetime read off the session's own cache writes where its CLI
+    /// records one (#3831), else the CLI's own
     /// [`CliCaps::cache_ttl_minutes`](crate::model::CliCaps) default;
     /// `Some(0)` = "unknown — infer no cache state for this block"; anything
     /// else overrides the default, which is how an account on Anthropic's

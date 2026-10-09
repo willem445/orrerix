@@ -4120,8 +4120,8 @@ immune to config drift), but Claude's real context tier is ultimately a per-requ
 the transcript doesn't fully pin down — so the model id is a best-effort signal, not a guarantee.
 
 Fix, in one shared place:
-- `usage::claude_context_window_tokens(model: Option<&str>) -> u64` — matches by substring the
-  same way `price_for` matches for pricing. Opus is the one family with concrete, user-reported
+- `usage::claude_context_window_tokens(model: Option<&str>) -> u64` — matches the model's
+  family as a substring of the id. Opus is the one family with concrete, user-reported
   evidence of a 1M-token tier; everything else, and an absent/unrecognized model, falls back to
   `usage::DEFAULT_CLAUDE_CONTEXT_WINDOW_TOKENS` (200K, unchanged). Erring toward the SMALLER
   window on an unrecognized model is the safe direction: reading a HIGHER percent than reality

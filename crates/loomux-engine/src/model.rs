@@ -867,7 +867,9 @@ pub struct CliCaps {
     /// CLI and why, rather than leaving a gesture that quietly does nothing.
     pub fork: ForkSeam,
     /// The provider prompt-cache TTL (minutes) loomux assumes for this CLI
-    /// when a block does not declare `cache_ttl_minutes:` (#3407) — the input
+    /// when a block does not declare `cache_ttl_minutes:` (#3407) AND nothing
+    /// was read off the session's own cache writes (#3831) — the last rung of
+    /// [`crate::cacheage::resolve_ttl`], and the input
     /// to the pane's hot/cooling/cold chip and the orchestrator's
     /// idle-compact backstop ([`crate::cacheage`]).
     ///
@@ -1168,7 +1170,8 @@ pub const CLI_CAPS: &[CliCaps] = &[
         // cache has a 5-minute lifetime", measured "from the start of the request
         // that writes or reads the cache entry", with a paid 1-hour option. Five is
         // the conservative default; a block on the 1-hour TTL declares
-        // `cache_ttl_minutes: 60` (#3407).
+        // `cache_ttl_minutes: 60` (#3407), and a session seen writing to the
+        // 1-hour cache is read as 60 without it (#3831).
         cache_ttl_minutes: Some(5),
         fork: ForkSeam::Flag {
             flag: "--fork-session",

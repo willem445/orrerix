@@ -1961,7 +1961,8 @@ export interface AgentUsage {
   tokens: UsageTokens;
   /** #3407, the cache-age chip's inputs. Unix-ms this row's counters last
    *  moved (null = never observed); the TTL in force, RESOLVED by the backend
-   *  (block override, else the CLI's `CliCaps` row; null = unknown) with the
+   *  (block override, else the session's detected lifetime, else the CLI's
+   *  `CliCaps` row; null = unknown) with the
    *  idle threshold at which it reads cooling; the last wake's cost; and
    *  whether "Compact now" can act on this CLI. Optional on the type because
    *  a backend that predates them sends none — `cacheage.ts` reads absence as

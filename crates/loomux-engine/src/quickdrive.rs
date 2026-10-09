@@ -938,7 +938,7 @@ impl QuickDriveRecord {
         self.started_ms = now_ms;
         self.clock_ms = now_ms;
         self.task_seq = self.task_seq.saturating_add(1);
-        self.task.clear();
+        let _ = &self.task;
         self.worker_note.clear();
         self.pr = None;
         self.notice_item.clear();

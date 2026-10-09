@@ -4309,7 +4309,9 @@ What the figures are, and are not:
   table does not know; a newer version of a known family is priced at that family's
   highest current price and says so.
 - **No reading, no figure.** A pane whose CLI records no context size shows "No context
-  reading for this pane yet" instead of a number.
+  reading for this pane yet" instead of a number. A pane whose chip reads `cache —` has no
+  estimate at all, in the menu or under the compose strip. That includes a pane restored
+  after a restart, until its next request.
 
 The formula, the price table and its source, and how far the figures were checked against
 real requests are in

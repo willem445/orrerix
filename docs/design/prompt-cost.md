@@ -223,9 +223,20 @@ at Opus 5.5's 1-hour rates.
 strip payload in the frontend, and an estimate computed in Rust would be an IPC
 call per keystroke.
 
-- **The cache chip's menu**, on every pane that has a chip: a header row, the
-  figures, and an inputs row. All read-only; each row's tooltip carries what the
-  figure assumes.
+- **The cache chip's menu**, on every pane whose chip has a reading: a header
+  row, the figures, and an inputs row. All read-only; each row's tooltip carries
+  what the figure assumes. That includes the panes #3837 gave a chip: a solo
+  pane, a lead pane and a plain agent pane adopted at spawn are looked up under
+  the same identity the chip uses (`cacheIdentityOfPane`), and their rows carry
+  the same `prompt_cost` object.
+- **Nothing, on a pane whose chip reads `cache —`.** That chip means there is no
+  reading: no identity, no usage row, no token record, or no request observed
+  yet. The estimate takes its cache state and its TTL from the chip's reading,
+  so with none it shows nothing, in the menu and on the compose line alike,
+  rather than figures with no state behind them. The cost of that rule is a
+  pane restored after a restart: its context and price are known at once, but
+  it shows no estimate until its next request is observed, exactly as its chip
+  shows no age until then.
 - **The compose strip**, on orchestrator panes: one line under the box, with the
   same rows as its tooltip. It shares the status line's fixed-height slot rather
   than taking a row, so the strip is exactly as tall as before and the terminal

@@ -338,6 +338,34 @@ test("every way the strip does not cover the pane answers null", () => {
   assert.equal(promptCostFor(s, "g1", "a1")?.contextTokens, 1);
 });
 
+test("a solo pane is found under its channel identity, with no roster beside its usage", () => {
+  // Since #3837 a solo, lead or adopted pane has a usage row too. A solo pane's
+  // identity is its channel-agent one, in the standalone group, and that group
+  // publishes usage with no summary of its own — so the lookup must resolve
+  // from the usage half alone, and "no roster" must read as "no compact in
+  // flight", not as "no reading".
+  const solo: PromptCostStrip = {
+    groups: {
+      __solo__: {
+        usage: { live_agents: [{ id: "solo-3", prompt_cost: { context_tokens: 50_503, price_per_mtok: OPUS_55 }, cache_ttl_source: "session" }] },
+        summary: null,
+      },
+      g1: { usage: { live_agents: [{ id: "a1", prompt_cost: { context_tokens: 1 } }] } },
+    },
+  };
+  const r = promptCostFor(solo, "__solo__", "solo-3");
+  assert.equal(r?.contextTokens, 50_503);
+  assert.equal(r?.ttlSource, "session");
+  assert.equal(r?.compacting, false);
+  assert.deepEqual(r?.price, OPUS_55);
+  // A group with NO summary key at all resolves the same way.
+  assert.equal(promptCostFor(solo, "g1", "a1")?.compacting, false);
+  // The agent id alone is not the identity: the same id under another group is
+  // not this pane.
+  assert.equal(promptCostFor(solo, "g1", "solo-3"), null);
+  assert.equal(promptCostFor(solo, "__solo__", "a1"), null);
+});
+
 test("a compact in flight is read off the roster, and only the in-flight phases count", () => {
   const compacting = (phase?: string) => promptCostFor(strip({}, phase), "g1", "a1")?.compacting;
   for (const phase of ["armed", "awaiting_evidence", "reinjecting"]) {

@@ -213,6 +213,56 @@ fn a_row_whose_agent_is_gone_carries_no_estimate_object() {
     }
 }
 
+#[test]
+fn a_solo_pane_reads_its_detected_ttl_and_carries_the_estimates_inputs() {
+    // The pane the TTL's middle rung exists for. A solo pane has no workflow
+    // block, so it has nowhere to declare `cache_ttl_minutes`: on the block
+    // and the CLI default alone, a pane writing to the 1-hour cache would read
+    // `cold` after five minutes and be priced for a cold write that is not
+    // happening. Since #3837 it has an identity and a session, so the row is
+    // read off its own transcript like any other.
+    let proj = tempfile::tempdir().unwrap();
+    let (reg, _d) = test_registry();
+    reg.set_claude_projects_dir(proj.path().to_path_buf());
+    let prepared = reg.solo_prepare("claude", "C:/tmp/solo", "my solo").unwrap();
+    let solo = prepared["agent_id"].as_str().unwrap().to_string();
+    reg.solo_bind(&solo, 7_401).unwrap();
+    reg.human_pane_session(&solo, "solo-cost-session").unwrap();
+    // A plain agent pane, adopted at spawn, whose writes go to the 5-minute cache.
+    let adopted = reg
+        .solo_adopt(7_402, "plain claude", "C:/tmp/solo", Some("claude"), Some("adopted-cost-session"))
+        .unwrap();
+    let adopted = adopted["agent_id"].as_str().unwrap().to_string();
+
+    append_turn(proj.path(), "solo-cost-session", "s1", "claude-opus-5-5", 10, 0, 49_990, 0);
+    append_turn(proj.path(), "solo-cost-session", "s2", "claude-opus-5-5", 3, 0, 500, 50_000);
+    append_turn(proj.path(), "adopted-cost-session", "a1", "claude-opus-5-5", 10, 900, 0, 0);
+    let usage = reg.group_usage(solo_group_id());
+
+    let row = cost_row(&usage, &solo);
+    assert_eq!(row["source"], "transcript", "control: the solo pane's own session is the source: {row}");
+    assert_eq!(row["block"], "solo", "control: this row has no workflow block to declare a TTL on: {row}");
+    // The hour, read off the session — not claude's default five.
+    assert_eq!(row["cache_ttl_minutes"], json!(60));
+    assert_eq!(row["cache_ttl_source"], "session");
+    assert_eq!(row["cache_cooling_after_ms"], json!(48 * MIN));
+    // And everything the estimate reads, on a pane with no orchestration group.
+    let cost = &row["prompt_cost"];
+    assert_eq!(cost["context_tokens"], json!(50_503));
+    assert_eq!(cost["first_context_tokens"], json!(50_000));
+    assert_eq!(cost["price_model"], "claude-opus-5-5");
+    assert_eq!(cost["price_per_mtok"]["cache_read"], json!(0.20));
+    assert_eq!(cost["price_per_mtok"]["cache_write_1h"], json!(8.0));
+
+    // The adopted pane's session wrote to the five-minute cache, and reads so:
+    // the same number as the default, but from the session, not assumed.
+    let row = cost_row(&usage, &adopted);
+    assert_eq!(row["source"], "transcript", "{row}");
+    assert_eq!(row["cache_ttl_minutes"], json!(5));
+    assert_eq!(row["cache_ttl_source"], "session");
+    assert_eq!(row["prompt_cost"]["context_tokens"], json!(910));
+}
+
 /// A `usage.json` as the build before #3831 wrote it: seven rows cut out of a
 /// real store, one per `source`. The file is named for v1.3.1-beta7, and its
 /// field set is the one `UsageSnapshot` still had at v1.3.1-beta8 — the

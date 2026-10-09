@@ -230,6 +230,14 @@ there is no migration to run: a file written by v1.3.0 (no `current_model`, no
 before. Reading it does not rewrite it. Both shapes are pinned on fixtures cut
 from a real store (`src-tauri/tests/fixtures/usagestore/`).
 
+**Two row fields have been added since, and both are optional** (#3831):
+`first_context_tokens` and `detected_cache_ttl_minutes`. A row with nothing to
+say in them is written without them, so a row from an older file comes back from
+this build's first write with exactly the keys it had. A file that does carry
+them is still a row list an older build reads: it ignores the two keys it does
+not know. `a_usage_file_from_before_the_prompt_cost_fields_loads_unchanged`
+pins both directions on the beta7 fixture.
+
 **An older build can read what this build writes**, with one limit. It reads
 `usage.json`, which is still a valid row list with a row for every key, and
 ignores `usage-live.json`. So it sees every session, with a live agent's

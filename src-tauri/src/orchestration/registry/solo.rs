@@ -329,6 +329,16 @@ impl OrchRegistry {
         }
         if let Some(s) = session_id {
             PathSegment::parse(s).map_err(|e| format!("invalid session id {s:?}: {e}"))?;
+            // The same refusal as `human_pane_session`, checked before anything is minted.
+            let holder = self
+                .agents
+                .lock_safe()
+                .values()
+                .find(|o| o.status != AgentStatus::Dead && o.session_id.as_deref() == Some(s))
+                .map(|o| o.id.clone());
+            if let Some(holder) = holder {
+                return Err(format!("session {s:?} is already held by live pane {holder}; one transcript belongs to one pane"));
+            }
         }
         self.ensure_solo_group();
         let seq = self.mint_agent_seq(solo_group_id());
@@ -449,6 +459,16 @@ impl OrchRegistry {
         PathSegment::parse(session_id).map_err(|e| format!("invalid session id {session_id:?}: {e}"))?;
         let entry = {
             let mut agents = self.agents.lock_safe();
+            // One transcript belongs to one pane. A second LIVE entry on the same
+            // session would merge two panes into one usage row, so the claim is
+            // refused. A dead entry has given its session up with its pty.
+            if let Some(holder) = agents
+                .values()
+                .find(|o| o.id.as_str() != agent_id && o.status != AgentStatus::Dead && o.session_id.as_deref() == Some(session_id))
+                .map(|o| o.id.clone())
+            {
+                return Err(format!("session {session_id:?} is already held by live pane {holder}; one transcript belongs to one pane"));
+            }
             let a = agents.get_mut(agent_id).ok_or("unknown agent")?;
             if !matches!(a.role, Role::Solo | Role::Lead) {
                 return Err("human_pane_session is only for solo and lead panes".into());

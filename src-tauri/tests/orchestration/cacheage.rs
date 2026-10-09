@@ -466,3 +466,32 @@ fn a_session_id_is_taken_once_by_a_solo_or_lead_pane_and_only_as_a_path_segment(
     );
     assert_eq!(reg.agent(&agent).unwrap().session_id.as_deref(), Some("first-session"));
 }
+
+#[test]
+fn a_session_a_live_pane_holds_is_refused_to_a_second_pane_until_that_pane_exits() {
+    // Two live panes on one transcript merge into one usage row, so the second
+    // claim is refused and the holder keeps its session. The claim frees up once
+    // the holder's pty has exited.
+    let (reg, _d) = test_registry();
+    let first = reg.solo_prepare("claude", "C:/tmp/solo", "first").unwrap();
+    let first_id = first["agent_id"].as_str().unwrap().to_string();
+    reg.human_pane_session(&first_id, "shared-session").expect("the first claim lands");
+
+    let second = reg.solo_prepare("claude", "C:/tmp/solo", "second").unwrap();
+    let second_id = second["agent_id"].as_str().unwrap().to_string();
+    assert!(reg.human_pane_session(&second_id, "shared-session").is_err(), "a live pane holds this session");
+    assert!(
+        reg.solo_adopt(7301, "third", "C:/tmp/solo", Some("claude"), Some("shared-session")).is_err(),
+        "adoption refuses a held session the same way"
+    );
+    assert_eq!(reg.agent(&second_id).unwrap().session_id, None, "a refused claim is not recorded");
+    assert_eq!(reg.agent(&first_id).unwrap().session_id.as_deref(), Some("shared-session"), "the holder keeps it");
+    assert!(
+        reg.human_pane_session(&first_id, "shared-session").is_ok(),
+        "the holder re-reporting its own id is still a success"
+    );
+
+    reg.mark_dead(&first_id, Some(0));
+    reg.human_pane_session(&second_id, "shared-session")
+        .expect("a dead pane has given its session up, so the claim frees");
+}

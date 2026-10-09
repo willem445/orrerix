@@ -290,6 +290,9 @@ session, so the chip never showed on one.
   both orders: a session known when the identity is set is reported then, and one learned after is
   reported by the hook. The adopt-on-connect path (`orchestration.ts`) and the launch and adopt paths
   (`bindSoloIfNeeded`, `bindLeadIfNeeded`) call it too.
+  A restore arm also adopts a harness pane that the remint left without an identity. `remintSoloIdentity`
+  mints none for a CLI it does not recognise, such as opencode, so `adoptIfEligible` adopts it there with its
+  CLI and its session, and the usage row then reads that CLI's own store.
 - **The CLI.** `compute_group_usage` and `agent_context_signals_for_group` resolve a pane's
   CLI with `cli_for_agent`, which reads the pane's own `solo_cli` before its block. Every
   other agent resolves exactly as it did (#2167).

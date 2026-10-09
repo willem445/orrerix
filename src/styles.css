@@ -1071,6 +1071,8 @@ body.dragging-pane, body.dragging-pane * { cursor: grabbing !important; }
 .pane-cache[data-state="cooling"] {
   border-color: color-mix(in srgb, var(--state-attention) 35%, transparent); color: var(--state-attention); background: color-mix(in srgb, var(--state-attention) 14%, transparent);
 }
+/* A pane with no reading (#3831): its tooltip says why, so the chip is not a control. */
+.pane-cache[data-state="gap"] { cursor: default; }
 .pane-cache[data-state="cold"] {
   border-color: color-mix(in srgb, var(--id-azure) 35%, transparent); color: var(--id-azure); background: color-mix(in srgb, var(--id-azure) 14%, transparent);
 }

@@ -6,8 +6,17 @@
 // is pure and lives in cacheage.ts; this module is the IPC half.
 
 import { invoke } from "./transport.ts";
-import type { Pane } from "./pane";
 import { sessionToReport, type HumanPaneIdentity, type ReportedSession } from "./cacheage";
+
+/** The pane fields the session report reads. A `Pane` satisfies it, so this module
+ *  does not import pane.ts, and so is not part of the pane's import cycle. */
+export interface SessionReportPane {
+  readonly sessionId: string | null;
+  readonly orchRole: string | null;
+  readonly orchAgentId: string | null;
+  readonly channelAgentRole: string | null;
+  readonly channelAgentAgentId: string | null;
+}
 
 /** Record a solo or lead pane's session id (#3831), so the cache-age chip can
  *  read its usage from its own transcript. Callers go through
@@ -20,12 +29,12 @@ export const humanPaneSession = (agentId: string, sessionId: string): Promise<vo
 
 /** The session each pane has reported, keyed by the pane, so a pane reports each
  *  (agent, session) pair once (#3831). */
-const humanSessionReported = new WeakMap<Pane, ReportedSession>();
+const humanSessionReported = new WeakMap<object, ReportedSession>();
 
 /** A solo or lead pane's identity for the session report, read off the pane's own
  *  fields (#3831). A restored pane needs no special case: its identity is set the
  *  way a launched one's is. */
-function humanIdentityOf(pane: Pane): HumanPaneIdentity | null {
+function humanIdentityOf(pane: SessionReportPane): HumanPaneIdentity | null {
   if (pane.orchRole === "lead" && pane.orchAgentId !== null) {
     return { agentId: pane.orchAgentId, role: "lead" };
   }
@@ -38,9 +47,9 @@ function humanIdentityOf(pane: Pane): HumanPaneIdentity | null {
 /** Report a solo or lead pane's session to the backend, when the pane has one the
  *  backend does not already hold (#3831). Called wherever the pane's identity is
  *  set, and from the session-identified hook. So a session known when the identity
- *  is set is reported then, and one learned later is reported by the hook. Best-effort,
- *  and a refusal is not surfaced. */
-export function reportHumanSession(pane: Pane): void {
+ *  is set is reported then, and one learned later is reported by the hook. Best-
+ *  effort, and a refusal is not surfaced. */
+export function reportHumanSession(pane: SessionReportPane): void {
   const report = sessionToReport({
     humanIdentity: humanIdentityOf(pane),
     sessionId: pane.sessionId,

@@ -82,6 +82,7 @@ import {
   soloPrepare,
   soloBind,
   soloAdopt,
+  adoptIfEligible,
   leadPrepare,
   leadBind,
   quickStart,
@@ -952,6 +953,7 @@ const orchWiring: OrchWiring = {
       source
     );
     if (pane.ptyId !== null) remint.bind(pane.ptyId);
+    if (pane.agentCli !== null) await adoptIfEligible(pane);
     reportHumanSession(pane);
     reapIfExited(ws, pane);
     onGridChanged();
@@ -1381,6 +1383,7 @@ async function openActionPane(
         anchor
       );
       if (pane.ptyId !== null) remint.bind(pane.ptyId);
+      if (pane.agentCli !== null) await adoptIfEligible(pane);
       reportHumanSession(pane);
       bindLeadTab(ws, remint);
       // #456: a restored kickoff is trusted no differently than a fresh one
@@ -1447,6 +1450,7 @@ async function openActionPane(
         anchor
       );
       if (pane.ptyId !== null) remint.bind(pane.ptyId);
+      if (pane.agentCli !== null) await adoptIfEligible(pane);
       reportHumanSession(pane);
       bindLeadTab(ws, remint);
       // #456: see the identical guard in "resume-agent" above.
@@ -1535,6 +1539,7 @@ async function openActionPane(
               ...leadPaneOptions(remint),
             });
             if (pane.ptyId !== null) remint.bind(pane.ptyId);
+            if (pane.agentCli !== null) await adoptIfEligible(pane);
             reportHumanSession(pane);
             bindLeadTab(ws, remint);
             // #456: today's most-reachable copilot restore path — copilot
@@ -2514,9 +2519,10 @@ function tryResumeFallback(pane: Pane, exit: PtyExit): boolean {
     (remint) =>
       pane
         .respawnFresh({ ...fb.opts, command: remint.command, argv: remint.argv, ...leadPaneOptions(remint) })
-        .then(() => {
+        .then(async () => {
           if (!wasLead) pane.setChannelAgent(remint.channelAgent ?? null);
           if (pane.ptyId !== null) remint.bind(pane.ptyId);
+          if (pane.agentCli !== null) await adoptIfEligible(pane);
           reportHumanSession(pane);
           bindLeadTab(leadWs, remint);
           onGridChanged();
@@ -2936,7 +2942,6 @@ async function bindSoloIfNeeded(pane: Pane, spec: AgentLaunchSpec): Promise<void
     /* best-effort — the pane is adopted on its first Connect gesture, as before */
   }
 }
-
 
 /** Start the solo-pane copilot autopilot consent watcher (#364) for a
  *  just-spawned pane, fire-and-forget. Deliberately independent of

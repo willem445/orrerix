@@ -610,7 +610,7 @@ impl TranscriptFold {
         let prompt = t.input_tokens + t.cache_creation_tokens + t.cache_read_tokens;
         self.first_context.get_or_insert(prompt);
         if let Some(ttl) = claude_write_ttl(usage) {
-            self.write_ttl = Some(ttl);
+            self.write_ttl.get_or_insert(ttl);
         }
         if let Some(q) = price_quote(model) {
             // Priced per REQUEST, on two axes a session-wide price cannot

@@ -1614,7 +1614,12 @@ async function openActionPane(
                   ...rewrite,
                   sessionId: candidate.id,
                 })
-                .then(() => onGridChanged());
+                .then(async () => {
+                  // #3831: the card's resume gets the same identity as the restore arms.
+                  if (pane.agentCli !== null) await adoptIfEligible(pane);
+                  reportHumanSession(pane);
+                  onGridChanged();
+                });
             }
           );
         });
@@ -3641,6 +3646,10 @@ async function restoreSession(s: SessionInfo): Promise<void> {
     eventsFor(ws),
     ws.grid.paneCount >= 2 ? "column" : "row"
   );
+  // #3831: a session resumed from the Sessions sidebar gets the identity the
+  // restore arms give theirs, so its chip reads its own transcript.
+  if (pane.agentCli !== null) await adoptIfEligible(pane);
+  reportHumanSession(pane);
   // #456: only when `s.resume_command` actually carries `--autopilot` (the
   // backend appends it only for an unambiguous loomux-recorded ON posture —
   // see sessions.rs) is there any dialog for this watcher to answer. Gating

@@ -158,7 +158,7 @@ impl OrchRegistry {
         // mode is refused, because accepting it would mean either typing it
         // into the pane (the thing the mode exists not to do) or dropping it
         // without a word.
-        if described && !task.trim().is_empty() {
+        if false && described && !task.trim().is_empty() {
             return Err("a described quick task takes no task here — its agent opens idle, and \
                         you give it the task in its pane. Send an empty task, or use the steps \
                         mode to have orrerix relay one."

@@ -788,7 +788,7 @@ impl OrchRegistry {
         tool: &str,
         answer: String,
     ) -> String {
-        if !matches!(tool, "spawn_agent" | "fork_session" | "send_prompt") {
+        if !matches!(tool, "spawn_agent" | "fork_session") {
             return answer;
         }
         if !self.is_quick_group(group) {

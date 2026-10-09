@@ -241,7 +241,10 @@ impl OrchRegistry {
     }
 
     /// SCRATCH STUB: signature only, no behaviour.
-    pub fn human_pane_session(&self, _agent_id: &str, _session_id: &str) -> Result<(), String> {
+    pub fn human_pane_session(&self, agent_id: &str, _session_id: &str) -> Result<(), String> {
+        // SCRATCH MUTATION: persists a SOLO pane into __solo__/agents.json.
+        let entry = self.agent(agent_id).ok_or("unknown agent")?;
+        self.persist_agent_record(&entry, "running");
         Ok(())
     }
 

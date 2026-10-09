@@ -400,9 +400,16 @@ clones each running agent that has a session id, once per call.
   session source here, so it reads as a terminal.
 - **A session has one live holder.** `human_pane_session` and `solo_adopt` refuse a session
   that another live pane holds, and a dead pane gives its claim up with its pty. Two live panes
-  on one transcript would merge into one usage row. The refused pane keeps no identity for that
-  session, so its chip reads `cache —` as not registered. A distinct gap for "another pane holds
-  this session" is a follow-up.
+  on one transcript would merge into one usage row. In `solo_adopt` the question and the insert
+  that answers it are one critical section, as they are in `human_pane_session`, so two panes
+  adopted on one session at the same moment cannot both pass.
+  **The refusal is the adoption itself, so it reaches Connect too.** A pane that is adopted on
+  its first Connect gesture (`adoptIfEligible`) passes its session with the adoption. If a live
+  pane already holds that session, the adoption is refused and the pane is left with no channel
+  identity at all: its Connect menu shows the not-capable reason, and it cannot join a channel,
+  for as long as the holder lives. The adoption is retried on each right-click and succeeds once
+  the holder's pty has exited. Its chip reads `cache —` as not registered throughout. A distinct
+  gap for "another pane holds this session" is a follow-up.
 - **The solo group's usage store and series never rotate.** `__solo__` never ends, and its rows
   carry real counters from this change on. `usage-series.jsonl` gains a row per moved key per
   bucket with no retention. A retention policy for a group that never ends is a separate

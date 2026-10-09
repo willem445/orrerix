@@ -580,3 +580,116 @@ fn a_session_a_live_pane_holds_is_refused_to_a_second_pane_until_that_pane_exits
     reg.human_pane_session(&second_id, "shared-session")
         .expect("a dead pane has given its session up, so the claim frees");
 }
+
+/// `solo_adopt`'s one-holder rule must survive two adoptions at once, not just
+/// two in sequence (the test above covers sequence).
+///
+/// "Does a live pane hold this session?" and the insert that makes the new pane
+/// its holder are ONE critical section (#3831, deferred from #3837's review).
+/// With the check under one lock acquisition and the insert under another, two
+/// panes adopted on one session at the same moment both pass the check — the
+/// whole mint sits in that window — and the registry then holds two live
+/// entries on one transcript, which the usage tick reads into one row.
+///
+/// The assertion is exact rather than statistical: however the two threads
+/// interleave, exactly one adoption may succeed and exactly one live entry may
+/// hold the session. Forty rounds, because one round of the split form passes
+/// by luck about as often as its race is lost.
+#[test]
+fn two_panes_adopted_on_one_session_at_once_leave_exactly_one_holder() {
+    let (reg, _d) = test_registry();
+    let reg = std::sync::Arc::new(reg);
+    // Every LIVE agent the roster holds on this session.
+    let holders = |session: &str| -> Vec<String> {
+        reg.list_agents(solo_group_id())
+            .as_array()
+            .expect("a roster")
+            .iter()
+            .filter(|a| a["session"] == session && a["status"] != "dead")
+            .map(|a| a["id"].as_str().unwrap().to_string())
+            .collect()
+    };
+    let mut refused = 0;
+    for round in 0u32..40 {
+        let session = format!("raced-session-{round}");
+        let barrier = std::sync::Arc::new(std::sync::Barrier::new(2));
+        let handles: Vec<_> = (0..2u32)
+            .map(|side| {
+                let reg = std::sync::Arc::clone(&reg);
+                let barrier = std::sync::Arc::clone(&barrier);
+                let session = session.clone();
+                // Two DIFFERENT ptys, so the by-pty claim cannot be what
+                // decides it: only the session can.
+                let pty = 7_500 + round * 2 + side;
+                std::thread::spawn(move || {
+                    barrier.wait(); // start both inside the window, not one after the other
+                    reg.solo_adopt(pty, "raced", "C:/tmp/solo", Some("claude"), Some(session.as_str()))
+                })
+            })
+            .collect();
+        let results: Vec<Result<Value, String>> = handles.into_iter().map(|h| h.join().unwrap()).collect();
+        let won: Vec<&Value> = results.iter().filter_map(|r| r.as_ref().ok()).collect();
+        let lost: Vec<&String> = results.iter().filter_map(|r| r.as_ref().err()).collect();
+        assert_eq!(
+            (won.len(), lost.len()),
+            (1, 1),
+            "round {round}: two concurrent adoptions of session {session:?} must be one success and \
+             one refusal; both succeeding means the check and the insert were not one critical \
+             section, and two live panes now share one transcript: {results:?}"
+        );
+        assert!(lost[0].contains("already held by live pane"), "the loser is told why: {}", lost[0]);
+        refused += 1;
+        // The registry agrees with what the callers were told: one live entry
+        // holds the session, and it is the winner's.
+        let winner = won[0]["agent_id"].as_str().unwrap();
+        assert_eq!(holders(&session), vec![winner.to_string()], "round {round}: exactly the winner holds {session:?}");
+    }
+    // Control: the loop really did refuse once per round, so the assertions
+    // above were reached forty times rather than vacuously never.
+    assert_eq!(refused, 40);
+    // The refused racer leaves nothing behind: one adoption audited per round.
+    assert_eq!(audit_count(&reg, solo_group_id(), "solo-adopt"), 40);
+}
+
+/// The two doors that give a pane a session — `solo_adopt` and
+/// `human_pane_session` — decide under the same lock, so racing one against the
+/// other on one session also leaves exactly one holder.
+#[test]
+fn an_adoption_racing_a_session_report_on_one_session_leaves_exactly_one_holder() {
+    let (reg, _d) = test_registry();
+    let reg = std::sync::Arc::new(reg);
+    for round in 0u32..40 {
+        let session = format!("crossed-session-{round}");
+        let prepared = reg.solo_prepare("claude", "C:/tmp/solo", "reporter").unwrap();
+        let reporter = prepared["agent_id"].as_str().unwrap().to_string();
+        let barrier = std::sync::Arc::new(std::sync::Barrier::new(2));
+        let adopt = {
+            let (reg, barrier, session) = (std::sync::Arc::clone(&reg), std::sync::Arc::clone(&barrier), session.clone());
+            std::thread::spawn(move || {
+                barrier.wait();
+                reg.solo_adopt(7_700 + round, "adopter", "C:/tmp/solo", Some("claude"), Some(session.as_str()))
+                    .map(|v| v["agent_id"].as_str().unwrap().to_string())
+            })
+        };
+        let report = {
+            let (reg, barrier, session, reporter) =
+                (std::sync::Arc::clone(&reg), std::sync::Arc::clone(&barrier), session.clone(), reporter.clone());
+            std::thread::spawn(move || {
+                barrier.wait();
+                reg.human_pane_session(&reporter, &session).map(|()| reporter)
+            })
+        };
+        let results = [adopt.join().unwrap(), report.join().unwrap()];
+        let won: Vec<&String> = results.iter().filter_map(|r| r.as_ref().ok()).collect();
+        assert_eq!(won.len(), 1, "round {round}: exactly one of the two doors may win {session:?}: {results:?}");
+        assert_eq!(
+            reg.agent(won[0]).and_then(|a| a.session_id),
+            Some(session.clone()),
+            "round {round}: the winner holds the session"
+        );
+        // The reporter either won, or was refused and holds nothing.
+        if won[0] != &reporter {
+            assert_eq!(reg.agent(&reporter).unwrap().session_id, None, "round {round}: a refused report records nothing");
+        }
+    }
+}

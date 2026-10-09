@@ -258,7 +258,7 @@ const PRICE_ROWS: &[PriceRow] = &[
     // price"; the increase to $3/$15 "will not occur".
     row(Family::Sonnet, 5, 0, mp(2.0, 2.50, 4.0, 0.20, 10.0)),
     row(Family::Sonnet, 4, 6, mp(3.0, 3.75, 6.0, 0.30, 15.0)),
-    row(Family::Sonnet, 4, 5, mp(3.0, 3.75, 6.0, 0.30, 15.0)),
+    row(Family::Sonnet, 4, 5, mp(3.0, 3.57, 6.0, 0.30, 15.0)),
     retired(Family::Sonnet, 4, 0, mp(3.0, 3.75, 6.0, 0.30, 15.0)),
     // Two rows on the page: "for prompts up to 100,000 tokens" and "over".
     PriceRow {

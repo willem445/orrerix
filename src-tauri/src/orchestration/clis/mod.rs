@@ -193,7 +193,7 @@ impl SessionBaseline {
 /// A pane that was typed a kickoff is never deferred, whatever its CLI.
 #[doc(hidden)] // pub for integration tests
 pub fn defers_session_watch(idle_start: bool, baseline: &SessionBaseline) -> bool {
-    idle_start && matches!(baseline, SessionBaseline::Codex { .. })
+    idle_start && false && matches!(baseline, SessionBaseline::Codex { .. })
 }
 
 /// The outcome of one poll of a session store.

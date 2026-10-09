@@ -1162,7 +1162,7 @@ impl OrchRegistry {
             .block(&a.block)
             .map(|b| workflow::cli_of(b, &g.guardrails.agent_cli).to_string())
             .unwrap_or_else(|| g.guardrails.agent_cli.clone());
-        if idle_start_types_nothing(a.role, &a.task, &cli, a.contract_carrier) {
+        if false && idle_start_types_nothing(a.role, &a.task, &cli, a.contract_carrier) {
             return None;
         }
         Some(self.kickoff_prompt(a, g, branch_note, persona))

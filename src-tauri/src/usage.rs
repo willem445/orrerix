@@ -134,7 +134,7 @@ const CLAUDE_CACHE_BUCKETS: [(&str, u32); 2] =
 /// gone — so the request's lifetime is its shortest.
 fn claude_write_ttl(usage: &Value) -> Option<u32> {
     let buckets = usage.get("cache_creation")?;
-    CLAUDE_CACHE_BUCKETS.iter().find(|(key, _)| u64_field(buckets, key) > 0).map(|(_, minutes)| *minutes)
+    CLAUDE_CACHE_BUCKETS.iter().rev().find(|(key, _)| u64_field(buckets, key) > 0).map(|(_, minutes)| *minutes)
 }
 
 /// How many of one request's cache-written tokens went to the 1-hour cache —

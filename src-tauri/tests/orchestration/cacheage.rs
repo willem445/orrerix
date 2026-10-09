@@ -638,14 +638,14 @@ fn two_panes_adopted_on_one_session_at_once_leave_exactly_one_holder() {
              section, and two live panes now share one transcript: {results:?}"
         );
         assert!(lost[0].contains("already held by live pane"), "the loser is told why: {}", lost[0]);
-        refused += 1;
+        refused += lost.len();
         // The registry agrees with what the callers were told: one live entry
         // holds the session, and it is the winner's.
         let winner = won[0]["agent_id"].as_str().unwrap();
         assert_eq!(holders(&session), vec![winner.to_string()], "round {round}: exactly the winner holds {session:?}");
     }
-    // Control: the loop really did refuse once per round, so the assertions
-    // above were reached forty times rather than vacuously never.
+    // Control: forty refusals were SEEN, counted off the results themselves —
+    // so the loop ran, and one adoption lost in every round of it.
     assert_eq!(refused, 40);
     // The refused racer leaves nothing behind: one adoption audited per round.
     assert_eq!(audit_count(&reg, solo_group_id(), "solo-adopt"), 40);
@@ -709,4 +709,68 @@ fn an_adoption_racing_a_session_report_on_one_session_leaves_exactly_one_holder(
             assert_eq!(reg.agent(&reporter).unwrap().session_id, None, "round {round}: a refused report records nothing");
         }
     }
+}
+
+/// What a restart does to the chip (#3831 review round 2): a restored pane
+/// resumes its SESSION, a usage row is keyed by session id, and the row's
+/// activity is persisted with it. So the row this build finds on disk is the
+/// restored pane's own, and its chip reads the age that session had on record
+/// — it does not wait for another request. The pane that does wait is one
+/// whose session has nothing on record, which is the control here.
+#[test]
+fn a_restored_panes_row_keeps_the_activity_its_session_had_on_record() {
+    const BEFORE_RESTART: u64 = 1_759_900_000_000;
+    let proj = tempfile::tempdir().unwrap();
+    let (reg, _d) = test_registry();
+    reg.set_claude_projects_dir(proj.path().to_path_buf());
+
+    // What the previous run left on disk: one row for this session, with a
+    // request on record, under the pane identity it had THEN.
+    let dir = reg.state_root().join(solo_group_id().as_str());
+    fs::create_dir_all(&dir).unwrap();
+    let stored = json!([{
+        "key": "restored-session", "agent_id": "solo-before-restart", "name": "before", "role": "solo",
+        "source": "transcript", "block": "solo", "cli": "claude",
+        "input_tokens": 1000, "output_tokens": 0, "cache_creation_tokens": 0, "cache_read_tokens": 0,
+        "cost_usd": 0.005, "estimated": true,
+        "model": "claude-opus-4-8", "current_model": "claude-opus-4-8",
+        "updated_ms": BEFORE_RESTART,
+        "activity": { "last_active_ms": BEFORE_RESTART, "last_wake": null, "baseline": null },
+    }]);
+    fs::write(dir.join("usage.json"), serde_json::to_string_pretty(&stored).unwrap()).unwrap();
+    // The transcripts as the sessions left them: nothing has been sent since.
+    write_solo_claude_turn(proj.path(), "restored-session", 1000);
+    write_solo_claude_turn(proj.path(), "never-seen-session", 700);
+
+    // The restart: a NEW pane identity resumes the old session...
+    let prepared = reg.solo_prepare("claude", "C:/tmp/solo", "restored").unwrap();
+    let restored = prepared["agent_id"].as_str().unwrap().to_string();
+    reg.solo_bind(&restored, 7_801).unwrap();
+    reg.human_pane_session(&restored, "restored-session").unwrap();
+    // ...and a second pane resumes a session this store has never seen.
+    let unseen = reg
+        .solo_adopt(7_802, "no record", "C:/tmp/solo", Some("claude"), Some("never-seen-session"))
+        .unwrap();
+    let unseen = unseen["agent_id"].as_str().unwrap().to_string();
+
+    let usage = reg.group_usage(solo_group_id());
+    let row = usage_row(&usage, &restored);
+    assert_eq!(row["source"], "transcript", "control: the restored pane's session is read: {row}");
+    assert_eq!(row["live"], json!(true));
+    assert_eq!(
+        row["last_active_ms"],
+        json!(BEFORE_RESTART),
+        "the restored pane's reading is the activity its session had on record: {row}"
+    );
+    assert_eq!(row["last_wake"], Value::Null, "resuming a session is not a request: {row}");
+    // The stored row was taken over by the new identity, not doubled beside it.
+    let rows = usage["agents"].as_array().unwrap();
+    assert!(rows.iter().all(|r| r["id"] != "solo-before-restart"), "the old identity keeps no row: {usage}");
+    assert_eq!(rows.iter().filter(|r| r["id"] == restored.as_str()).count(), 1);
+
+    // Control: a session with nothing on record is a first sighting, and that
+    // is the pane whose chip reads `cache —` until its next request.
+    let row = usage_row(&usage, &unseen);
+    assert_eq!(row["source"], "transcript", "control: this pane's session is read too: {row}");
+    assert_eq!(row["last_active_ms"], Value::Null, "nothing on record, nothing to read: {row}");
 }

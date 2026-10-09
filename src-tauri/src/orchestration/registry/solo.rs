@@ -415,10 +415,13 @@ impl OrchRegistry {
         // same reason: with the check under one acquisition and the insert under
         // another, two panes adopted on one session at once both pass the check,
         // and two live entries then read one transcript into one usage row. The
-        // mint above cannot move inside the guard — it takes the groups lock,
-        // which must not be taken while this one is held — so a refused racer
-        // has spent an agent sequence number and nothing else: no entry, no pty
-        // claim, no audit line.
+        // mint above stays outside the guard because `mint_agent_seq` holds
+        // `agent_seq_persist` across a file write. That lock's rule is that no
+        // caller holds another registry lock when it calls in
+        // (docs/design/lock-order.md), and with the agents lock held around it
+        // every reader of the roster would wait on that write. So a refused
+        // racer has spent an agent sequence number and nothing else: no entry,
+        // no pty claim, no audit line.
         {
             let mut agents = self.agents.lock_safe();
             if let Some(s) = session_id {

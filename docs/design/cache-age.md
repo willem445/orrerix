@@ -321,6 +321,15 @@ clones each running agent that has a session id, once per call.
   debt row, and a debt row needs an owning issue that has accepted the scope. None does.
 - SSH panes, and panes whose CLI the frontend does not know, get no identity. Gemini is not a
   session source here, so it reads as a terminal.
+- **A session has one live holder.** `human_pane_session` and `solo_adopt` refuse a session
+  that another live pane holds, and a dead pane gives its claim up with its pty. Two live panes
+  on one transcript would merge into one usage row. The refused pane keeps no identity for that
+  session, so its chip reads `cache —` as not registered. A distinct gap for "another pane holds
+  this session" is a follow-up.
+- **The solo group's usage store and series never rotate.** `__solo__` never ends, and its rows
+  carry real counters from this change on. `usage-series.jsonl` gains a row per moved key per
+  bucket with no retention. A retention policy for a group that never ends is a separate
+  decision, so it is not made here.
 
 ## Tests
 - `crates/loomux-engine/src/cacheage.rs` (unit): TTL resolution, including the

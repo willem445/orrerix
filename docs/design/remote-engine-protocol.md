@@ -486,7 +486,7 @@ over the same list, and a reviewer already knows how to read it.
 That mechanism is not optional bookkeeping, and this repo's own artifacts are the
 evidence. The plan-408 census counted 134 commands; `APP_COMMANDS` listed **141**
 when this section was written, **146** as of #1042 slice B, **147** as of
-#996, **150** as of #1151 slice A, **152** once that slice rebased onto the two commands #1152 added, and **182** at #3679, **183** at #3831 — by which time §5.4's table had fallen 29 behind without anything saying so. Twelve arrived across those first two intervals, and under a
+#996, **150** as of #1151 slice A, **152** once that slice rebased onto the two commands #1152 added, and **182** at #3679 — by which time §5.4's table had fallen 29 behind without anything saying so — and **183** at #3831. Twelve arrived across those first two intervals, and under a
 hand-maintained allowlist that
 nobody re-derived, every one would have been silently wire-reachable or silently
 broken. The count is dated rather than restated as a bare "today", because that

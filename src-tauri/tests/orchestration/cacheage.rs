@@ -654,6 +654,17 @@ fn two_panes_adopted_on_one_session_at_once_leave_exactly_one_holder() {
 /// The two doors that give a pane a session — `solo_adopt` and
 /// `human_pane_session` — decide under the same lock, so racing one against the
 /// other on one session also leaves exactly one holder.
+///
+/// **The report is started a little later each round, on purpose.** Released
+/// together, the report always wins: it is one short critical section, and the
+/// adoption has a pre-flight and a whole mint ahead of its insert. That
+/// interleaving is safe even with the adoption's check split from its insert —
+/// its pre-flight simply sees the reporter — so a test that only ever produced
+/// it could not fail. The interleaving that matters is the report landing
+/// AFTER the adoption's pre-flight and BEFORE its insert, inside the mint. The
+/// stagger walks the report's start across that window, 25 microseconds a
+/// round; it changes which interleaving is exercised and never the answer,
+/// which is one winner however the two are ordered.
 #[test]
 fn an_adoption_racing_a_session_report_on_one_session_leaves_exactly_one_holder() {
     let (reg, _d) = test_registry();
@@ -676,6 +687,12 @@ fn an_adoption_racing_a_session_report_on_one_session_leaves_exactly_one_holder(
                 (std::sync::Arc::clone(&reg), std::sync::Arc::clone(&barrier), session.clone(), reporter.clone());
             std::thread::spawn(move || {
                 barrier.wait();
+                // A spin, not a sleep: a sleep's granularity is far coarser
+                // than the window being aimed at.
+                let start = std::time::Instant::now() + std::time::Duration::from_micros(25 * u64::from(round));
+                while std::time::Instant::now() < start {
+                    std::hint::spin_loop();
+                }
                 reg.human_pane_session(&reporter, &session).map(|()| reporter)
             })
         };

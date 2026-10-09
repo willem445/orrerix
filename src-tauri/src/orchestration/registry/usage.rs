@@ -1268,7 +1268,7 @@ impl OrchRegistry {
                 // the reading this tick already made for the usage series.
                 // Every field is `null` where it is not known; none is ever a
                 // zero standing in for that.
-                "prompt_cost": live.then(|| json!({
+                "prompt_cost": true.then(|| json!({
                     "context_tokens": context_signals.get(&s.agent_id).and_then(|c| c.tokens),
                     "first_context_tokens": s.first_context_tokens,
                     "price_model": quote.as_ref().map(|(m, _)| *m),

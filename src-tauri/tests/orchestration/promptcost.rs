@@ -7,6 +7,7 @@
 //! backstop's half of #3831 are in `cacheage.rs`, beside the rest of the TTL.
 
 use super::*;
+use std::collections::{BTreeMap, BTreeSet};
 
 const MIN: u64 = 60_000;
 
@@ -39,6 +40,10 @@ fn append_turn(proj: &Path, sid: &str, id: &str, model: &str, input: u64, w5: u6
     writeln!(f, "{line}").unwrap();
 }
 
+/// The six keys of `prompt_cost` that come off the price table.
+const PRICE_KEYS: [&str; 6] =
+    ["price_model", "price_per_mtok", "price_long_prompt", "price_basis", "price_dated", "chars_per_token"];
+
 #[test]
 fn a_usage_row_carries_everything_the_next_prompt_estimate_reads() {
     // The whole path, off a real transcript under the projects-dir override:
@@ -61,24 +66,26 @@ fn a_usage_row_carries_everything_the_next_prompt_estimate_reads() {
     append_turn(proj.path(), &sid, "t3", "claude-sonnet-5-5", 2, 0, 300, 250_000);
     let usage = reg.group_usage(&g.id);
     let row = cost_row(&usage, &w.id);
+    let cost = &row["prompt_cost"];
 
     assert_eq!(row["source"], "transcript", "control: the row really is read off the fixture: {row}");
+    assert!(cost.is_object(), "a live row carries the estimate's inputs: {row}");
     // C: what the NEWEST turn was sent — not the session's running total.
-    assert_eq!(row["context_tokens"], json!(250_302));
-    assert_ne!(row["tokens"]["total"], row["context_tokens"]);
+    assert_eq!(cost["context_tokens"], json!(250_302));
+    assert_ne!(row["tokens"]["total"], cost["context_tokens"]);
     // F: what the FIRST turn was sent.
-    assert_eq!(row["first_context_tokens"], json!(40_000));
+    assert_eq!(cost["first_context_tokens"], json!(40_000));
     // p: Sonnet 5.5's own row, resolved here so the frontend keeps no table.
-    assert_eq!(row["price_model"], "claude-sonnet-5-5");
-    assert_eq!(row["price_basis"], "listed");
-    assert_eq!(row["price_per_mtok"]["input"], json!(2.0), "Sonnet 5.5 is $2 input, not Sonnet 4.6's $3");
-    assert_eq!(row["price_per_mtok"]["cache_read"], json!(0.10));
-    assert_eq!(row["price_per_mtok"]["cache_write"], json!(2.5));
-    assert_eq!(row["price_per_mtok"]["cache_write_1h"], json!(4.0));
-    assert_eq!(row["price_per_mtok"]["output"], json!(10.0));
-    assert_eq!(row["price_long_prompt"], Value::Null);
-    assert_eq!(row["price_dated"], "2026-10-09");
-    assert_eq!(row["prompt_chars_per_token"], json!(3.5 / 1.3));
+    assert_eq!(cost["price_model"], "claude-sonnet-5-5");
+    assert_eq!(cost["price_basis"], "listed");
+    assert_eq!(cost["price_per_mtok"]["input"], json!(2.0), "Sonnet 5.5 is $2 input, not Sonnet 4.6's $3");
+    assert_eq!(cost["price_per_mtok"]["cache_read"], json!(0.10));
+    assert_eq!(cost["price_per_mtok"]["cache_write"], json!(2.5));
+    assert_eq!(cost["price_per_mtok"]["cache_write_1h"], json!(4.0));
+    assert_eq!(cost["price_per_mtok"]["output"], json!(10.0));
+    assert_eq!(cost["price_long_prompt"], Value::Null);
+    assert_eq!(cost["price_dated"], "2026-10-09");
+    assert_eq!(cost["chars_per_token"], json!(3.5 / 1.3));
     // T: every cache write in the session went to the hour cache, the block
     // declares nothing, so the DETECTED hour beats claude's default five.
     assert_eq!(row["cache_ttl_minutes"], json!(60));
@@ -95,8 +102,8 @@ fn a_usage_row_carries_everything_the_next_prompt_estimate_reads() {
     // ceiling, and the row says the price is a ceiling. It wrote nothing to
     // the cache, so nothing is detected and it sits on claude's default five.
     let row = cost_row(&usage, &newer.id);
-    assert_eq!(row["price_basis"], "family-ceiling");
-    assert_eq!(row["price_per_mtok"]["input"], json!(3.0));
+    assert_eq!(row["prompt_cost"]["price_basis"], "family-ceiling");
+    assert_eq!(row["prompt_cost"]["price_per_mtok"]["input"], json!(3.0));
     assert_eq!(row["cache_ttl_minutes"], json!(5));
     assert_eq!(row["cache_ttl_source"], "cli");
 }
@@ -116,10 +123,11 @@ fn a_tiered_model_carries_its_long_prompt_price_and_an_unpriced_one_carries_none
     // The one model with a prompt-length tier carries both prices and the
     // threshold between them.
     let row = cost_row(&usage, &haiku.id);
-    assert_eq!(row["price_per_mtok"]["input"], json!(0.10));
-    assert_eq!(row["price_long_prompt"]["over_tokens"], json!(100_000));
-    assert_eq!(row["price_long_prompt"]["price"]["input"], json!(0.50));
-    assert_eq!(row["price_long_prompt"]["price"]["cache_read"], json!(0.05));
+    let cost = &row["prompt_cost"];
+    assert_eq!(cost["price_per_mtok"]["input"], json!(0.10));
+    assert_eq!(cost["price_long_prompt"]["over_tokens"], json!(100_000));
+    assert_eq!(cost["price_long_prompt"]["price"]["input"], json!(0.50));
+    assert_eq!(cost["price_long_prompt"]["price"]["cache_read"], json!(0.05));
     // Its writes went to the five-minute cache, and the row says so.
     assert_eq!(row["cache_ttl_minutes"], json!(5));
     assert_eq!(row["cache_ttl_source"], "session");
@@ -127,13 +135,15 @@ fn a_tiered_model_carries_its_long_prompt_price_and_an_unpriced_one_carries_none
     // A model the table does not list is tokens-only: every price field is
     // null — never a zero — while the token readings are still there.
     let row = cost_row(&usage, &future.id);
+    let cost = &row["prompt_cost"];
     assert_eq!(row["source"], "transcript", "control: this row was read too: {row}");
-    for key in ["price_model", "price_per_mtok", "price_long_prompt", "price_basis", "price_dated", "prompt_chars_per_token"] {
-        assert_eq!(row[key], Value::Null, "{key} must be null for an unpriced model: {row}");
+    assert!(cost.is_object(), "the object is there; it is the PRICE that is unknown: {row}");
+    for key in PRICE_KEYS {
+        assert_eq!(cost[key], Value::Null, "{key} must be null for an unpriced model: {row}");
     }
     assert_eq!(row["cost_usd"], Value::Null);
-    assert_eq!(row["context_tokens"], json!(510));
-    assert_eq!(row["first_context_tokens"], json!(510));
+    assert_eq!(cost["context_tokens"], json!(510));
+    assert_eq!(cost["first_context_tokens"], json!(510));
 }
 
 #[test]
@@ -142,83 +152,81 @@ fn a_row_whose_cli_reports_its_own_dollars_is_never_priced_off_the_table() {
     // CLI's name. pi reports the dollars it paid, so its row is `estimated:
     // false` — and a pi model id that names a Claude family (`anthropic/…`
     // through pi) must not pull an Anthropic list price onto it.
+    //
+    // Both rows are LIVE: each is stored under a spawned agent's own key, and
+    // with no transcript on disk the tick's fresh read is empty, so the merge
+    // keeps the stored row. The two differ in `estimated` and nothing else.
+    let proj = tempfile::tempdir().unwrap();
     let (reg, _d) = test_registry();
+    reg.set_claude_projects_dir(proj.path().to_path_buf());
     let g = reg.create_group("C:/tmp/repo", rails()).unwrap();
-    let reported = UsageSnapshot {
-        estimated: false,
-        cli: "pi".to_string(),
-        source: "pi-transcript".to_string(),
+    let a = reg.spawn_agent(&g.id, Role::Worker, "a", "task", false, None).unwrap();
+    let b = reg.spawn_agent(&g.id, Role::Worker, "b", "task", false, None).unwrap();
+    let stored = |agent: &str, key: &str, estimated: bool| UsageSnapshot {
+        estimated,
         model: Some("anthropic/claude-opus-4-8".to_string()),
         current_model: Some("anthropic/claude-opus-4-8".to_string()),
         first_context_tokens: Some(12_000),
-        ..usage_snap("sess-reported", "w-reported", 0.4, 1_000, 10)
+        ..usage_snap(key, agent, 0.4, 1_000, 10)
     };
-    // The control: the SAME model id on a row whose dollars are ours.
-    let estimated = UsageSnapshot { estimated: true, ..reported.clone() };
-    let estimated = UsageSnapshot { key: "sess-estimated".to_string(), agent_id: "w-estimated".to_string(), ..estimated };
-    reg.upsert_usage_snapshot(&g.id, reported);
-    reg.upsert_usage_snapshot(&g.id, estimated);
+    reg.upsert_usage_snapshot(&g.id, stored(&a.id, a.session_id.as_deref().unwrap(), false));
+    reg.upsert_usage_snapshot(&g.id, stored(&b.id, b.session_id.as_deref().unwrap(), true));
     let usage = reg.group_usage(&g.id);
 
-    let row = cost_row(&usage, "w-reported");
-    assert_eq!(row["price_per_mtok"], Value::Null, "pi's dollars are pi's: {row}");
-    assert_eq!(row["price_dated"], Value::Null);
-    assert_eq!(row["prompt_chars_per_token"], Value::Null);
+    let row = cost_row(&usage, &a.id);
+    assert_eq!(row["live"], json!(true), "control: the row is live, so it has an estimate object: {row}");
+    assert_eq!(row["estimated"], json!(false), "control: the stored row survived the tick: {row}");
+    for key in PRICE_KEYS {
+        assert_eq!(row["prompt_cost"][key], Value::Null, "{key}: a reported row's dollars are its CLI's: {row}");
+    }
     // The token half of the estimate does not depend on a price.
-    assert_eq!(row["first_context_tokens"], json!(12_000));
-    // pi has no default TTL and nothing was detected: no state is claimed.
-    assert_eq!(row["cache_ttl_minutes"], Value::Null);
-    assert_eq!(row["cache_ttl_source"], Value::Null);
+    assert_eq!(row["prompt_cost"]["first_context_tokens"], json!(12_000));
 
-    let row = cost_row(&usage, "w-estimated");
-    assert_eq!(row["price_per_mtok"]["input"], json!(5.0), "the same id IS priced where the dollars are ours: {row}");
-    // Neither row is a live agent, so neither has a context reading.
-    assert_eq!(row["context_tokens"], Value::Null);
+    // The control: the SAME model id, priced, where the dollars are ours.
+    let row = cost_row(&usage, &b.id);
+    assert_eq!(row["estimated"], json!(true));
+    assert_eq!(row["prompt_cost"]["price_per_mtok"]["input"], json!(5.0), "{row}");
+    assert_eq!(row["prompt_cost"]["price_model"], "anthropic/claude-opus-4-8");
 }
 
-/// A `usage.json` in the shape 1.3.1-beta8 writes: every field `UsageSnapshot`
-/// has at that release, in its order, and neither of the two #3831 adds.
-const BETA8_USAGE_JSON: &str = r#"[
-  {
-    "key": "sess-old",
-    "agent_id": "w-old",
-    "name": "w-old",
-    "role": "worker",
-    "source": "transcript",
-    "block": "worker",
-    "cli": "claude",
-    "input_tokens": 1200,
-    "output_tokens": 340,
-    "cache_creation_tokens": 5000,
-    "cache_read_tokens": 910000,
-    "cost_usd": 1.25,
-    "estimated": true,
-    "model": "claude-opus-4-8",
-    "current_model": "claude-opus-4-8",
-    "updated_ms": 1759900000000,
-    "activity": {
-      "last_active_ms": 1759900000000,
-      "last_wake": null,
-      "baseline": {
-        "source": "transcript",
-        "counters": {
-          "input": 1200,
-          "output": 340,
-          "cache_creation": 5000,
-          "cache_read": 910000
-        },
-        "cost_usd": 1.25
-      }
+#[test]
+fn a_row_whose_agent_is_gone_carries_no_estimate_object() {
+    // The estimate is about a pane's NEXT prompt. A historical row has none,
+    // and it is also the row the MCP `group_usage` tool hands an agent ten at
+    // a time — so it carries one `null`, not eight null keys.
+    let (reg, _d) = test_registry();
+    let g = reg.create_group("C:/tmp/repo", rails()).unwrap();
+    reg.upsert_usage_snapshot(
+        &g.id,
+        UsageSnapshot { first_context_tokens: Some(9_000), ..usage_snap("sess-gone", "w-gone", 0.4, 1_000, 10) },
+    );
+    let usage = reg.group_usage(&g.id);
+    let row = cost_row(&usage, "w-gone");
+    assert_eq!(row["live"], json!(false));
+    assert_eq!(row["prompt_cost"], Value::Null, "{row}");
+    assert!(row.as_object().unwrap().contains_key("prompt_cost"), "the key is present and null, not absent");
+    // The TTL fields are not part of the estimate and are still there.
+    assert_eq!(row["cache_ttl_minutes"], json!(5));
+    // Nothing leaks out flat beside it.
+    for key in PRICE_KEYS.iter().chain(["context_tokens", "first_context_tokens"].iter()) {
+        assert!(!row.as_object().unwrap().contains_key(*key), "{key} must live under prompt_cost: {row}");
     }
-  }
-]"#;
+}
 
-/// The row as a build BEFORE #3831 declares it — the same fields, and like
-/// `UsageSnapshot` no `deny_unknown_fields`. Reading today's file through this
-/// is what "an older build still reads what this one writes" means.
+/// A `usage.json` as the build before #3831 wrote it: seven rows cut out of a
+/// real store, one per `source`. The file is named for v1.3.1-beta7, and its
+/// field set is the one `UsageSnapshot` still had at v1.3.1-beta8 — the
+/// release this change is cut from — so it is that build's shape too. See
+/// `fixtures/usagestore/README.md`.
+const USAGE_BEFORE_3831: &str = include_str!("../fixtures/usagestore/usage-v1.3.1-beta7.json");
+
+/// The row as a build BEFORE #3831 declares it — the same seventeen fields,
+/// and like `UsageSnapshot` no `deny_unknown_fields`. Reading today's file
+/// through this is what "an older build still reads what this one writes"
+/// means.
 #[derive(serde::Deserialize)]
 #[allow(dead_code)]
-struct Beta8Row {
+struct RowBefore3831 {
     key: String,
     agent_id: String,
     name: String,
@@ -242,6 +250,17 @@ struct Beta8Row {
     activity: Value,
 }
 
+/// The key set of every row in a `usage.json`, by the row's `key`.
+fn row_keys(text: &str) -> BTreeMap<String, BTreeSet<String>> {
+    let rows: Vec<Value> = serde_json::from_str(text).expect("a row list");
+    rows.iter()
+        .map(|r| {
+            let obj = r.as_object().expect("a row object");
+            (obj["key"].as_str().unwrap().to_string(), obj.keys().cloned().collect())
+        })
+        .collect()
+}
+
 #[test]
 fn a_usage_file_from_before_the_prompt_cost_fields_loads_unchanged() {
     let (reg, _d) = test_registry();
@@ -249,33 +268,41 @@ fn a_usage_file_from_before_the_prompt_cost_fields_loads_unchanged() {
     let dir = reg.state_root().join(g.id.as_str());
     fs::create_dir_all(&dir).unwrap();
     let path = dir.join("usage.json");
-    fs::write(&path, BETA8_USAGE_JSON).unwrap();
+    fs::write(&path, USAGE_BEFORE_3831).unwrap();
+    let before = row_keys(USAGE_BEFORE_3831);
+    assert_eq!(before.len(), 7, "control: the fixture's seven rows were read");
+    assert!(before.values().all(|k| k.len() == 17), "control: each in the seventeen-field shape");
 
-    // It loads: the row is there with its figures, and the two new fields
-    // read as unknown rather than failing the file or defaulting to a number.
+    // It loads: every row is there with its figures, and a row with nothing
+    // detected reads as its CLI's default TTL rather than failing the file.
     let usage = reg.group_usage(&g.id);
-    let row = cost_row(&usage, "w-old");
-    assert_eq!(row["tokens"]["total"], json!(1200 + 340 + 5000 + 910_000));
-    assert_eq!(row["cost_usd"], json!(1.25));
-    assert_eq!(row["last_active_ms"], json!(1_759_900_000_000u64));
-    assert_eq!(row["first_context_tokens"], Value::Null);
-    assert_eq!(row["cache_ttl_minutes"], json!(5), "nothing detected on an old row: the CLI default");
-    assert_eq!(row["cache_ttl_source"], "cli");
-    // And reading it did not rewrite it: the bytes are the ones beta8 wrote.
-    assert_eq!(fs::read_to_string(&path).unwrap(), BETA8_USAGE_JSON, "a read is not a migration");
+    assert_eq!(usage["agents"].as_array().unwrap().len(), 7);
+    let claude = cost_row(&usage, "rev-3694");
+    assert_eq!(claude["tokens"]["total"].as_u64(), Some(1_579_929));
+    assert_eq!(claude["cache_ttl_minutes"], json!(5), "nothing detected on an old row: the CLI default");
+    assert_eq!(claude["cache_ttl_source"], "cli");
+    let pi = cost_row(&usage, "rev-2658");
+    assert_eq!(pi["cache_ttl_minutes"], Value::Null, "and a CLI with no default still has none");
+    // Reading it did not rewrite it: the bytes are the ones it was given.
+    assert_eq!(fs::read_to_string(&path).unwrap(), USAGE_BEFORE_3831, "a read is not a migration");
     assert_eq!(audit_count(&reg, &g.id, "usage-corrupt"), 0);
 
-    // A row with nothing to say in the new fields persists in beta8's own
-    // shape: the keys are absent, not `null`.
+    // The first write this build makes re-serializes all seven. Each comes
+    // back with EXACTLY the keys it had — neither new key is added as `null`
+    // — and so does a new row that has nothing to say in them.
     reg.upsert_usage_snapshot(&g.id, usage_snap("sess-plain", "w-plain", 0.1, 10, 1));
     let disk = fs::read_to_string(&path).unwrap();
-    assert!(disk.contains("\"sess-plain\""), "control: the write happened: {disk}");
-    assert!(!disk.contains("first_context_tokens"), "{disk}");
-    assert!(!disk.contains("detected_cache_ttl_minutes"), "{disk}");
+    let after = row_keys(&disk);
+    assert_eq!(after.len(), 8, "control: the write happened, and kept every row");
+    for (key, keys) in &before {
+        assert_eq!(after.get(key), Some(keys), "{key}: a re-serialized older row keeps its own key set");
+    }
+    assert_eq!(after["sess-plain"].len(), 17, "a row with nothing to say persists in the older shape");
+    assert!(!disk.contains("first_context_tokens") && !disk.contains("detected_cache_ttl_minutes"), "{disk}");
 
     // A row that DOES carry them is written with them, and the file an older
-    // build then meets still parses as that build's row list — all three rows,
-    // old figures intact, the unknown keys ignored.
+    // build then meets still parses as that build's row list — all nine rows,
+    // old figures intact, the two unknown keys ignored.
     reg.upsert_usage_snapshot(
         &g.id,
         UsageSnapshot {
@@ -287,12 +314,21 @@ fn a_usage_file_from_before_the_prompt_cost_fields_loads_unchanged() {
     let disk = fs::read_to_string(&path).unwrap();
     assert!(disk.contains("\"first_context_tokens\": 40000"), "{disk}");
     assert!(disk.contains("\"detected_cache_ttl_minutes\": 60"), "{disk}");
-    let as_beta8: Vec<Beta8Row> = serde_json::from_str(&disk).expect("an older build reads the new file");
-    assert_eq!(as_beta8.len(), 3);
-    let old = as_beta8.iter().find(|r| r.key == "sess-old").expect("the beta8 row survived");
-    assert_eq!((old.input_tokens, old.cache_read_tokens, old.cost_usd), (1200, 910_000, Some(1.25)));
-    // ...and this build reads them back.
-    let row = cost_row(&reg.group_usage(&g.id), "w-new").clone();
-    assert_eq!(row["first_context_tokens"], json!(40_000));
-    assert_eq!(row["cache_ttl_minutes"], json!(60));
+    assert_eq!(row_keys(&disk)["sess-new"].len(), 19);
+    let older: Vec<RowBefore3831> = serde_json::from_str(&disk).expect("an older build reads the new file");
+    assert_eq!(older.len(), 9);
+    let kept = older.iter().find(|r| r.agent_id == "rev-3694").expect("the fixture's row survived");
+    assert_eq!(
+        kept.input_tokens + kept.output_tokens + kept.cache_creation_tokens + kept.cache_read_tokens,
+        1_579_929
+    );
+    // ...and this build reads them back, each row with its own answer.
+    let now: Vec<UsageSnapshot> = serde_json::from_str(&disk).expect("this build reads its own file");
+    let field = |agent: &str| {
+        let r = now.iter().find(|r| r.agent_id == agent).unwrap_or_else(|| panic!("{agent} is missing"));
+        (r.first_context_tokens, r.detected_cache_ttl_minutes)
+    };
+    assert_eq!(field("w-new"), (Some(40_000), Some(60)));
+    assert_eq!(field("rev-3694"), (None, None), "an old row reads as unknown, never as a number");
+    assert_eq!(cost_row(&reg.group_usage(&g.id), "w-new")["cache_ttl_minutes"], json!(60));
 }

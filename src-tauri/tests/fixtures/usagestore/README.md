@@ -29,3 +29,7 @@ and 2.58092079 dollars across the seven rows.
 
 Both files are read with `include_str!`, so a checkout that converts line
 endings changes the embedded whitespace and nothing a JSON parser sees.
+
+`tests/orchestration/promptcost.rs` (#3831) reads `usage-v1.3.1-beta7.json` too.
+Its seventeen-field row is still the shape v1.3.1-beta8 wrote, so it is the file
+from before `first_context_tokens` and `detected_cache_ttl_minutes` existed.

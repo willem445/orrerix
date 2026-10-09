@@ -555,8 +555,8 @@ struct TranscriptFold {
     ///
     /// **The last cache-WRITING request decides.** A request that only read
     /// the cache leaves this alone: a hit refreshes an entry for the lifetime
-    /// it was written with (the pricing page's cache table gives a hit the
-    /// "same duration as the preceding write"), so it is no evidence of a
+    /// it was written with (the pricing page's duration for a cache hit is
+    /// "Same duration as the preceding write"), so it is no evidence of a
     /// change. A later write on a different lifetime replaces it, which is
     /// what follows an account whose cache lifetime changes mid-session.
     write_ttl: Option<u32>,

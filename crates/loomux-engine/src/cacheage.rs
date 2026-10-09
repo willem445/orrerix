@@ -168,8 +168,8 @@ impl Counters {
 ///
 /// That is exactly the quantity that shows what a cold cache costs: a wake on
 /// a hot cache is mostly `cache_read_tokens` (0.1x input on Anthropic's
-/// table), a wake on a cold one is mostly `cache_creation_tokens` (1.25x) plus
-/// `input_tokens`. At the usage tick's one-second cadence it is usually one
+/// table), a wake on a cold one is mostly `cache_creation_tokens` (1.25x on the
+/// 5-minute cache, 2x on the 1-hour one) plus `input_tokens`. At the usage tick's one-second cadence it is usually one
 /// request; when two landed inside one tick it is both, which only ever makes
 /// the figure larger, never mislabels a hot read as cold.
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]

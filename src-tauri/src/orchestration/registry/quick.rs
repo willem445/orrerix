@@ -825,6 +825,9 @@ impl OrchRegistry {
             "max_review_rounds": rec.max_review_rounds,
         }));
         self.qd_emit_changed(group);
+        if seq > 0 {
+            return answer;
+        }
         // The limits ride on the answer of the call that began the task: an
         // idle root is handed no first message to carry them, and this is the
         // moment they start to apply.

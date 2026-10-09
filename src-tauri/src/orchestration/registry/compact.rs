@@ -2006,7 +2006,7 @@ impl OrchRegistry {
             let declared = g.block(&c.block).and_then(|b| b.cache_ttl_minutes);
             let detected = match declared {
                 Some(_) => None,
-                None => self.stored_detected_cache_ttl(&c.group, &c.usage_key),
+                None => None,
             };
             let ttl = cacheage::effective_ttl_minutes(declared, detected, cli);
             // The heuristic nudge's floor setting, resolved the way that feature

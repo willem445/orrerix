@@ -195,3 +195,43 @@ test("the tooltip names exactly what is missing", () => {
 test("every reason shows the same muted label", () => {
   assert.equal(CACHE_GAP_LABEL, "cache —");
 });
+
+// #3831 (restore): a pane reports its session once, when it has one and the
+// backend does not already hold that exact session.
+import { sessionToReport, type HumanPaneIdentity, type ReportedSession } from "../src/cacheage.ts";
+
+const soloSeven: HumanPaneIdentity = { agentId: "solo-7", role: "solo" };
+
+test("a restored solo or lead pane that has its session reports it", () => {
+  assert.deepEqual(
+    sessionToReport({ humanIdentity: soloSeven, sessionId: "s1", reported: null }),
+    { agentId: "solo-7", sessionId: "s1" },
+    "a solo pane"
+  );
+  assert.deepEqual(
+    sessionToReport({ humanIdentity: { agentId: "lead-1", role: "lead" }, sessionId: "s2", reported: null }),
+    { agentId: "lead-1", sessionId: "s2" },
+    "a lead pane"
+  );
+});
+
+test("a restored pane with no session yet reports nothing", () => {
+  assert.equal(sessionToReport({ humanIdentity: soloSeven, sessionId: null, reported: null }), null);
+});
+
+test("a pane that already reported this session reports nothing again", () => {
+  const reported: ReportedSession = { agentId: "solo-7", sessionId: "s1" };
+  assert.equal(sessionToReport({ humanIdentity: soloSeven, sessionId: "s1", reported }), null);
+});
+
+test("a terminal pane, or a delegate, reports nothing", () => {
+  assert.equal(sessionToReport({ humanIdentity: null, sessionId: "s1", reported: null }), null, "no identity");
+});
+
+test("a pane given a new agent reports its session to that agent", () => {
+  const reported: ReportedSession = { agentId: "solo-7", sessionId: "s1" };
+  assert.deepEqual(
+    sessionToReport({ humanIdentity: { agentId: "solo-9", role: "solo" }, sessionId: "s1", reported }),
+    { agentId: "solo-9", sessionId: "s1" }
+  );
+});

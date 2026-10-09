@@ -269,3 +269,20 @@ export function cacheChipTitle(
   lines.push(hint);
   return lines.join("\n");
 }
+
+// SCRATCH STUB B (#3831 restore red run): the decision always reports.
+export interface HumanPaneIdentity {
+  readonly agentId: string;
+  readonly role: "solo" | "lead";
+}
+export interface ReportedSession {
+  readonly agentId: string;
+  readonly sessionId: string;
+}
+export function sessionToReport(input: {
+  readonly humanIdentity: HumanPaneIdentity | null;
+  readonly sessionId: string | null;
+  readonly reported: ReportedSession | null;
+}): ReportedSession | null {
+  return { agentId: input.humanIdentity?.agentId ?? "none", sessionId: input.sessionId ?? "none" };
+}

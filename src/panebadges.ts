@@ -16,10 +16,13 @@ import { attentionPresentation, attentionDismiss, attentionChanged } from "./att
 import { WATCHED_MARK, WATCHED_TITLE } from "./watchedpanes";
 import { dismissStranded, requestCompact } from "./orchestration";
 import {
+  CACHE_GAP_LABEL,
   cacheChipLabel,
   cacheChipTitle,
+  cacheGapTitle,
   cacheState,
   wakeCostLine,
+  type CacheAgeLookup,
   type CacheAgeReading,
 } from "./cacheage";
 import { heldPresentation } from "./heldbadge";
@@ -517,24 +520,50 @@ export class PaneBadges {
    *  own. Idempotent on the rendered text: re-writing identical text would churn
    *  the DOM once per delivery for nothing. Header chrome only — never touches
    *  the pane's size. */
-  noteCacheAge(reading: CacheAgeReading | null, nowMs: number = Date.now()): void {
+  noteCacheAge(lookup: CacheAgeLookup, nowMs: number = Date.now()): void {
+    const reading = lookup.reading;
     this.cacheReading = reading;
-    const label = reading === null ? null : cacheChipLabel(reading, nowMs);
-    if (label === null || reading === null) {
-      if (!this.cacheChip.hidden) {
-        this.cacheChip.hidden = true;
-        this.cacheChip.textContent = "";
-        this.cacheChip.title = "";
-        delete this.cacheChip.dataset.state;
-      }
+    const facts = this.pane.facts();
+    // A pane that runs no harness has no cache to report, so it wears no chip.
+    // Every other pane with no reading wears the muted gap chip, and its tooltip
+    // names what is missing (#3831).
+    if (facts.harness === null) {
+      this.hideCacheChip();
       return;
     }
-    const state = cacheState(reading, nowMs).state;
+    if (reading === null) {
+      const title = cacheGapTitle(lookup.gap, {
+        cli: facts.harness,
+        remote: this.pane.isSshPane,
+        sessionKnown: facts.sessionId !== null,
+      });
+      this.paintCacheChip(CACHE_GAP_LABEL, "gap", title);
+      return;
+    }
+    const label = cacheChipLabel(reading, nowMs);
+    if (label === null) {
+      this.hideCacheChip();
+      return;
+    }
+    this.paintCacheChip(label, cacheState(reading, nowMs).state, cacheChipTitle(reading, nowMs));
+  }
+
+  /** Show the cache chip with this text, state and tooltip. Each part is
+   *  written only when it changed, so a delivery that changes nothing touches
+   *  no DOM. */
+  private paintCacheChip(label: string, state: string, title: string): void {
     if (this.cacheChip.textContent !== label) this.cacheChip.textContent = label;
     if (this.cacheChip.dataset.state !== state) this.cacheChip.dataset.state = state;
-    const title = cacheChipTitle(reading, nowMs);
     if (this.cacheChip.title !== title) this.cacheChip.title = title;
     if (this.cacheChip.hidden) this.cacheChip.hidden = false;
+  }
+
+  private hideCacheChip(): void {
+    if (this.cacheChip.hidden) return;
+    this.cacheChip.hidden = true;
+    this.cacheChip.textContent = "";
+    this.cacheChip.title = "";
+    delete this.cacheChip.dataset.state;
   }
 
   /** The cache chip's menu: what the last wake cost (read-only rows) and

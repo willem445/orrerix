@@ -7,6 +7,7 @@
 // role, and focus panes on request.
 
 import type { WakeCostReading } from "./cacheage";
+import { reportHumanSession } from "./humansession";
 import { invoke, listen } from "./transport.ts";
 import type { Grid } from "./grid";
 import type { Pane, PaneEvents } from "./pane";
@@ -1293,14 +1294,17 @@ export const SOLO_GROUP = "__solo__";
  *  for a shell/content pane (`!pane.isAgentPane`) — those stay not-capable, per
  *  the addendum's Worker-split note. Best-effort: a failed adopt just leaves the
  *  menu showing `NOT_CAPABLE_REASON` this time, retried on the next right-click. */
-async function adoptIfEligible(pane: Pane): Promise<void> {
+export async function adoptIfEligible(pane: Pane): Promise<void> {
   if (pane.orchGroupId || pane.channelAgentAgentId) return;
   if (!pane.isAgentPane || pane.ptyId === null) return;
   try {
-    const { agent_id } = await soloAdopt(pane.ptyId, pane.name, pane.workdir ?? "");
+    // The pane's CLI and session go with the adoption, so the usage row reads the
+    // pane's own transcript store rather than the class default (#3837 review N1).
+    const { agent_id } = await soloAdopt(pane.ptyId, pane.name, pane.workdir ?? "", pane.agentCli, pane.sessionId);
     // Adopted panes are ALWAYS delivery-only (soloAdopt mints no token) — see
     // `OrchRegistry::solo_adopt`.
     pane.setChannelAgent({ group: SOLO_GROUP, agentId: agent_id, role: "solo", canSend: false });
+    reportHumanSession(pane);
   } catch {
     /* best-effort — falls back to NOT_CAPABLE this time */
   }
@@ -3007,8 +3011,20 @@ export const soloBind = (agentId: string, ptyId: number): Promise<void> =>
  *  this feature, or on a CLI the human didn't opt into channel tools for) as
  *  a delivery-only member, on its first Connect gesture. Idempotent by pty:
  *  re-adopting an already-adopted pty returns its existing agent id. */
-export const soloAdopt = (ptyId: number, name: string, cwd: string): Promise<{ agent_id: string }> =>
-  invoke<{ agent_id: string }>("orch_solo_adopt", { ptyId, name, cwd });
+export const soloAdopt = (
+  ptyId: number,
+  name: string,
+  cwd: string,
+  cli?: string | null,
+  sessionId?: string | null
+): Promise<{ agent_id: string }> =>
+  invoke<{ agent_id: string }>("orch_solo_adopt", {
+    ptyId,
+    name,
+    cwd,
+    cli: cli ?? null,
+    sessionId: sessionId ?? null,
+  });
 
 /** What `orch_fork_agent` answers: the fork's agent id, pane name, and its
  *  session id when the CLI's fork names the child up front (claude per L1,

@@ -1,6 +1,7 @@
 # Design: prompt-cache age — the pane chip and compacting before idle
 
-Status: implemented (issue #3407).
+Status: implemented (issue #3407). Extended by #3831 PR A: the chip on every agent pane,
+see [Which panes wear the chip](#which-panes-wear-the-chip-3831).
 
 ## Problem
 
@@ -261,8 +262,76 @@ would be the wasted one.
   no public constructor. Its file is read by the same `drives_in_flight` whose
   review half is pinned.
 
-## Tests
+## Which panes wear the chip (#3831)
 
+The chip needs two things the backend can look up: the pane's identity, to find its usage
+row, and a usage source. For claude and pi the source is a session file named by a session
+id. Before #3831 a solo pane had neither: `__solo__` rows read the class default CLI and no
+session, so the chip never showed on one.
+
+- **Adopt at spawn (decision 1, yes).** `bindSoloIfNeeded` (`src/main.ts`) gives every
+  launcher agent pane that is not a lead an identity once its pty exists. A pane the
+  launcher gave a channel identity (`solo_prepare`) is bound as before. Every other pane
+  with a known harness is adopted with `orch_solo_adopt(pty, name, cwd, cli, session)`:
+  delivery-only, no token, nothing appended to its command line. The launcher's CLI and
+  session are passed, so claude and pi need no second round trip.
+- **The session id.** `orch_human_pane_session(agent_id, session_id)` records it on a
+  `Role::Solo` or `Role::Lead` entry. It refuses any other role (a delegate's session comes
+  from its own CLI, through the watcher), a different id on record, and an id that is not one path
+  component (the usage reader builds a transcript path from it). A solo pane is not
+  persisted, because `__solo__` has no roster. A lead's row is rewritten with its session. The
+  same id again is a success that changes nothing, so a restored pane can re-report the session its
+  entry already holds.
+- **Restored panes.** A restore (the resume, fresh and dormant arms), a fork and a resume that falls
+  back to a fresh respawn each give the pane an identity through `remintSoloIdentity`, which calls
+  `soloPrepare`. Each of those five call sites calls `reportHumanSession` right after the pane's pty
+  is bound, so a restored pane's session reaches the backend at once. A session the pane learns
+  later reaches it through the session-identified hook, which calls the same function. The two cover
+  both orders: a session known when the identity is set is reported then, and one learned after is
+  reported by the hook. The adopt-on-connect path (`orchestration.ts`) and the launch and adopt paths
+  (`bindSoloIfNeeded`, `bindLeadIfNeeded`) call it too.
+  A restore arm also adopts a harness pane that the remint left without an identity. `remintSoloIdentity`
+  mints none for a CLI it does not recognise, such as opencode, so `adoptIfEligible` adopts it there with its
+  CLI and its session, and the usage row then reads that CLI's own store.
+- **The CLI.** `compute_group_usage` and `agent_context_signals_for_group` resolve a pane's
+  CLI with `cli_for_agent`, which reads the pane's own `solo_cli` before its block. Every
+  other agent resolves exactly as it did (#2167).
+- **The lookup.** `cacheAgeFor(strip, identity)` takes one identity: the orchestration
+  identity when there is one, else the channel identity (`cacheIdentityOfPane`). It returns
+  a reading or one gap: `no-identity`, `no-row`, `no-tokens:<source>` (`statusline` for
+  copilot, `none` before any request), or `no-request-yet`. `cacheGapTitle` writes the
+  tooltip for each gap. The chip shows `cache —` only on a pane that runs a harness.
+
+**Contract changes (each one public).** `orch_human_pane_session` is a new command: ACL
+`allow-orch-human-pane-session` in the `orch-control` set, one manifest row, and the
+`app_commands_len_is_<N>` count. `orch_solo_adopt` gains two optional arguments, `cli` and
+`session_id`; a caller that passes neither behaves as before. The usage row's fields are
+unchanged in PR A.
+
+**Costs.** `cli_for_agent` clones one group's guardrails per live agent per usage tick. The
+existing callers of `cli_for_agent` already pay that. `agent_context_signals_for_group` now
+clones each running agent that has a session id, once per call.
+
+**Residuals.**
+
+- `orch_human_pane_session` is an async command over `run_blocking`, as `todo_apply` is, and
+  it still goes through `mutating_command`. Its audit append and a lead's roster write are
+  file I/O, and the roster write takes `tasks_lock`, which the task board shares. A synchronous
+  command doing that on the webview thread is what `perf_dispatch.rs` (INV-1) refuses without a
+  debt row, and a debt row needs an owning issue that has accepted the scope. None does.
+- SSH panes, and panes whose CLI the frontend does not know, get no identity. Gemini is not a
+  session source here, so it reads as a terminal.
+- **A session has one live holder.** `human_pane_session` and `solo_adopt` refuse a session
+  that another live pane holds, and a dead pane gives its claim up with its pty. Two live panes
+  on one transcript would merge into one usage row. The refused pane keeps no identity for that
+  session, so its chip reads `cache —` as not registered. A distinct gap for "another pane holds
+  this session" is a follow-up.
+- **The solo group's usage store and series never rotate.** `__solo__` never ends, and its rows
+  carry real counters from this change on. `usage-series.jsonl` gains a row per moved key per
+  bucket with no retention. A retention policy for a group that never ends is a separate
+  decision, so it is not made here.
+
+## Tests
 - `crates/loomux-engine/src/cacheage.rs` (unit): TTL resolution, including the
   override, `0` and an unknown CLI; the cooling band; every arm of the fold (no
   growth, bucket shuffle, wake after the gap, same turn inside it, the inclusive
@@ -283,5 +352,12 @@ would be the wasted one.
 - `test/cacheage.test.ts`: the state boundaries against the row's own threshold,
   the "cannot say" rungs, the labels, flooring, the wake line, the tooltip's
   inferred-not-observed wording, and every way the strip lookup answers null.
+- #3831 PR A: `tests/orchestration/cacheage.rs` (`a_solo_panes_usage_row_is_read_from_its_own_session`,
+  `the_usage_collector_reads_a_solo_panes_cli_off_its_own_record`,
+  `an_adopted_plain_pane_is_read_as_its_own_cli_and_session`,
+  `a_session_id_is_taken_once_by_a_solo_or_lead_pane_and_only_as_a_path_segment`),
+  `tests/lead.rs` (`a_lead_bind_then_session_reads_the_transcript`,
+  `a_solo_session_bind_writes_no_agents_json`, with the lead's persisted row as its positive
+  control), and `test/cacheage.test.ts` (the identity rule, each gap rung, the tooltip).
 - The header chip, its menu and the Agents-tab cell are DOM wiring over those
   modules, validated by hand (see the PR).

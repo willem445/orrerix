@@ -304,9 +304,41 @@ impl OrchRegistry {
     /// makes that pane a legitimate **receiver** rather than refusing the
     /// connect outright. Idempotent by pty: re-adopting an already-adopted
     /// pty returns its existing agent id instead of minting a second one.
-    pub fn solo_adopt(&self, pty_id: u32, name: &str, cwd: &str) -> Result<Value, String> {
+    ///
+    /// `cli` and `session_id` are what the launcher already knows about a pane
+    /// it spawned (#3831). The cache-age chip reads a pane's usage through its
+    /// CLI and its session, and an adopted plain pane has neither unless they
+    /// are given here. Both are optional. An unknown CLI, and a session id that
+    /// is not one path component (it names a transcript file), are refused
+    /// rather than recorded.
+    pub fn solo_adopt(
+        &self,
+        pty_id: u32,
+        name: &str,
+        cwd: &str,
+        cli: Option<&str>,
+        session_id: Option<&str>,
+    ) -> Result<Value, String> {
         if let Some(existing) = self.by_pty.lock_safe().get(&pty_id).cloned() {
             return Ok(json!({ "agent_id": existing }));
+        }
+        if let Some(c) = cli {
+            if cli_caps(c).is_none() {
+                return Err(format!("unknown CLI {c:?}: an adopted pane can only name a CLI loomux knows"));
+            }
+        }
+        if let Some(s) = session_id {
+            PathSegment::parse(s).map_err(|e| format!("invalid session id {s:?}: {e}"))?;
+            // The same refusal as `human_pane_session`, checked before anything is minted.
+            let holder = self
+                .agents
+                .lock_safe()
+                .values()
+                .find(|o| o.status != AgentStatus::Dead && o.session_id.as_deref() == Some(s))
+                .map(|o| o.id.clone());
+            if let Some(holder) = holder {
+                return Err(format!("session {s:?} is already held by live pane {holder}; one transcript belongs to one pane"));
+            }
         }
         self.ensure_solo_group();
         let seq = self.mint_agent_seq(solo_group_id());
@@ -328,7 +360,7 @@ impl OrchRegistry {
             forked_from: None,
             task: String::new(),
             task_id: None, // a solo pane has no board binding
-            session_id: None,
+            session_id: session_id.map(str::to_string),
             cwd: cwd.to_string(),
             branch: None, // solo panes aren't part of the multi-agent worktree/branch model
             idle_since_ms: None,
@@ -375,7 +407,7 @@ impl OrchRegistry {
             compact_escalation_notified: false,
             cache_idle_nudge_latched: false,
             idle_tick_skip_rearm_ms: 0,
-            solo_cli: None, // unknown for an adopted pane; cli_for_agent falls back to "claude"
+            solo_cli: cli.map(str::to_string), // as the launcher knows it; `cli_for_agent` reads it first
             last_exit_tail: None,
             killed_by: None,
         };
@@ -405,6 +437,59 @@ impl OrchRegistry {
         Ok(json!({ "agent_id": agent_id }))
     }
 
+
+    /// Human-only (#3831): record the session id of a solo or lead pane whose
+    /// CLI named it after the pane was registered — claude and pi name theirs
+    /// at launch, so a pane bound after its spawn already has one, and codex,
+    /// opencode and copilot learn theirs later.
+    ///
+    /// Only a `Role::Solo` or `Role::Lead` entry takes one: a delegate learns
+    /// its session from its own CLI through the watcher, and this door must not
+    /// give it a second source. The same id again is a success that changes
+    /// nothing: a restored pane re-reports the session its entry already holds. A
+    /// different id on record is refused and never overwritten. An id that is not
+    /// one path component is refused, because the usage reader builds a transcript
+    /// path from it.
+    ///
+    /// A solo pane is NOT persisted. `__solo__` has no roster: `agents.json` in
+    /// a group directory is read as that group's roster, and a solo pane is the
+    /// human's own pane, not a member of anything. A lead's row is already
+    /// persisted by `lead_prepare`, so its session is written back to that row.
+    pub fn human_pane_session(&self, agent_id: &str, session_id: &str) -> Result<(), String> {
+        PathSegment::parse(session_id).map_err(|e| format!("invalid session id {session_id:?}: {e}"))?;
+        let entry = {
+            let mut agents = self.agents.lock_safe();
+            // One transcript belongs to one pane. A second LIVE entry on the same
+            // session would merge two panes into one usage row, so the claim is
+            // refused. A dead entry has given its session up with its pty.
+            if let Some(holder) = agents
+                .values()
+                .find(|o| o.id.as_str() != agent_id && o.status != AgentStatus::Dead && o.session_id.as_deref() == Some(session_id))
+                .map(|o| o.id.clone())
+            {
+                return Err(format!("session {session_id:?} is already held by live pane {holder}; one transcript belongs to one pane"));
+            }
+            let a = agents.get_mut(agent_id).ok_or("unknown agent")?;
+            if !matches!(a.role, Role::Solo | Role::Lead) {
+                return Err("human_pane_session is only for solo and lead panes".into());
+            }
+            if let Some(existing) = a.session_id.as_deref() {
+                // The same id again is the session the entry already holds — a restored
+                // pane re-reporting it. Nothing changes, so nothing is audited or written.
+                if existing == session_id {
+                    return Ok(());
+                }
+                return Err(format!("{agent_id} already has session {existing:?}; a different id is never written over it"));
+            }
+            a.session_id = Some(session_id.to_string());
+            a.clone()
+        };
+        self.audit(&entry.group, "human", "session-learned", json!({ "agent": agent_id, "session": session_id }));
+        if entry.role == Role::Lead {
+            self.persist_agent_record(&entry, "running");
+        }
+        Ok(())
+    }
 
     // ---------- lead panes (#2519) ----------
     //

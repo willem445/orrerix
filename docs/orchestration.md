@@ -4187,12 +4187,30 @@ model request, measured against its provider's prompt-cache TTL:
 - **`cold`**: the TTL has passed. The next request re-reads the whole context uncached.
 - **`idle 12m`**: the pane's CLI has no known TTL (copilot, opencode and pi route to
   several providers), so you see the age and no claim about the cache.
+- **`cache —`**: the pane has no reading yet. The tooltip says what is missing (below).
 
 **The state is inferred, not observed.** Nothing tells orrerix that a cache is still
 there. It knows when the pane's usage counters last moved, and it knows the TTL the
 provider documents. The inference leans slightly toward "hot", by about the length of the
 last response, and the cooling stretch is sized to cover that. The chip rides the same
 snapshot read the tab strip already makes, so it costs no extra polling.
+
+**Which panes wear the chip.** Every pane that runs an agent CLI: a solo pane you launch
+from the launcher, a lead pane, and each orchestration agent. A launcher pane gets an
+orrerix identity as it opens, so its usage can be read. claude, pi, copilot and codex
+get the full identity when channel tools are on. Any other agent pane is adopted as a
+delivery-only member, and nothing is added to its command line. A terminal pane has no
+chip at all. A pane restored after a restart shows its chip again after its next request.
+
+**`cache —`** is the muted chip for a pane the chip cannot read. Its tooltip names the
+missing piece:
+
+- **Not registered**: orrerix has no identity for the pane, so it cannot find its usage.
+- **Copilot** writes no token record, so orrerix cannot see its requests.
+- **An SSH pane** runs its session on the remote host, which orrerix cannot read.
+- **No session yet**: codex and opencode name their session only after they start, so
+  the chip waits for it.
+- **No request yet**: the session is known, but its first request has not landed.
 
 **Click the chip** for two things:
 

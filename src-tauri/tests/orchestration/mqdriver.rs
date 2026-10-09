@@ -796,7 +796,7 @@ fn concurrent_solo_adopts_of_one_pty_mint_exactly_one_identity() {
                 let barrier = std::sync::Arc::clone(&barrier);
                 std::thread::spawn(move || {
                     barrier.wait(); // start both inside the window, not one after the other
-                    reg.solo_adopt(pty, "already running", "C:/tmp/x").unwrap()
+                    reg.solo_adopt(pty, "already running", "C:/tmp/x", None, None).unwrap()
                 })
             })
             .collect();

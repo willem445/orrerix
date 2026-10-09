@@ -12,7 +12,8 @@ import { SessionBrowser, timeAgo } from "./sessions";
 import { LeftPanel } from "./leftpanel";
 import { AgentsView } from "./agentsview";
 import { rosterIdleFor } from "./rosteridle";
-import { cacheAgeFor } from "./cacheage";
+import { cacheAgeFor, cacheIdentityOfPane } from "./cacheage";
+import { reportHumanSession } from "./humansession";
 import {
   ensureOutputRouter,
   onPtyExit,
@@ -80,6 +81,8 @@ import {
   cancelPendingConnect,
   soloPrepare,
   soloBind,
+  soloAdopt,
+  adoptIfEligible,
   leadPrepare,
   leadBind,
   quickStart,
@@ -694,6 +697,9 @@ function eventsFor(ws: Workspace): PaneEvents {
       if (facts.sessionId === null) return;
       const sessionId = facts.sessionId;
       void sessionLog.rekey(pane.key, sessionId, Date.now()).then(() => recordPaneSession(pane));
+      // #3831: a session learned after the pane's identity was set. Reporting it
+      // here is what gives a restored or launched pane the chip from its next request.
+      reportHumanSession(pane);
     },
   };
 }
@@ -947,6 +953,8 @@ const orchWiring: OrchWiring = {
       source
     );
     if (pane.ptyId !== null) remint.bind(pane.ptyId);
+    if (pane.agentCli !== null) await adoptIfEligible(pane);
+    reportHumanSession(pane);
     reapIfExited(ws, pane);
     onGridChanged();
     persistTabs();
@@ -1375,6 +1383,8 @@ async function openActionPane(
         anchor
       );
       if (pane.ptyId !== null) remint.bind(pane.ptyId);
+      if (pane.agentCli !== null) await adoptIfEligible(pane);
+      reportHumanSession(pane);
       bindLeadTab(ws, remint);
       // #456: a restored kickoff is trusted no differently than a fresh one
       // (#364's own precedent for the group path) — checked against the
@@ -1440,6 +1450,8 @@ async function openActionPane(
         anchor
       );
       if (pane.ptyId !== null) remint.bind(pane.ptyId);
+      if (pane.agentCli !== null) await adoptIfEligible(pane);
+      reportHumanSession(pane);
       bindLeadTab(ws, remint);
       // #456: see the identical guard in "resume-agent" above.
       if (shouldWatchCopilotOnRestore(remint.command ?? null, remint.argv ?? null) && pane.ptyId !== null) {
@@ -1527,6 +1539,8 @@ async function openActionPane(
               ...leadPaneOptions(remint),
             });
             if (pane.ptyId !== null) remint.bind(pane.ptyId);
+            if (pane.agentCli !== null) await adoptIfEligible(pane);
+            reportHumanSession(pane);
             bindLeadTab(ws, remint);
             // #456: today's most-reachable copilot restore path — copilot
             // never carries a tracked session id on this build, so it always
@@ -1600,7 +1614,12 @@ async function openActionPane(
                   ...rewrite,
                   sessionId: candidate.id,
                 })
-                .then(() => onGridChanged());
+                .then(async () => {
+                  // #3831: the card's resume gets the same identity as the restore arms.
+                  if (pane.agentCli !== null) await adoptIfEligible(pane);
+                  reportHumanSession(pane);
+                  onGridChanged();
+                });
             }
           );
         });
@@ -2505,9 +2524,11 @@ function tryResumeFallback(pane: Pane, exit: PtyExit): boolean {
     (remint) =>
       pane
         .respawnFresh({ ...fb.opts, command: remint.command, argv: remint.argv, ...leadPaneOptions(remint) })
-        .then(() => {
+        .then(async () => {
           if (!wasLead) pane.setChannelAgent(remint.channelAgent ?? null);
           if (pane.ptyId !== null) remint.bind(pane.ptyId);
+          if (pane.agentCli !== null) await adoptIfEligible(pane);
+          reportHumanSession(pane);
           bindLeadTab(leadWs, remint);
           onGridChanged();
         })
@@ -2894,14 +2915,36 @@ async function bindLeadIfNeeded(ws: Workspace, pane: Pane, spec: AgentLaunchSpec
   } catch (err) {
     showToast(`"${spec.name}" opened, but its lead briefing didn't arrive: ${String(err)}`, "error");
   }
+  // #3831: the lead's session, so its cache-age chip reads its own transcript.
+  reportHumanSession(pane);
 }
 
 async function bindSoloIfNeeded(pane: Pane, spec: AgentLaunchSpec): Promise<void> {
-  if (!spec.channelAgent || pane.ptyId === null) return;
+  if (pane.ptyId === null) return;
+  if (spec.channelAgent) {
+    const agentId = spec.channelAgent.agentId;
+    try {
+      await soloBind(agentId, pane.ptyId);
+    } catch {
+      /* best-effort — the pane just won't be channel-connectable until adopted */
+    }
+    // A session the launcher minted onto the command line (claude, pi) is
+    // recorded now, so the pane's usage reads from its own transcript from its
+    // first request (#3831).
+    reportHumanSession(pane);
+    return;
+  }
+  // #3831: every other harness agent pane is adopted at spawn, so the cache-age
+  // chip has an identity to read. A lead has its own (`bindLeadIfNeeded`), and a
+  // pane whose CLI the frontend does not know has no harness to read.
+  const cli = pane.agentCli;
+  if (spec.lead || cli === null) return;
   try {
-    await soloBind(spec.channelAgent.agentId, pane.ptyId);
+    const adopted = await soloAdopt(pane.ptyId, spec.name, spec.cwd ?? "", cli, pane.sessionId);
+    pane.setChannelAgent({ group: SOLO_GROUP, agentId: adopted.agent_id, role: "solo", canSend: false });
+    reportHumanSession(pane);
   } catch {
-    /* best-effort — the pane just won't be channel-connectable until adopted */
+    /* best-effort — the pane is adopted on its first Connect gesture, as before */
   }
 }
 
@@ -3603,6 +3646,10 @@ async function restoreSession(s: SessionInfo): Promise<void> {
     eventsFor(ws),
     ws.grid.paneCount >= 2 ? "column" : "row"
   );
+  // #3831: a session resumed from the Sessions sidebar gets the identity the
+  // restore arms give theirs, so its chip reads its own transcript.
+  if (pane.agentCli !== null) await adoptIfEligible(pane);
+  reportHumanSession(pane);
   // #456: only when `s.resume_command` actually carries `--autopilot` (the
   // backend appends it only for an unambiguous loomux-recorded ON posture —
   // see sessions.rs) is there any dialog for this watcher to answer. Gating
@@ -4082,7 +4129,7 @@ void (async () => {
         pane.noteRosterIdle(rosterIdleFor(strip, pane.orchGroupId, pane.orchAgentId));
         // #3407: the cache-age chip rides the same read. Every pane is told, for
         // the reason above — a pane that lost its binding must drop its chip.
-        pane.noteCacheAge(cacheAgeFor(strip, pane.orchGroupId, pane.orchAgentId));
+        pane.noteCacheAge(cacheAgeFor(strip, cacheIdentityOfPane(pane)));
       }
     }
     refreshAgents();

@@ -1492,21 +1492,17 @@ impl OrchRegistry {
         &self,
         only_group: Option<&GroupId>,
     ) -> HashMap<String, crate::usage::CompactionSignal> {
-        let rows: Vec<(String, String, GroupId, workflow::BlockId, Role)> = self
+        // Whole entries, cloned out from under the lock: the CLI is resolved below
+        // through `cli_for_agent`, which needs the entry (#3831), and it reads the
+        // groups lock, which must not be taken while this one is held.
+        let rows: Vec<AgentEntry> = self
             .agents
             .lock_safe()
             .values()
             .filter(|agent| agent.status == AgentStatus::Running)
             .filter(|agent| only_group.map_or(true, |group| &agent.group == group))
-            .filter_map(|agent| {
-                Some((
-                    agent.id.clone(),
-                    agent.session_id.clone()?,
-                    agent.group.clone(),
-                    agent.block.clone(),
-                    agent.role,
-                ))
-            })
+            .filter(|agent| agent.session_id.is_some())
+            .cloned()
             .collect();
         if rows.is_empty() {
             return HashMap::new();
@@ -1519,21 +1515,24 @@ impl OrchRegistry {
             .map(|(id, group)| (id.clone(), group.guardrails.clone()))
             .collect();
         // The block's effort knob rides along for pi's fallback. Resolved the
-        // way `cli_for_block` resolves the CLI — the agent's own block, else its
-        // class default — so the two describe the same block. Already clamped
-        // to what the CLI honors (`Guardrails::clamped`), so it is the value the
-        // launch line passed as `--thinking`.
+        // way `cli_for_block` resolves the block (the agent's own, else its
+        // class default), and the CLI through `cli_for_agent`, the resolution
+        // the usage tick reads, so the two describe the same pane. Already
+        // clamped to what the CLI honors (`Guardrails::clamped`), so it is the
+        // value the launch line passed as `--thinking`.
         let candidates: Vec<(String, String, GroupId, String, String)> = rows
             .into_iter()
-            .filter_map(|(id, sid, group, block, role)| {
-                let rails = guardrails.get(&group)?;
-                let cli = rails.cli_for_block(&block, role).to_string();
+            .filter_map(|agent| {
+                let rails = guardrails.get(&agent.group)?;
+                // The same resolution `compute_group_usage` reads (#3831): a solo
+                // pane's own CLI, else its block's.
+                let cli = self.cli_for_agent(&agent);
                 let effort = rails
-                    .block(&block)
-                    .or_else(|| rails.block_for(role))
+                    .block(&agent.block)
+                    .or_else(|| rails.block_for(agent.role))
                     .map(|b| b.effort.clone())
                     .unwrap_or_default();
-                Some((id, sid, group, cli, effort))
+                Some((agent.id.clone(), agent.session_id.clone()?, agent.group.clone(), cli, effort))
             })
             .collect();
         let claude_root = self

@@ -32,7 +32,7 @@ use loomux_lib::orchestration::workflow;
 use loomux_lib::orchestration::{
     counts_against_max_agents, is_live_cap_refusal, mechanics_core, resume_recorded_session,
     spawn_opens_minimized, AgentEntry, Caller, Delivery, GroupId, Guardrails, OrchRegistry,
-    Role, CLI_CAPS,
+    solo_group_id, Role, CLI_CAPS,
 };
 use serde_json::{json, Value};
 use std::collections::BTreeSet;
@@ -1992,4 +1992,187 @@ fn a_leads_named_self_fork_carries_its_name_on_the_request() {
     let rows = fork_rows(&reg, &gid, "agent-fork-requested");
     assert_eq!(rows.len(), 3, "{rows:?}");
     assert_eq!(rows[2]["detail"]["name"], json!(format!("é{}", "x".repeat(39))));
+}
+
+// #3831 PR A — a lead pane's session is taken on its bound pane, and a solo
+// pane's never reaches a roster file.
+
+/// One Claude assistant turn for `sid` with `input` tokens, under `proj`.
+fn write_lead_claude_turn(proj: &Path, sid: &str, input: u64) {
+    let dir = proj.join("C--tmp-lead");
+    std::fs::create_dir_all(&dir).unwrap();
+    let line = json!({"type":"assistant","message":{"id":format!("m{input}"),
+        "model":"claude-opus-4-8",
+        "usage":{"input_tokens":input,"output_tokens":0,
+                 "cache_creation_input_tokens":0,"cache_read_input_tokens":0}}});
+    std::fs::write(dir.join(format!("{sid}.jsonl")), format!("{line}\n")).unwrap();
+}
+
+/// The usage row for `agent` in a `group_usage` value.
+fn agent_usage_row(usage: &Value, agent: &str) -> Value {
+    usage["agents"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|r| r["id"] == agent)
+        .unwrap_or_else(|| panic!("no usage row for {agent}: {usage}"))
+        .clone()
+}
+
+#[test]
+fn a_lead_bind_then_session_reads_the_transcript() {
+    let proj = tempfile::tempdir().unwrap();
+    let (reg, _d, _repo, gid, agent, _out) = prepared_lead("claude", 4);
+    reg.set_claude_projects_dir(proj.path().to_path_buf());
+    reg.lead_bind(&agent, 9601).unwrap();
+    reg.human_pane_session(&agent, "lead-session").expect("a bound lead takes its session id");
+
+    let before = reg.group_usage(&gid);
+    assert_eq!(agent_usage_row(&before, &agent)["source"], "none");
+
+    write_lead_claude_turn(proj.path(), "lead-session", 2000);
+    let after = reg.group_usage(&gid);
+    let row = agent_usage_row(&after, &agent);
+    assert_eq!(row["source"], "transcript", "{row}");
+    assert_eq!(row["tokens"]["input"], json!(2000));
+}
+
+#[test]
+fn a_solo_session_bind_writes_no_agents_json() {
+    // A solo pane is not a roster member. `__solo__` must never grow an
+    // `agents.json`: the session-baseline and recorded-groups readers walk every
+    // group directory's roster, and a solo pane would turn up in them.
+    let (reg, _d) = test_registry();
+    let prepared = reg.solo_prepare("claude", "C:/tmp/solo", "solo").unwrap();
+    let agent = prepared["agent_id"].as_str().unwrap().to_string();
+    reg.solo_bind(&agent, 9501).unwrap();
+    reg.human_pane_session(&agent, "solo-roster-session").unwrap();
+    let solo_roster = reg.state_root().join(solo_group_id().as_str()).join("agents.json");
+    assert!(!solo_roster.exists(), "a solo session bind wrote {}", solo_roster.display());
+
+    // Positive control: the same call on a lead DOES persist its row, so the
+    // absence above is the solo rule and not a roster that never writes.
+    let (lead_reg, _d2, _repo, gid, lead, _out) = prepared_lead("claude", 4);
+    lead_reg.lead_bind(&lead, 9502).unwrap();
+    lead_reg.human_pane_session(&lead, "lead-roster-session").unwrap();
+    let lead_roster = lead_reg.state_root().join(gid.as_str()).join("agents.json");
+    let text = std::fs::read_to_string(&lead_roster).expect("a lead's roster is written");
+    assert!(text.contains("lead-roster-session"), "the lead's row carries its session: {text}");
+}
+
+// #3831 (restore): a restored pane re-reports the session its backend entry
+// already holds, and a different id is still refused and the held one kept.
+#[test]
+fn re_reporting_the_session_a_pane_holds_is_not_an_error() {
+    let (reg, _d) = test_registry();
+    let prepared = reg.solo_prepare("claude", "C:/tmp/solo", "solo").unwrap();
+    let solo = prepared["agent_id"].as_str().unwrap().to_string();
+    reg.human_pane_session(&solo, "restored-solo").unwrap();
+    reg.human_pane_session(&solo, "restored-solo")
+        .expect("a restored pane re-reporting the id its entry already holds is a success");
+    assert_eq!(reg.agent(&solo).unwrap().session_id.as_deref(), Some("restored-solo"));
+
+    let (lead_reg, _d2, _repo, _gid, lead, _out) = prepared_lead("claude", 4);
+    lead_reg.lead_bind(&lead, 9701).unwrap();
+    lead_reg.human_pane_session(&lead, "restored-lead").unwrap();
+    lead_reg
+        .human_pane_session(&lead, "restored-lead")
+        .expect("the same holds for a lead pane");
+    assert_eq!(lead_reg.agent(&lead).unwrap().session_id.as_deref(), Some("restored-lead"));
+}
+
+#[test]
+fn a_different_session_id_is_refused_and_the_held_one_stays() {
+    let (reg, _d) = test_registry();
+    let prepared = reg.solo_prepare("claude", "C:/tmp/solo", "solo").unwrap();
+    let solo = prepared["agent_id"].as_str().unwrap().to_string();
+    reg.human_pane_session(&solo, "held-solo").unwrap();
+    assert!(
+        reg.human_pane_session(&solo, "other-solo").is_err(),
+        "a different id is never written over the one on record"
+    );
+    assert_eq!(reg.agent(&solo).unwrap().session_id.as_deref(), Some("held-solo"));
+
+    let (lead_reg, _d2, _repo, _gid, lead, _out) = prepared_lead("claude", 4);
+    lead_reg.lead_bind(&lead, 9702).unwrap();
+    lead_reg.human_pane_session(&lead, "held-lead").unwrap();
+    assert!(
+        lead_reg.human_pane_session(&lead, "other-lead").is_err(),
+        "a different id is never written over the one on record, for a lead either"
+    );
+    assert_eq!(lead_reg.agent(&lead).unwrap().session_id.as_deref(), Some("held-lead"));
+}
+
+// #3837 review: a refused session id adopts nothing; an adopted opencode pane is
+// read as opencode; a solo pi pane's context signal comes from pi's own store.
+
+#[test]
+fn solo_adopt_refuses_a_session_id_that_is_not_one_path_component() {
+    let (reg, _d) = test_registry();
+    assert!(
+        reg.solo_adopt(7201, "bad session", "C:/tmp/solo", Some("claude"), Some("../escape")).is_err(),
+        "an adopted pane's session names a transcript file, so it must be one path component"
+    );
+    // The refusal adopted nothing, so the same pty adopts cleanly with a good id.
+    let ok = reg.solo_adopt(7201, "bad session", "C:/tmp/solo", Some("claude"), Some("good-session")).unwrap();
+    let agent = ok["agent_id"].as_str().unwrap().to_string();
+    assert_eq!(reg.agent(&agent).unwrap().session_id.as_deref(), Some("good-session"));
+}
+
+#[test]
+fn an_adopted_opencode_pane_is_read_as_opencode_not_as_the_class_default() {
+    let (reg, _d) = test_registry();
+    let adopted = reg
+        .solo_adopt(7301, "opencode pane", "C:/tmp/solo", Some("opencode"), Some("ses_abc"))
+        .unwrap();
+    let agent = adopted["agent_id"].as_str().unwrap().to_string();
+    let u = reg.group_usage(solo_group_id());
+    let row = agent_usage_row(&u, &agent);
+    assert_eq!(row["cli"], "opencode", "{row}");
+    assert_eq!(row["cache_ttl_minutes"], Value::Null, "opencode documents no fixed cache lifetime: {row}");
+}
+
+/// A pi session file for `id` under `dir`, named the way pi names it.
+fn write_pi_session(dir: &Path, id: &str, text: &str) {
+    std::fs::create_dir_all(dir).unwrap();
+    std::fs::write(dir.join(format!("2026-09-03T03-06-45-266Z_{id}.jsonl")), text).unwrap();
+}
+
+#[test]
+fn a_solo_pi_panes_context_signal_comes_from_pi_s_own_store() {
+    // The signal read resolves a pane's CLI through `cli_for_agent`. Read as the
+    // class default, claude, a solo pi pane's session would be looked for in
+    // claude's store and found nowhere.
+    let proj = tempfile::tempdir().unwrap();
+    let (reg, _d) = test_registry();
+    reg.set_claude_projects_dir(proj.path().to_path_buf());
+    let prepared = reg.solo_prepare("pi", "C:/tmp/solo", "pi solo").unwrap();
+    let agent = prepared["agent_id"].as_str().unwrap().to_string();
+    // The signal read covers Running agents only, and a solo pane starts Starting.
+    reg.solo_bind(&agent, 7401).unwrap();
+    let sid = "pi-solo-session";
+    reg.human_pane_session(&agent, sid).unwrap();
+    let header = json!({
+        "type": "session", "version": 3, "id": sid,
+        "timestamp": "2026-09-03T03:06:45.266Z", "cwd": "C:/tmp/solo",
+    })
+    .to_string();
+    let message = json!({
+        "type": "message", "id": "e1", "parentId": null,
+        "timestamp": "2026-09-03T03:06:45.266Z",
+        "message": {
+            "role": "assistant", "content": [{ "type": "text", "text": "ok" }],
+            "api": "openai-completions", "provider": "openrouter", "model": "z-ai/glm-5.3-flash",
+            "usage": { "input": 1000, "output": 0, "cacheRead": 0, "cacheWrite": 0, "totalTokens": 1000 },
+            "stopReason": "stop", "timestamp": 1_772_000_000_000u64,
+        },
+    })
+    .to_string();
+    write_pi_session(&reg.pi_sessions_dir(solo_group_id()), sid, &format!("{header}\n{message}\n"));
+    let signals = reg.agent_context_signals_for_group(Some(solo_group_id()));
+    assert!(
+        signals.contains_key(&agent),
+        "a solo pi pane is read from pi's own store: {:?}",
+        signals.keys().collect::<Vec<_>>()
+    );
 }

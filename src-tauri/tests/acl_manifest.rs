@@ -83,6 +83,7 @@ stub_commands!(
     orch_end_group, orch_channel_connect,
     orch_channel_disconnect, orch_channel_list, orch_channel_for_pane, orch_channel_set_sender,
     orch_solo_prepare, orch_solo_bind, orch_confirm_solo_copilot_autopilot, orch_solo_adopt,
+    orch_human_pane_session,
     orch_fork_agent, orch_fork_solo_result,
     orch_lead_prepare, orch_lead_bind,
     orch_quick_start, orch_quick_status, orch_quick_control, orch_quick_list,
@@ -173,11 +174,11 @@ fn generate_handler_matches_app_commands() {
 }
 
 #[test]
-fn app_commands_len_is_182() {
+fn app_commands_len_is_183() {
     assert_eq!(
         loomux_lib::command_manifest::APP_COMMANDS.len(),
-        182,
-        "APP_COMMANDS drifted from the expected count of 182 (120 per the #363 plan's audited \
+        183,
+        "APP_COMMANDS drifted from the expected count of 183 (120 per the #363 plan's audited \
          count, +1 for orch_confirm_solo_copilot_autopilot added in #364, +2 for \
          orch_set_advanced_orchestrator/orch_workflow_status added in #316/#355, +3 for \
          orch_set_compact_nudge_minutes/orch_set_compact_nudge_roles/ \
@@ -244,13 +245,15 @@ fn app_commands_len_is_182() {
          load_quick_presets/save_quick_presets — the quick task's saved instruction presets, \
          a user-level store beside the SSH profiles, added in #3679, +1 for \
          orch_quick_list — the launcher's list of quick runs that have not ended, the way to \
-         resume or stop one that no pane is left for, added in #3679 — \
+         resume or stop one that no pane is left for, added in #3679, +1 for \
+         orch_human_pane_session — the session id a solo or lead pane learns after it is \
+         registered, so its cache-age chip can read its transcript, added in #3831 — \
          if this is an intentional addition/removal, update this tripwire's count too"
     );
 }
 
 #[test]
-fn main_has_all_182_and_zero_permission_denies_dangerous_spread() {
+fn main_has_all_183_and_zero_permission_denies_dangerous_spread() {
     // Catches drift in *this test file* before it can mask a real gap: the
     // stub list above must match APP_COMMANDS exactly.
     let mut stub_names: Vec<&str> = STUB_COMMAND_NAMES.to_vec();

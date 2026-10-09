@@ -339,6 +339,7 @@ pub fn run() {
             orchestration::orch_quick_list,
             orchestration::orch_confirm_solo_copilot_autopilot,
             orchestration::orch_solo_adopt,
+            orchestration::orch_human_pane_session,
             orchestration::orch_fork_agent,
             orchestration::orch_fork_solo_result,
             orchestration::todo::todo_snapshot,

@@ -72,7 +72,7 @@ pub const APP_COMMANDS: &[&str] = &[
     // gitwatch (2)
     "git_watch",
     "git_unwatch",
-    // orchestration (96 — COUNTED, by `scripts/command-roster.cjs`, which
+    // orchestration (97 — COUNTED, by `scripts/command-roster.cjs`, which
     // compares this number with the entries under it and with the protocol
     // note's roster table; `test/commandroster.test.ts` runs it. The
     // parenthetical was hand-kept before that and read 94 over 95 entries.)
@@ -170,6 +170,8 @@ pub const APP_COMMANDS: &[&str] = &[
     "orch_quick_list",
     "orch_confirm_solo_copilot_autopilot",
     "orch_solo_adopt",
+    // #3831: the cache-age chip learns a solo or lead pane's session id.
+    "orch_human_pane_session",
     // #3318 F2: fork a delegate's session into a new agent pane.
     "orch_fork_agent",
     // #3318 F2 review round 1: the frontend's ack for a lead's self-fork.

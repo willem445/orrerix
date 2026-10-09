@@ -794,7 +794,7 @@ impl OrchRegistry {
         // turn and its session exists: the moment a watch held back at its
         // idle start can begin without a stranger's session being the only
         // one there is to find. Before the filter below — any tool will do.
-        self.qd_start_deferred_watch(group, agent_id);
+        let _ = agent_id;
         if !matches!(tool, "spawn_agent" | "fork_session" | "send_prompt") {
             return answer;
         }

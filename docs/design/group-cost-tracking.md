@@ -182,13 +182,23 @@ why it is no longer the primary source.
 
 ## Price table
 
-`usage::price_for` maps a model id (by family substring) to per-1M-token rates:
-input, output, cache-write (5-minute-ephemeral rate, 1.25× input — Claude Code's
-default breakpoint), and cache-read (0.1× input). Rates are dated in-file
-(**2026-07-04**, from Anthropic's published pricing). Unknown models return
-`None`, and the session shows tokens only — no invented dollar figure. To
-update: change the numbers and the date; add a family with a new `contains`
-branch.
+`usage::price_quote` maps a model id to per-1M-token rates: input, output, a
+5-minute cache write, a 1-hour cache write and a cache read. The table
+(`usage::PRICE_ROWS`) is keyed on the model's family **and version**, one row per
+row of Anthropic's published pricing table, and dated in-file
+(`usage::PRICE_TABLE_DATED`, **2026-10-09**). `price_for` is the same answer's
+base tier, for a caller with no prompt length in hand.
+
+- A version the table lists gets its own row.
+- A version it does not list, of a family it does, gets that family's highest
+  current price, so the estimate never under-reports.
+- A family it does not list returns `None`, and the session shows tokens only —
+  no invented dollar figure.
+
+A session's cost is priced per request: each cache write at the rate of the
+cache it went to (5-minute or 1-hour), and a model with a prompt-length tier at
+the tier that request's own prompt falls in. The table's contract, its source
+and how to update it are in [prompt-cost.md](prompt-cost.md#the-price-table).
 
 ## Durable accumulation (`orchestration`)
 

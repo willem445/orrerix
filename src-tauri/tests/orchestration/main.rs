@@ -279,6 +279,7 @@ mod providerlimits;
 mod ghclose;
 mod fork;
 mod cacheage;
+mod promptcost;
 mod postcompact;
 mod usagestore;
 

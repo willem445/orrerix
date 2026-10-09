@@ -1,7 +1,8 @@
 # Design: prompt-cache age — the pane chip and compacting before idle
 
-Status: implemented (issue #3407). Extended by #3831 PR A: the chip on every agent pane,
-see [Which panes wear the chip](#which-panes-wear-the-chip-3831).
+Status: implemented (issue #3407). Extended by #3831: the chip on every agent pane,
+see [Which panes wear the chip](#which-panes-wear-the-chip-3831), and the TTL read off
+a session's own cache writes, see [Detecting the TTL](#detecting-the-ttl).
 
 ## Problem
 
@@ -90,7 +91,8 @@ The chip's menu shows what the first request(s) after the last quiet stretch cos
 split three ways: tokens **read** from the cache, tokens **written** to it, and
 **uncached** input, plus the dollar delta when both readings carried one. That
 split shows what cold costs. A warm wake is mostly cache-read (0.1x input on
-Anthropic's table). A cold wake is mostly cache-written (1.25x) plus input. At the
+Anthropic's table). A cold wake is mostly cache-written (1.25x on the 5-minute
+cache, 2x on the 1-hour one) plus input. At the
 tick's one-second cadence the delta is usually one request. When two requests land
 inside one tick it covers both. That only ever makes the figure larger: it never
 shows a cold wake as a warm read.
@@ -122,16 +124,81 @@ shows a cold wake as a warm read.
   guard.
   `group.json` persists it with the rest of the block, and a hand-edited value above
   the ceiling is dropped on read, the same defense `driver` has.
+- **Between the two sits what the session's own records show** (#3831): the
+  lifetime of its last cache write, where the CLI records one. See *Detecting
+  the TTL* below.
 - **The backend resolves it, and the frontend keeps no table.** Each usage row
   carries `cache_ttl_minutes` and `cache_cooling_after_ms` already resolved
-  (`effective_ttl_minutes`, `cooling_after_ms`). A second copy of the table in
+  (`resolve_ttl`, `cooling_after_ms`), with `cache_ttl_source` naming the rung
+  that answered: `block`, `session` or `cli`. A second copy of the table in
   TypeScript would be a second place for the answer to drift.
+- **One resolver, for every consumer.** `cacheage::resolve_ttl` takes the block's
+  declared value, the detected value and the CLI, in that order of precedence.
+  The usage row calls it (so the chip, and the next-prompt estimate that reads
+  the chip's TTL, [prompt-cost.md](prompt-cost.md)), and so does the
+  orchestrator's idle-compact backstop. A pane therefore cannot read `hot` on one
+  TTL while it is nudged on another.
 
-**Not done: automatic TTL detection.** Claude transcripts split cache writes into
-`ephemeral_5m_input_tokens` / `ephemeral_1h_input_tokens`, which is evidence of
-which TTL a session actually uses. Reading it means a claude-specific branch in the
-fold and a mixed-TTL rule. The override covers the need today, so detection is left
-as a follow-up rather than built speculatively.
+### Detecting the TTL
+
+A pane with no workflow block, a solo or lead pane, has nowhere to declare a TTL.
+On the conservative default alone, an account on the 1-hour cache would see its
+own panes read `cold` after five minutes, and the next-prompt estimate would
+price a cold write that is not happening.
+
+The Messages API reports each request's cache write split by lifetime. Its
+response `usage` carries `"cache_creation": { "ephemeral_5m_input_tokens": …,
+"ephemeral_1h_input_tokens": … }`, and "the current `cache_creation_input_tokens`
+field equals the sum of the values in the `cache_creation` object" (prompt-caching
+reference, checked 2026-10-09). That Claude Code copies that object into its
+transcript unchanged is an **observation, not a documented contract**: 1,219
+assistant records written by Claude Code 2.1.284 to 2.1.295 on one machine, every
+one carrying both keys, summing to the total in all of them.
+
+The claude transcript fold reads it, in the pass it already makes. Three rules,
+each pinned:
+
+1. **The last cache-writing request decides.** A later write on a different
+   lifetime replaces the reading, which is what follows an account whose cache
+   lifetime changes mid-session.
+2. **Within one request, the shorter bucket wins.** The API allows both in one
+   request on the condition that "cache entries with longer TTL must appear
+   before shorter TTLs", so in a mixed request the long-lived entry is the front
+   of the prompt and the short-lived one is the conversation's tail. When the
+   tail expires, the next request writes it again whatever the front did. The
+   chip's one forbidden answer is `hot` over a cache that is gone, so the
+   request's lifetime is its shortest.
+3. **A read-only request changes nothing.** A hit refreshes an entry for the
+   lifetime it was written with (the pricing page's duration for a cache hit is
+   "Same duration as the preceding write"), so it is no evidence of a change.
+   Neither is a write whose record names no bucket.
+
+**Precedence: the block, then the session, then the CLI.**
+
+- A block's `cache_ttl_minutes:` is what the human declared, so it wins. Its `0`
+  ("infer nothing") is a decision too, and a detected value does not override it.
+- The detected value is evidence about this session, so it outranks an
+  assumption about its CLI.
+- The CLI default is what is left.
+
+The detected value is persisted with the usage row
+(`detected_cache_ttl_minutes`, additive: [usage-store.md](usage-store.md)), so a
+tick whose fresh read comes back empty does not drop the pane to its CLI's
+default for that tick. A persisted value of `0`, or one above a day, is ignored
+rather than trusted, as a hand-edited block's is.
+
+Only claude's transcript carries a lifetime today. pi's `usage` has one
+`cacheWrite` count and a codex rollout one `cache_write_input_tokens`, with no
+lifetime beside either, and opencode's session row is a running total. Those
+three stay on the block and the CLI default.
+
+**The backstop moves with it.** An orchestrator whose block declares no TTL and
+whose session writes to the 1-hour cache used to be nudged inside the default's
+band, 3 to 5 minutes idle. It is now nudged inside the hour's, 48 to 60 minutes,
+which is exactly what declaring `cache_ttl_minutes: 60` on that block already
+did. The backstop reads the detected value from the usage store already in
+memory, never from the disk. A group whose store is not loaded yet falls to the
+CLI default, which in the running app is the first seconds after start.
 
 ## The chip
 
@@ -151,6 +218,10 @@ as a follow-up rather than built speculatively.
 - **Chrome only** (constraint 1). The chip is a header button with the queue and
   mail chips' shrink weight. Its menu is `showContextMenu`'s floating overlay. No
   PTY is resized.
+- **The menu also prices the next prompt** three ways: with the cache as it is,
+  cold, and as the same prompt in a fresh agent. That estimate reads this chip's
+  state and TTL and resolves neither itself; its formula, its price table and its
+  limits are [prompt-cost.md](prompt-cost.md).
 - **Compact now** calls `orch_request_compact(group, agent)`. That sets the same
   `compact_requested` flag an agent's own `request_compact()` sets, so
   `compact_nudge_tick` is still the one place that types `/compact`: at the pane's
@@ -244,6 +315,12 @@ would be the wasted one.
   (above). The cooling band absorbs the ordinary case, not a multi-minute stream.
 - **No activity from a token-less source** (a statusline row). Today that is only
   copilot, whose TTL is unknown anyway.
+- **Only claude's transcript records a cache lifetime.** Every other CLI's TTL
+  is the block's or the CLI default; nothing is detected for it.
+- **A cache write by something other than the conversation** that lands in the
+  transcript on a shorter lifetime would read as the session's until its next
+  write. None was seen in the sample *Detecting the TTL* cites, and the error is
+  toward `cold`, the safe direction.
 - **A first sighting is unknown.** A row first seen with tokens already on it shows
   no chip until its next request.
 - **The backstop's idle clock is the output-quiet clock, not the usage clock.** It
@@ -323,9 +400,16 @@ clones each running agent that has a session id, once per call.
   session source here, so it reads as a terminal.
 - **A session has one live holder.** `human_pane_session` and `solo_adopt` refuse a session
   that another live pane holds, and a dead pane gives its claim up with its pty. Two live panes
-  on one transcript would merge into one usage row. The refused pane keeps no identity for that
-  session, so its chip reads `cache —` as not registered. A distinct gap for "another pane holds
-  this session" is a follow-up.
+  on one transcript would merge into one usage row. In `solo_adopt` the question and the insert
+  that answers it are one critical section, as they are in `human_pane_session`, so two panes
+  adopted on one session at the same moment cannot both pass.
+  **The refusal is the adoption itself, so it reaches Connect too.** A pane that is adopted on
+  its first Connect gesture (`adoptIfEligible`) passes its session with the adoption. If a live
+  pane already holds that session, the adoption is refused and the pane is left with no channel
+  identity at all: its Connect menu shows the not-capable reason, and it cannot join a channel,
+  for as long as the holder lives. The adoption is retried on each right-click and succeeds once
+  the holder's pty has exited. Its chip reads `cache —` as not registered throughout. A distinct
+  gap for "another pane holds this session" is a follow-up.
 - **The solo group's usage store and series never rotate.** `__solo__` never ends, and its rows
   carry real counters from this change on. `usage-series.jsonl` gains a row per moved key per
   bucket with no retention. A retention policy for a group that never ends is a separate
@@ -333,7 +417,8 @@ clones each running agent that has a session id, once per call.
 
 ## Tests
 - `crates/loomux-engine/src/cacheage.rs` (unit): TTL resolution, including the
-  override, `0` and an unknown CLI; the cooling band; every arm of the fold (no
+  override, `0` and an unknown CLI, and the three-rung ladder with the rung that
+  answered; the cooling band; every arm of the fold (no
   growth, bucket shuffle, wake after the gap, same turn inside it, the inclusive
   boundary, first-ever movement, a lower dollar figure); the backstop's band edges
   and each disqualifier on its own; and the notice as one paragraph.
@@ -344,11 +429,16 @@ clones each running agent that has a session id, once per call.
   output, re-arming on a context drop, refusing past the TTL and without a reading,
   holding for a delegate, a watch, a live review drive and an unreadable review
   or plan drive file; a block override moving the band and `0` turning it off; a
+  detected TTL sitting between the block's and the CLI's on the row, and moving
+  the backstop's band while a declared value still wins; a
   statusline read between two transcript reads never becoming the wake's
   baseline; and Compact now saying "queued" on a paused group, then firing once
   it resumes.
 - `src-tauri/tests/workflow/driverkey.rs`: the block key's range, absence, and the refusal
   above a day.
+- `src-tauri/src/usage.rs` (unit): the detected TTL's three rules, on the claude
+  fold: the last cache-writing request decides, the shorter bucket wins within
+  one request, and a read-only request changes nothing.
 - `test/cacheage.test.ts`: the state boundaries against the row's own threshold,
   the "cannot say" rungs, the labels, flooring, the wake line, the tooltip's
   inferred-not-observed wording, and every way the strip lookup answers null.

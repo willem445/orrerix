@@ -329,15 +329,13 @@ impl OrchRegistry {
         }
         if let Some(s) = session_id {
             PathSegment::parse(s).map_err(|e| format!("invalid session id {s:?}: {e}"))?;
-            // The same refusal as `human_pane_session`, checked before anything is minted.
-            let holder = self
-                .agents
-                .lock_safe()
-                .values()
-                .find(|o| o.status != AgentStatus::Dead && o.session_id.as_deref() == Some(s))
-                .map(|o| o.id.clone());
-            if let Some(holder) = holder {
-                return Err(format!("session {s:?} is already held by live pane {holder}; one transcript belongs to one pane"));
+            // A PRE-FLIGHT, so the ordinary refusal mints nothing. It is not the
+            // decision: this lock is released before the entry below is built,
+            // and a second adopt of the same session can pass it in that window.
+            // The decision is the same question asked again under the lock the
+            // insert happens under — see the critical section below.
+            if let Some(holder) = Self::live_session_holder(self.agents.lock_safe().values(), s, None) {
+                return Err(Self::session_held_error(s, &holder));
             }
         }
         self.ensure_solo_group();
@@ -411,7 +409,28 @@ impl OrchRegistry {
             last_exit_tail: None,
             killed_by: None,
         };
-        self.agents.lock_safe().insert(agent_id.clone(), entry);
+        // ONE critical section for "does a live pane hold this session?" and the
+        // insert that makes this pane its holder (#3831, deferred from #3837's
+        // review). `human_pane_session` asks and writes under one guard for the
+        // same reason: with the check under one acquisition and the insert under
+        // another, two panes adopted on one session at once both pass the check,
+        // and two live entries then read one transcript into one usage row. The
+        // mint above stays outside the guard because `mint_agent_seq` holds
+        // `agent_seq_persist` across a file write. That lock's rule is that no
+        // caller holds another registry lock when it calls in
+        // (docs/design/lock-order.md), and with the agents lock held around it
+        // every reader of the roster would wait on that write. So a refused
+        // racer has spent an agent sequence number and nothing else: no entry,
+        // no pty claim, no audit line.
+        {
+            let mut agents = self.agents.lock_safe();
+            if let Some(s) = session_id {
+                if let Some(holder) = Self::live_session_holder(agents.values(), s, None) {
+                    return Err(Self::session_held_error(s, &holder));
+                }
+            }
+            agents.insert(agent_id.clone(), entry);
+        }
         // Claim the pty as ONE decision, and let the loser of a race roll its
         // own entry back. The `by_pty` read at the top of this function makes
         // the ordinary re-adopt cheap; it does not make the mint idempotent,
@@ -438,6 +457,30 @@ impl OrchRegistry {
     }
 
 
+    /// The live pane, other than `except`, that holds `session` — the one
+    /// question both doors that give a pane a session ask (`solo_adopt` and
+    /// `human_pane_session`), spelled once so they cannot come to ask it
+    /// differently. A dead entry has given its session up with its pty.
+    ///
+    /// It takes the entries rather than the registry so that a caller can ask
+    /// it INSIDE the guard it then writes under; asked under a guard of its
+    /// own it would be a check, not a decision.
+    fn live_session_holder<'a>(
+        agents: impl Iterator<Item = &'a AgentEntry>,
+        session: &str,
+        except: Option<&str>,
+    ) -> Option<String> {
+        agents
+            .filter(|o| except != Some(o.id.as_str()))
+            .find(|o| o.status != AgentStatus::Dead && o.session_id.as_deref() == Some(session))
+            .map(|o| o.id.clone())
+    }
+
+    /// The refusal both doors give for a held session.
+    fn session_held_error(session: &str, holder: &str) -> String {
+        format!("session {session:?} is already held by live pane {holder}; one transcript belongs to one pane")
+    }
+
     /// Human-only (#3831): record the session id of a solo or lead pane whose
     /// CLI named it after the pane was registered — claude and pi name theirs
     /// at launch, so a pane bound after its spawn already has one, and codex,
@@ -462,12 +505,8 @@ impl OrchRegistry {
             // One transcript belongs to one pane. A second LIVE entry on the same
             // session would merge two panes into one usage row, so the claim is
             // refused. A dead entry has given its session up with its pty.
-            if let Some(holder) = agents
-                .values()
-                .find(|o| o.id.as_str() != agent_id && o.status != AgentStatus::Dead && o.session_id.as_deref() == Some(session_id))
-                .map(|o| o.id.clone())
-            {
-                return Err(format!("session {session_id:?} is already held by live pane {holder}; one transcript belongs to one pane"));
+            if let Some(holder) = Self::live_session_holder(agents.values(), session_id, Some(agent_id)) {
+                return Err(Self::session_held_error(session_id, &holder));
             }
             let a = agents.get_mut(agent_id).ok_or("unknown agent")?;
             if !matches!(a.role, Role::Solo | Role::Lead) {

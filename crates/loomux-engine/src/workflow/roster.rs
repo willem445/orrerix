@@ -53,7 +53,8 @@ pub fn default_roster_ex(pins: &[(Role, &str, &str, ModelKnobs<'_>)]) -> Vec<Blo
             // workflow file — the built-in roster is the pre-#2850 behavior,
             // PTY panes throughout.
             driver: None,
-            // #3407: the CLI's own default TTL — a synthesized roster pins none.
+            // #3407: a synthesized roster declares no TTL, so each agent's is
+            // resolved from its session or its CLI (`cacheage::resolve_ttl`).
             cache_ttl_minutes: None,
         })
         .collect()

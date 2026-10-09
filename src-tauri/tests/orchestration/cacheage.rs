@@ -240,6 +240,91 @@ fn a_block_ttl_override_moves_the_backstop_band_and_zero_turns_it_off() {
 }
 
 // ---------------------------------------------------------------------------
+// #3831: the TTL a session's own cache writes show, as the middle rung of the
+// one resolver — on the usage row, and on the idle-compact backstop.
+// ---------------------------------------------------------------------------
+
+/// A usage row for `agent` stored under `key`, whose session was last seen
+/// writing to a cache of `detected` minutes.
+fn detected_snap(key: &str, agent: &str, detected: Option<u32>) -> UsageSnapshot {
+    UsageSnapshot { detected_cache_ttl_minutes: detected, ..usage_snap(key, agent, 1.0, 100, 0) }
+}
+
+#[test]
+fn a_detected_ttl_sits_between_the_blocks_and_the_clis_on_the_usage_row() {
+    let row_for = |declared: Option<u32>, detected: Option<u32>| -> Value {
+        let (reg, _d) = test_registry();
+        let mut r = rails();
+        r.blocks.iter_mut().find(|b| b.id == "worker").unwrap().cache_ttl_minutes = declared;
+        let g = reg.create_group("C:/tmp/repo", r).unwrap();
+        reg.upsert_usage_snapshot(&g.id, detected_snap("sess-ttl", "w-ttl", detected));
+        usage_row(&reg.group_usage(&g.id), "w-ttl").clone()
+    };
+    let read = |row: &Value| (row["cache_ttl_minutes"].clone(), row["cache_ttl_source"].clone(), row["cache_cooling_after_ms"].clone());
+
+    // Three values that differ pairwise — 30 declared, 60 detected, 5 from the
+    // CLI — so no rung can be mistaken for another.
+    assert_eq!(read(&row_for(Some(30), Some(60))), (json!(30), json!("block"), json!(24 * MIN)));
+    assert_eq!(read(&row_for(None, Some(60))), (json!(60), json!("session"), json!(48 * MIN)));
+    assert_eq!(read(&row_for(None, None)), (json!(5), json!("cli"), json!(3 * MIN)));
+    // A block's `0` is a decision to infer nothing; the detected hour below it
+    // does not get a turn.
+    assert_eq!(read(&row_for(Some(0), Some(60))), (Value::Null, Value::Null, Value::Null));
+    // A persisted value no provider describes is ignored, not trusted.
+    assert_eq!(read(&row_for(None, Some(0))), (json!(5), json!("cli"), json!(3 * MIN)));
+    assert_eq!(read(&row_for(None, Some(100_000))), (json!(5), json!("cli"), json!(3 * MIN)));
+}
+
+#[test]
+fn the_idle_backstop_reads_the_detected_ttl_and_a_declared_one_still_wins() {
+    let t0 = 1_000 * MIN;
+    // The orchestrator's block declares nothing, and its session was last seen
+    // writing to the HOUR cache. The usage tick stored that on its row; the
+    // backstop must read the same rung the row does.
+    let (reg, _d, gid, oid) = idle_orch_setup(t0);
+    let key = reg.agent(&oid).unwrap().session_id.clone().unwrap_or_else(|| format!("agent:{oid}"));
+    reg.upsert_usage_snapshot(&gid, detected_snap(&key, &oid, Some(60)));
+    // Four minutes idle is inside claude's default 3–5 minute band, and is
+    // where this pane WOULD be nudged without detection (the control below).
+    assert!(
+        reg.cache_idle_nudge_tick(t0 + 4 * MIN, &pct(&oid, 70)).is_empty(),
+        "4m is hot on a detected 60m TTL — the default band must not fire"
+    );
+    assert_eq!(audit_count(&reg, &gid, "cache-idle-nudge"), 0);
+    // The hour's own band is 48–60 minutes.
+    assert_eq!(reg.cache_idle_nudge_tick(t0 + 50 * MIN, &pct(&oid, 70)), vec![oid.clone()]);
+
+    // Control: the same pane with NOTHING detected is nudged at four minutes,
+    // so the silence above was the detected TTL and not a broken fixture.
+    let (reg, _d, gid, oid) = idle_orch_setup(t0);
+    let key = reg.agent(&oid).unwrap().session_id.clone().unwrap_or_else(|| format!("agent:{oid}"));
+    reg.upsert_usage_snapshot(&gid, detected_snap(&key, &oid, None));
+    assert_eq!(reg.cache_idle_nudge_tick(t0 + 4 * MIN, &pct(&oid, 70)), vec![oid.clone()]);
+
+    // A detected lifetime on ANOTHER agent's row is not this pane's.
+    let (reg, _d, gid, oid) = idle_orch_setup(t0);
+    reg.upsert_usage_snapshot(&gid, detected_snap("sess-someone-else", "w-other", Some(60)));
+    assert_eq!(reg.cache_idle_nudge_tick(t0 + 4 * MIN, &pct(&oid, 70)), vec![oid.clone()]);
+
+    // The block's DECLARED value still wins over a detected one: five declared,
+    // sixty detected, and the band is the declared five's.
+    let (reg, _d) = test_registry();
+    let mut r = compact_rails(0, &["orchestrator"]);
+    r.blocks.iter_mut().find(|b| b.id == "orchestrator").unwrap().cache_ttl_minutes = Some(5);
+    let g = reg.create_group("C:/tmp/repo", r).unwrap();
+    let o = reg.spawn_agent(&g.id, Role::Orchestrator, "orch", "", false, None).unwrap();
+    let grew: HashMap<String, u64> = [(o.id.clone(), 64 * 1024u64)].into_iter().collect();
+    reg.compact_nudge_tick(t0, &grew, &HashMap::new(), &HashMap::new(), &HashMap::new(), &HashMap::new(), &HashMap::new());
+    let key = o.session_id.clone().unwrap_or_else(|| format!("agent:{}", o.id));
+    reg.upsert_usage_snapshot(&g.id, detected_snap(&key, &o.id, Some(60)));
+    assert_eq!(
+        reg.cache_idle_nudge_tick(t0 + 4 * MIN, &pct(&o.id, 70)),
+        vec![o.id.clone()],
+        "a declared 5m beats a detected 60m"
+    );
+}
+
+// ---------------------------------------------------------------------------
 // #3407 review round 1: the drive arms of "in flight" (N1), the re-baseline
 // across a source flip (N2), and the honest Compact-now reply (N3).
 // ---------------------------------------------------------------------------
@@ -494,4 +579,198 @@ fn a_session_a_live_pane_holds_is_refused_to_a_second_pane_until_that_pane_exits
     reg.mark_dead(&first_id, Some(0));
     reg.human_pane_session(&second_id, "shared-session")
         .expect("a dead pane has given its session up, so the claim frees");
+}
+
+/// `solo_adopt`'s one-holder rule must survive two adoptions at once, not just
+/// two in sequence (the test above covers sequence).
+///
+/// "Does a live pane hold this session?" and the insert that makes the new pane
+/// its holder are ONE critical section (#3831, deferred from #3837's review).
+/// With the check under one lock acquisition and the insert under another, two
+/// panes adopted on one session at the same moment both pass the check — the
+/// whole mint sits in that window — and the registry then holds two live
+/// entries on one transcript, which the usage tick reads into one row.
+///
+/// The assertion is exact rather than statistical: however the two threads
+/// interleave, exactly one adoption may succeed and exactly one live entry may
+/// hold the session. Forty rounds, because one round of the split form passes
+/// by luck about as often as its race is lost.
+#[test]
+fn two_panes_adopted_on_one_session_at_once_leave_exactly_one_holder() {
+    let (reg, _d) = test_registry();
+    let reg = std::sync::Arc::new(reg);
+    // Every LIVE agent the roster holds on this session.
+    let holders = |session: &str| -> Vec<String> {
+        reg.list_agents(solo_group_id())
+            .as_array()
+            .expect("a roster")
+            .iter()
+            .filter(|a| a["session"] == session && a["status"] != "dead")
+            .map(|a| a["id"].as_str().unwrap().to_string())
+            .collect()
+    };
+    let mut refused = 0;
+    for round in 0u32..40 {
+        let session = format!("raced-session-{round}");
+        let barrier = std::sync::Arc::new(std::sync::Barrier::new(2));
+        let handles: Vec<_> = (0..2u32)
+            .map(|side| {
+                let reg = std::sync::Arc::clone(&reg);
+                let barrier = std::sync::Arc::clone(&barrier);
+                let session = session.clone();
+                // Two DIFFERENT ptys, so the by-pty claim cannot be what
+                // decides it: only the session can.
+                let pty = 7_500 + round * 2 + side;
+                std::thread::spawn(move || {
+                    barrier.wait(); // start both inside the window, not one after the other
+                    reg.solo_adopt(pty, "raced", "C:/tmp/solo", Some("claude"), Some(session.as_str()))
+                })
+            })
+            .collect();
+        let results: Vec<Result<Value, String>> = handles.into_iter().map(|h| h.join().unwrap()).collect();
+        let won: Vec<&Value> = results.iter().filter_map(|r| r.as_ref().ok()).collect();
+        let lost: Vec<&String> = results.iter().filter_map(|r| r.as_ref().err()).collect();
+        assert_eq!(
+            (won.len(), lost.len()),
+            (1, 1),
+            "round {round}: two concurrent adoptions of session {session:?} must be one success and \
+             one refusal; both succeeding means the check and the insert were not one critical \
+             section, and two live panes now share one transcript: {results:?}"
+        );
+        assert!(lost[0].contains("already held by live pane"), "the loser is told why: {}", lost[0]);
+        refused += lost.len();
+        // The registry agrees with what the callers were told: one live entry
+        // holds the session, and it is the winner's.
+        let winner = won[0]["agent_id"].as_str().unwrap();
+        assert_eq!(holders(&session), vec![winner.to_string()], "round {round}: exactly the winner holds {session:?}");
+    }
+    // Control: forty refusals were SEEN, counted off the results themselves —
+    // so the loop ran, and one adoption lost in every round of it.
+    assert_eq!(refused, 40);
+    // The refused racer leaves nothing behind: one adoption audited per round.
+    assert_eq!(audit_count(&reg, solo_group_id(), "solo-adopt"), 40);
+}
+
+/// The two doors that give a pane a session — `solo_adopt` and
+/// `human_pane_session` — decide under the same lock, so racing one against the
+/// other on one session also leaves exactly one holder.
+///
+/// **The report is started a little later each round, on purpose.** Released
+/// together, the report always wins: it is one short critical section, and the
+/// adoption has a pre-flight and a whole mint ahead of its insert. That
+/// interleaving is safe even with the adoption's check split from its insert —
+/// its pre-flight simply sees the reporter — so a test that only ever produced
+/// it could not fail. The interleaving that matters is the report landing
+/// AFTER the adoption's pre-flight and BEFORE its insert, inside the mint. The
+/// stagger walks the report's start across that window, 25 microseconds a
+/// round; it changes which interleaving is exercised and never the answer,
+/// which is one winner however the two are ordered.
+#[test]
+fn an_adoption_racing_a_session_report_on_one_session_leaves_exactly_one_holder() {
+    let (reg, _d) = test_registry();
+    let reg = std::sync::Arc::new(reg);
+    for round in 0u32..40 {
+        let session = format!("crossed-session-{round}");
+        let prepared = reg.solo_prepare("claude", "C:/tmp/solo", "reporter").unwrap();
+        let reporter = prepared["agent_id"].as_str().unwrap().to_string();
+        let barrier = std::sync::Arc::new(std::sync::Barrier::new(2));
+        let adopt = {
+            let (reg, barrier, session) = (std::sync::Arc::clone(&reg), std::sync::Arc::clone(&barrier), session.clone());
+            std::thread::spawn(move || {
+                barrier.wait();
+                reg.solo_adopt(7_700 + round, "adopter", "C:/tmp/solo", Some("claude"), Some(session.as_str()))
+                    .map(|v| v["agent_id"].as_str().unwrap().to_string())
+            })
+        };
+        let report = {
+            let (reg, barrier, session, reporter) =
+                (std::sync::Arc::clone(&reg), std::sync::Arc::clone(&barrier), session.clone(), reporter.clone());
+            std::thread::spawn(move || {
+                barrier.wait();
+                // A spin, not a sleep: a sleep's granularity is far coarser
+                // than the window being aimed at.
+                let start = std::time::Instant::now() + std::time::Duration::from_micros(25 * u64::from(round));
+                while std::time::Instant::now() < start {
+                    std::hint::spin_loop();
+                }
+                reg.human_pane_session(&reporter, &session).map(|()| reporter)
+            })
+        };
+        let results = [adopt.join().unwrap(), report.join().unwrap()];
+        let won: Vec<&String> = results.iter().filter_map(|r| r.as_ref().ok()).collect();
+        assert_eq!(won.len(), 1, "round {round}: exactly one of the two doors may win {session:?}: {results:?}");
+        assert_eq!(
+            reg.agent(won[0]).and_then(|a| a.session_id),
+            Some(session.clone()),
+            "round {round}: the winner holds the session"
+        );
+        // The reporter either won, or was refused and holds nothing.
+        if won[0] != &reporter {
+            assert_eq!(reg.agent(&reporter).unwrap().session_id, None, "round {round}: a refused report records nothing");
+        }
+    }
+}
+
+/// What a restart does to the chip (#3831 review round 2): a restored pane
+/// resumes its SESSION, a usage row is keyed by session id, and the row's
+/// activity is persisted with it. So the row this build finds on disk is the
+/// restored pane's own, and its chip reads the age that session had on record
+/// — it does not wait for another request. The pane that does wait is one
+/// whose session has nothing on record, which is the control here.
+#[test]
+fn a_restored_panes_row_keeps_the_activity_its_session_had_on_record() {
+    const BEFORE_RESTART: u64 = 1_759_900_000_000;
+    let proj = tempfile::tempdir().unwrap();
+    let (reg, _d) = test_registry();
+    reg.set_claude_projects_dir(proj.path().to_path_buf());
+
+    // What the previous run left on disk: one row for this session, with a
+    // request on record, under the pane identity it had THEN.
+    let dir = reg.state_root().join(solo_group_id().as_str());
+    fs::create_dir_all(&dir).unwrap();
+    let stored = json!([{
+        "key": "restored-session", "agent_id": "solo-before-restart", "name": "before", "role": "solo",
+        "source": "transcript", "block": "solo", "cli": "claude",
+        "input_tokens": 1000, "output_tokens": 0, "cache_creation_tokens": 0, "cache_read_tokens": 0,
+        "cost_usd": 0.005, "estimated": true,
+        "model": "claude-opus-4-8", "current_model": "claude-opus-4-8",
+        "updated_ms": BEFORE_RESTART,
+        "activity": { "last_active_ms": BEFORE_RESTART, "last_wake": null, "baseline": null },
+    }]);
+    fs::write(dir.join("usage.json"), serde_json::to_string_pretty(&stored).unwrap()).unwrap();
+    // The transcripts as the sessions left them: nothing has been sent since.
+    write_solo_claude_turn(proj.path(), "restored-session", 1000);
+    write_solo_claude_turn(proj.path(), "never-seen-session", 700);
+
+    // The restart: a NEW pane identity resumes the old session...
+    let prepared = reg.solo_prepare("claude", "C:/tmp/solo", "restored").unwrap();
+    let restored = prepared["agent_id"].as_str().unwrap().to_string();
+    reg.solo_bind(&restored, 7_801).unwrap();
+    reg.human_pane_session(&restored, "restored-session").unwrap();
+    // ...and a second pane resumes a session this store has never seen.
+    let unseen = reg
+        .solo_adopt(7_802, "no record", "C:/tmp/solo", Some("claude"), Some("never-seen-session"))
+        .unwrap();
+    let unseen = unseen["agent_id"].as_str().unwrap().to_string();
+
+    let usage = reg.group_usage(solo_group_id());
+    let row = usage_row(&usage, &restored);
+    assert_eq!(row["source"], "transcript", "control: the restored pane's session is read: {row}");
+    assert_eq!(row["live"], json!(true));
+    assert_eq!(
+        row["last_active_ms"],
+        json!(BEFORE_RESTART),
+        "the restored pane's reading is the activity its session had on record: {row}"
+    );
+    assert_eq!(row["last_wake"], Value::Null, "resuming a session is not a request: {row}");
+    // The stored row was taken over by the new identity, not doubled beside it.
+    let rows = usage["agents"].as_array().unwrap();
+    assert!(rows.iter().all(|r| r["id"] != "solo-before-restart"), "the old identity keeps no row: {usage}");
+    assert_eq!(rows.iter().filter(|r| r["id"] == restored.as_str()).count(), 1);
+
+    // Control: a session with nothing on record is a first sighting, and that
+    // is the pane whose chip reads `cache —` until its next request.
+    let row = usage_row(&usage, &unseen);
+    assert_eq!(row["source"], "transcript", "control: this pane's session is read too: {row}");
+    assert_eq!(row["last_active_ms"], Value::Null, "nothing on record, nothing to read: {row}");
 }

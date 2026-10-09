@@ -5,9 +5,11 @@
 //
 // WHAT THE CHIP CLAIMS, AND WHAT IT CANNOT. A provider's prompt cache is not
 // observable. What the backend observes is when this pane's usage counters last
-// moved — its last model request, landed — and it resolves the TTL the
-// provider documents for this CLI (or the block's `cache_ttl_minutes:`
-// override). `hot` / `cooling` / `cold` is an INFERENCE from those two numbers,
+// moved — its last model request, landed — and it resolves the TTL: the
+// block's `cache_ttl_minutes:` where one is declared, else the lifetime read
+// off the session's own cache writes where its CLI records one, else the one
+// the provider documents for this CLI. `hot` / `cooling` / `cold` is an
+// INFERENCE from those two numbers,
 // and the tooltip says so. It errs toward hot by the length of the last
 // response, because the provider's clock starts when a request STARTS and the
 // counters land when it ENDS; `docs/design/cache-age.md` carries the argument.
@@ -38,7 +40,8 @@ export interface WakeCostReading {
 export interface CacheAgeReading {
   /** Unix-ms the counters last moved, or null when never observed. */
   readonly lastActiveMs: number | null;
-  /** The TTL in force (block override, else the CLI's), or null = unknown. */
+  /** The TTL in force (the block's, else the session's detected one, else the
+   *  CLI's), or null = unknown. */
   readonly ttlMinutes: number | null;
   /** Idle ms after which the pane reads cooling; null when the TTL is unknown. */
   readonly coolingAfterMs: number | null;

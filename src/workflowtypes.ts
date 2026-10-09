@@ -751,7 +751,8 @@ export interface WorkflowBlock {
    *  exactly like `effort` and `context`. */
   driver?: string;
   /** The prompt-cache TTL in minutes this block's agent runs on (#3407) — absent
-   *  = the CLI's own default (`CliCaps.cache_ttl_minutes`), `0` = unknown. A
+   *  = not declared (the session's detected lifetime where its CLI records
+   *  one, else `CliCaps.cache_ttl_minutes`), `0` = unknown. A
    *  number the pane reads and re-emits; the engine refuses one above
    *  `BLOCK_CACHE_TTL_MINUTES_MAX`. */
   cache_ttl_minutes?: number;

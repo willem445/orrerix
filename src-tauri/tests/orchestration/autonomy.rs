@@ -503,6 +503,8 @@ pub(crate) fn seed_usage(reg: &OrchRegistry, group: &GroupId, key: &str, tokens:
         current_model: Some("claude-opus-4-8".to_string()),
         updated_ms: now_ms(),
         activity: Default::default(),
+        first_context_tokens: None,
+        detected_cache_ttl_minutes: None,
     });
 }
 

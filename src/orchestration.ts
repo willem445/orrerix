@@ -8,6 +8,7 @@
 
 import type { WakeCostReading } from "./cacheage";
 import { reportHumanSession } from "./humansession";
+import type { PromptCostInputs } from "./promptcost";
 import { invoke, listen } from "./transport.ts";
 import type { Grid } from "./grid";
 import type { Pane, PaneEvents } from "./pane";
@@ -1960,7 +1961,8 @@ export interface AgentUsage {
   tokens: UsageTokens;
   /** #3407, the cache-age chip's inputs. Unix-ms this row's counters last
    *  moved (null = never observed); the TTL in force, RESOLVED by the backend
-   *  (block override, else the CLI's `CliCaps` row; null = unknown) with the
+   *  (block override, else the session's detected lifetime, else the CLI's
+   *  `CliCaps` row; null = unknown) with the
    *  idle threshold at which it reads cooling; the last wake's cost; and
    *  whether "Compact now" can act on this CLI. Optional on the type because
    *  a backend that predates them sends none — `cacheage.ts` reads absence as
@@ -1970,6 +1972,15 @@ export interface AgentUsage {
   cache_cooling_after_ms?: number | null;
   last_wake?: WakeCostReading | null;
   compact_supported?: boolean;
+  /** #3831. Which rung resolved `cache_ttl_minutes`: `block` (the workflow
+   *  block's own key), `session` (read off the session's cache writes) or
+   *  `cli` (the CLI's default); null with an unknown TTL. */
+  cache_ttl_source?: string | null;
+  /** #3831, the next-prompt estimate's inputs (`promptcost.ts`), all RESOLVED
+   *  by the backend so the frontend keeps no price or tokenizer table. An
+   *  object on a LIVE row and null on a historical one, which has no next
+   *  prompt; absent from a backend that predates it. See `PromptCostInputs`. */
+  prompt_cost?: PromptCostInputs | null;
 }
 
 /** Aggregated per-group cost/usage (backend `orch_group_usage`), with a live

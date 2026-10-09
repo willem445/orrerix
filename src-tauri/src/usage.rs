@@ -88,53 +88,380 @@ pub struct SessionUsage {
     /// `model` is already last-turn; differs from it only on claude, where
     /// `model` is the pricing pick described above.
     pub current_model: Option<String>,
+    /// The context the session's FIRST counted turn was sent — its fresh
+    /// input, cache-written and cache-read tokens together (#3831). That is
+    /// what starting this agent cost before it had any history: the CLI's
+    /// system prompt and tools, the repo's instruction files, and the first
+    /// prompt, measured on this machine, repo and model rather than assumed.
+    /// The next-prompt estimate prices "the same prompt in a fresh agent" off
+    /// it. `None` where the source has no per-turn record (opencode's session
+    /// row is a running total) or no turn has been counted yet.
+    pub first_context_tokens: Option<u64>,
+    /// The prompt-cache lifetime (minutes) this session's own records show its
+    /// LAST cache write was made with, where the CLI records one (#3831).
+    /// `None` on every source that does not — which is every one but claude's
+    /// transcript today. The middle rung of
+    /// `loomux_engine::cacheage::resolve_ttl`.
+    pub detected_cache_ttl_minutes: Option<u32>,
+}
+
+/// The cache-write buckets a Claude Code transcript's `usage.cache_creation`
+/// object carries, with the lifetime each one names, SHORTEST FIRST.
+///
+/// The field names are the Messages API's own (prompt-caching reference,
+/// fetched 2026-10-09): the response `usage` carries
+/// `"cache_creation": { "ephemeral_5m_input_tokens": …,
+/// "ephemeral_1h_input_tokens": … }`, and "the current
+/// `cache_creation_input_tokens` field equals the sum of the values in the
+/// `cache_creation` object". That Claude Code copies the object into its
+/// transcript unchanged is an OBSERVATION, not a documented contract: read off
+/// 1,219 assistant records written by Claude Code 2.1.284 to 2.1.295 on this
+/// machine, every one of which carried both keys, summing to the total.
+///
+/// Shortest first because that is the order [`claude_write_ttl`] decides in.
+const CLAUDE_CACHE_BUCKETS: [(&str, u32); 2] =
+    [("ephemeral_5m_input_tokens", 5), ("ephemeral_1h_input_tokens", 60)];
+
+/// The cache lifetime (minutes) ONE request wrote with, or `None` when it
+/// wrote nothing to the cache or its record does not say into which bucket.
+///
+/// **Within one request the shorter bucket wins.** A request may write both:
+/// the API allows it on the condition that "cache entries with longer TTL must
+/// appear before shorter TTLs", so in a mixed request the long-lived entry is
+/// the front of the prompt and the short-lived one is the conversation's tail.
+/// When the tail expires, the next request re-writes it whatever the front
+/// did, and the chip's one forbidden answer is `hot` over a cache that is
+/// gone — so the request's lifetime is its shortest.
+fn claude_write_ttl(usage: &Value) -> Option<u32> {
+    let buckets = usage.get("cache_creation")?;
+    CLAUDE_CACHE_BUCKETS.iter().find(|(key, _)| u64_field(buckets, key) > 0).map(|(_, minutes)| *minutes)
+}
+
+/// How many of one request's cache-written tokens went to the 1-hour cache —
+/// what [`cost_of_split`] prices at the 1-hour rate. Zero when the record has
+/// no bucket object, which prices the whole write at the 5-minute rate exactly
+/// as before #3831.
+fn claude_write_1h_tokens(usage: &Value) -> u64 {
+    usage.get("cache_creation").map(|b| u64_field(b, "ephemeral_1h_input_tokens")).unwrap_or(0)
 }
 
 // ---------------------------------------------------------------------------
 // Price table
 // ---------------------------------------------------------------------------
 
-/// USD per **one million** tokens for a model family. Cache-write is the
-/// 5-minute-ephemeral rate (1.25× input) — Claude Code's default breakpoint;
-/// cache-read is 0.1× input.
-#[derive(Clone, Copy, Debug)]
+/// USD per **one million** tokens for one model, at one prompt-length tier.
+///
+/// Field order here is not the vendor table's; [`mp`] takes the five numbers in
+/// the table's own column order so a row can be checked against the page by
+/// eye.
+#[derive(Clone, Copy, Debug, PartialEq, Serialize)]
 pub struct ModelPrice {
     pub input: f64,
     pub output: f64,
+    /// Writing a prefix to the **5-minute** cache.
     pub cache_write: f64,
+    /// Writing a prefix to the **1-hour** cache (#3831). Before this field
+    /// existed a session's cost was priced at the 5-minute rate whichever
+    /// cache it wrote to, which under-reported every 1-hour account.
+    pub cache_write_1h: f64,
+    /// A cache hit, which also refreshes the entry.
     pub cache_read: f64,
 }
 
-/// Model prices in USD per 1M tokens. **Updated 2026-07-04** from Anthropic's
-/// published rates (see the claude-api reference). Matching is by substring of
-/// the transcript's model id, so `claude-opus-4-8`, `claude-opus-4-7`, … all
-/// resolve to the Opus row. Unknown models return `None` and fall back to
-/// token-only display. To update: change the numbers here and the date above.
+/// The day [`PRICE_ROWS`] was read off [`PRICE_TABLE_SOURCE`]. It travels on
+/// every usage row that carries a price, so no surface can show a dollar
+/// figure without the date it was true on.
+pub const PRICE_TABLE_DATED: &str = "2026-10-09";
+
+/// Where [`PRICE_ROWS`] came from: Anthropic's published pricing page, "Model
+/// pricing" table. To update: re-read the page, change the rows and
+/// [`PRICE_TABLE_DATED`] together, and re-read the three rules stated under the
+/// table (the cache multipliers, the Haiku 5.5 prompt-length tier, and which
+/// models the newer tokenizer covers) — `docs/design/prompt-cost.md` quotes
+/// them as fetched.
+pub const PRICE_TABLE_SOURCE: &str = "https://platform.claude.com/docs/en/about-claude/pricing";
+
+/// A model family, as the id spells it. The match is a substring of the id —
+/// `claude-opus-4-8`, `us.anthropic.claude-opus-4-8-v1:0` and
+/// `claude-opus-4-8[1m]` are all Opus — which is the matching this table has
+/// always done; what #3831 adds is the VERSION beside it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Family {
+    Fable,
+    Mythos,
+    Opus,
+    Sonnet,
+    Haiku,
+}
+
+const FAMILIES: [(&str, Family); 5] = [
+    ("fable", Family::Fable),
+    ("mythos", Family::Mythos),
+    ("opus", Family::Opus),
+    ("sonnet", Family::Sonnet),
+    ("haiku", Family::Haiku),
+];
+
+/// One row of the vendor's table.
+struct PriceRow {
+    family: Family,
+    version: (u32, u32),
+    /// The page marks the row retired. A retired row still prices its own
+    /// exact version — an old transcript can carry it — but is left out of the
+    /// family ceiling an UNKNOWN version takes ([`family_ceiling`]).
+    retired: bool,
+    price: ModelPrice,
+    /// A second, higher price for a request whose prompt is longer than the
+    /// threshold (tokens). One model has one today.
+    long_prompt: Option<(u64, ModelPrice)>,
+}
+
+/// One price, the five numbers in the vendor table's column order: base input,
+/// 5-minute cache write, 1-hour cache write, cache hit, output.
+const fn mp(input: f64, cache_write: f64, cache_write_1h: f64, cache_read: f64, output: f64) -> ModelPrice {
+    ModelPrice { input, output, cache_write, cache_write_1h, cache_read }
+}
+
+const fn row(family: Family, major: u32, minor: u32, price: ModelPrice) -> PriceRow {
+    PriceRow { family, version: (major, minor), retired: false, price, long_prompt: None }
+}
+
+const fn retired(family: Family, major: u32, minor: u32, price: ModelPrice) -> PriceRow {
+    PriceRow { family, version: (major, minor), retired: true, price, long_prompt: None }
+}
+
+/// Model prices in USD per 1M tokens, transcribed from [`PRICE_TABLE_SOURCE`]
+/// on [`PRICE_TABLE_DATED`], one row per row of that table and in its order.
 ///
-/// Note: these are standard rates. Sonnet 5 has a lower introductory rate
-/// ($2/$10 per 1M) through 2026-08-31; we use the standard $3/$15 so the
-/// estimate never *under*-reports spend. Revisit if the intro rate outlives it.
-pub fn price_for(model: &str) -> Option<ModelPrice> {
-    let m = model.to_ascii_lowercase();
-    // Order matters only in that each family is a distinct substring.
-    if m.contains("opus") {
-        Some(ModelPrice { input: 5.0, output: 25.0, cache_write: 6.25, cache_read: 0.5 })
-    } else if m.contains("sonnet") {
-        Some(ModelPrice { input: 3.0, output: 15.0, cache_write: 3.75, cache_read: 0.3 })
-    } else if m.contains("haiku") {
-        Some(ModelPrice { input: 1.0, output: 5.0, cache_write: 1.25, cache_read: 0.1 })
-    } else if m.contains("fable") || m.contains("mythos") {
-        Some(ModelPrice { input: 10.0, output: 50.0, cache_write: 12.5, cache_read: 1.0 })
-    } else {
-        None
+/// Every row is the page's own five numbers rather than a base price and a
+/// multiplier, so a row is checked by reading across. The multipliers the page
+/// states — 5-minute write 1.25x, 1-hour write 2x, and a cache hit at 0.1x, or
+/// 0.05x on Opus 5.5 and Sonnet 5.5, or 0.025x on Fable 5.1 and Mythos 5.1 —
+/// are asserted over the whole table by
+/// `every_price_row_obeys_the_multipliers_the_vendor_states`, which is what
+/// catches a mistyped digit in one of the three derived columns.
+const PRICE_ROWS: &[PriceRow] = &[
+    row(Family::Fable, 5, 1, mp(10.0, 12.50, 20.0, 0.25, 50.0)),
+    row(Family::Mythos, 5, 1, mp(10.0, 12.50, 20.0, 0.25, 50.0)),
+    row(Family::Fable, 5, 0, mp(10.0, 12.50, 20.0, 1.0, 50.0)),
+    row(Family::Mythos, 5, 0, mp(10.0, 12.50, 20.0, 1.0, 50.0)),
+    row(Family::Opus, 5, 5, mp(4.0, 5.0, 8.0, 0.20, 20.0)),
+    row(Family::Opus, 5, 0, mp(5.0, 6.25, 10.0, 0.50, 25.0)),
+    row(Family::Opus, 4, 8, mp(5.0, 6.25, 10.0, 0.50, 25.0)),
+    row(Family::Opus, 4, 7, mp(5.0, 6.25, 10.0, 0.50, 25.0)),
+    row(Family::Opus, 4, 6, mp(5.0, 6.25, 10.0, 0.50, 25.0)),
+    row(Family::Opus, 4, 5, mp(5.0, 6.25, 10.0, 0.50, 25.0)),
+    retired(Family::Opus, 4, 1, mp(15.0, 18.75, 30.0, 1.50, 75.0)),
+    retired(Family::Opus, 4, 0, mp(15.0, 18.75, 30.0, 1.50, 75.0)),
+    row(Family::Sonnet, 5, 5, mp(2.0, 2.50, 4.0, 0.10, 10.0)),
+    // The page's footnote 3: the $2/$10 launch price "is now the standard
+    // price"; the increase to $3/$15 "will not occur".
+    row(Family::Sonnet, 5, 0, mp(2.0, 2.50, 4.0, 0.20, 10.0)),
+    row(Family::Sonnet, 4, 6, mp(3.0, 3.75, 6.0, 0.30, 15.0)),
+    row(Family::Sonnet, 4, 5, mp(3.0, 3.75, 6.0, 0.30, 15.0)),
+    retired(Family::Sonnet, 4, 0, mp(3.0, 3.75, 6.0, 0.30, 15.0)),
+    // Two rows on the page: "for prompts up to 100,000 tokens" and "over".
+    PriceRow {
+        family: Family::Haiku,
+        version: (5, 5),
+        retired: false,
+        price: mp(0.10, 0.125, 0.20, 0.01, 0.50),
+        long_prompt: Some((100_000, mp(0.50, 0.625, 1.0, 0.05, 2.50))),
+    },
+    row(Family::Haiku, 4, 5, mp(1.0, 1.25, 2.0, 0.10, 5.0)),
+    retired(Family::Haiku, 3, 5, mp(0.80, 1.0, 1.60, 0.08, 4.0)),
+];
+
+/// English characters one token stands for on the tokenizer the models before
+/// Claude 4.7 use. The vendor's glossary, "Tokens", as fetched on
+/// [`PRICE_TABLE_DATED`]: on earlier models "a token represents approximately
+/// 3.5 English characters".
+const CHARS_PER_TOKEN_EARLIER: f64 = 3.5;
+
+/// How many more tokens the newer tokenizer produces for the same text. Same
+/// glossary entry: "Claude 4.7 and later models and Claude Mythos Preview use a
+/// newer tokenizer that produces approximately 30 percent more tokens for the
+/// same text than earlier models".
+const NEWER_TOKENIZER_FACTOR: f64 = 1.3;
+
+/// The first version on the newer tokenizer.
+const NEWER_TOKENIZER_FROM: (u32, u32) = (4, 7);
+
+/// How a [`PriceQuote`] was reached.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum PriceBasis {
+    /// The id names a family AND a version the table lists.
+    Listed,
+    /// The id names a family the table knows at a version it does not, so the
+    /// quote is that family's ceiling ([`family_ceiling`]) and may be high.
+    FamilyCeiling,
+}
+
+/// A request longer than `over_tokens` pays `price` instead of the base price.
+#[derive(Clone, Copy, Debug, PartialEq, Serialize)]
+pub struct LongPromptPrice {
+    pub over_tokens: u64,
+    pub price: ModelPrice,
+}
+
+/// Everything the table says about one model id.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct PriceQuote {
+    pub price: ModelPrice,
+    pub long_prompt: Option<LongPromptPrice>,
+    pub basis: PriceBasis,
+    /// English characters per token on this model's tokenizer — what turns
+    /// typed text into an approximate token count without a tokenizer
+    /// (`src/promptcost.ts`). A fact about the model, so it is resolved here
+    /// beside the price and the frontend keeps no model table of its own.
+    pub chars_per_token: f64,
+}
+
+impl PriceQuote {
+    /// The price a request of `prompt_tokens` pays — where a prompt's length is
+    /// "all of its input tokens, including cache reads and cache writes" (the
+    /// page's "Long context pricing"), and "over" is strict.
+    pub fn at(&self, prompt_tokens: u64) -> ModelPrice {
+        match self.long_prompt {
+            Some(long) if prompt_tokens > long.over_tokens => long.price,
+            _ => self.price,
+        }
     }
 }
 
-/// Dollar cost of a token bundle at a given price (per-1M rates).
+/// The family and version a model id names.
+///
+/// The version is the one or two SHORT numeric segments beside the family
+/// word: after it in every id since Claude 4 (`claude-opus-4-8`,
+/// `claude-sonnet-4-5-20250929`), before it in the older spelling
+/// (`claude-3-5-haiku-20241022`). A segment longer than two digits is a date,
+/// never a version, so `claude-opus-4-20250514` is 4.0 and not 4.20250514; a
+/// suffix such as `[1m]` or `-v1:0` is not all digits and ends the version.
+/// `None` for the version when the id carries none this can read.
+fn parse_model(model: &str) -> Option<(Family, Option<(u32, u32)>)> {
+    let m = model.to_ascii_lowercase();
+    let segments: Vec<&str> =
+        m.split(|c: char| !c.is_ascii_alphanumeric()).filter(|s| !s.is_empty()).collect();
+    // A family word is matched as a substring of a segment, as it always has
+    // been, so an id that glues it to something else still resolves.
+    let (at, family) = segments.iter().enumerate().find_map(|(i, seg)| {
+        FAMILIES.iter().find(|(word, _)| seg.contains(*word)).map(|(_, f)| (i, *f))
+    })?;
+    fn short_number(s: &str) -> Option<u32> {
+        if s.len() <= 2 && s.chars().all(|c| c.is_ascii_digit()) {
+            s.parse().ok()
+        } else {
+            None
+        }
+    }
+    let after: Vec<u32> = segments[at + 1..].iter().map_while(|s| short_number(s)).take(2).collect();
+    let version = if let Some(major) = after.first() {
+        Some((*major, after.get(1).copied().unwrap_or(0)))
+    } else {
+        let mut before: Vec<u32> =
+            segments[..at].iter().rev().map_while(|s| short_number(s)).take(2).collect();
+        before.reverse();
+        before.first().map(|major| (*major, before.get(1).copied().unwrap_or(0)))
+    };
+    Some((family, version))
+}
+
+/// The price an UNKNOWN version of a known family takes: column by column, the
+/// highest figure among that family's rows the page does not mark retired.
+///
+/// **Why the highest.** The estimate's posture has always been that it never
+/// under-reports, and an id this table has not caught up with is far likelier
+/// a model released since [`PRICE_TABLE_DATED`] than an old one.
+///
+/// **Why not the retired rows.** Opus 4.1 lists at three times any current
+/// Opus. Folding it in would triple the figure for every new Opus until
+/// someone updated this table — a wrong number in the other direction, and one
+/// that would read as a real cost. A retired version an old transcript really
+/// does carry is still priced exactly, by its own row.
+///
+/// **Per column, not per row**, because no single row is highest everywhere:
+/// Fable 5 and 5.1 share an input price and differ fourfold on a cache hit.
+///
+/// The long-prompt tier is NOT carried up: its threshold is a fact about one
+/// model, and the ceiling is already above both of that model's tiers.
+fn family_ceiling(family: Family) -> Option<ModelPrice> {
+    PRICE_ROWS.iter().filter(|r| r.family == family && !r.retired).map(|r| r.price).reduce(|a, b| {
+        ModelPrice {
+            input: a.input.max(b.input),
+            output: a.output.max(b.output),
+            cache_write: a.cache_write.max(b.cache_write),
+            cache_write_1h: a.cache_write_1h.max(b.cache_write_1h),
+            cache_read: a.cache_read.max(b.cache_read),
+        }
+    })
+}
+
+/// Everything the price table says about `model`, or `None` for a model whose
+/// family it does not list — which falls back to token-only display on every
+/// surface. A listed version gets its own row; an unlisted version of a listed
+/// family gets [`family_ceiling`] and says so in `basis`.
+///
+/// **A model id from another vendor's CLI is not this function's to price.**
+/// It answers for the id it is handed, and an id such as
+/// `openrouter/anthropic/claude-sonnet-4.5` does name a family. Whether a row
+/// is priced off this table at all is decided by the caller, on the row's own
+/// provenance — see `OrchRegistry::compute_group_usage`.
+pub fn price_quote(model: &str) -> Option<PriceQuote> {
+    let (family, version) = parse_model(model)?;
+    let listed = version.and_then(|v| PRICE_ROWS.iter().find(|r| r.family == family && r.version == v));
+    // An unreadable or unlisted version is assumed to be on the newer
+    // tokenizer: more tokens for the same text, so the typed-prompt estimate
+    // errs high like the price beside it.
+    let newer_tokenizer = match listed {
+        Some(r) => r.version >= NEWER_TOKENIZER_FROM,
+        None => true,
+    };
+    let chars_per_token = if newer_tokenizer {
+        CHARS_PER_TOKEN_EARLIER / NEWER_TOKENIZER_FACTOR
+    } else {
+        CHARS_PER_TOKEN_EARLIER
+    };
+    match listed {
+        Some(r) => Some(PriceQuote {
+            price: r.price,
+            long_prompt: r.long_prompt.map(|(over_tokens, price)| LongPromptPrice { over_tokens, price }),
+            basis: PriceBasis::Listed,
+            chars_per_token,
+        }),
+        None => family_ceiling(family).map(|price| PriceQuote {
+            price,
+            long_prompt: None,
+            basis: PriceBasis::FamilyCeiling,
+            chars_per_token,
+        }),
+    }
+}
+
+/// The base-tier price for `model` — [`price_quote`] for a caller with no
+/// prompt length in hand. A caller pricing one REQUEST uses
+/// [`PriceQuote::at`] with that request's own prompt length instead.
+pub fn price_for(model: &str) -> Option<ModelPrice> {
+    price_quote(model).map(|q| q.price)
+}
+
+/// Dollar cost of a token bundle at a given price (per-1M rates), with every
+/// cache write at the 5-minute rate.
 fn cost_of(t: &TokenUsage, p: &ModelPrice) -> f64 {
+    cost_of_split(t, 0, p)
+}
+
+/// [`cost_of`] with `write_1h` of the bundle's cache-creation tokens priced at
+/// the 1-hour rate and the rest at the 5-minute one. `write_1h` is clamped to
+/// the bundle's own cache-creation count, so a record whose buckets disagree
+/// with its total can move tokens between the two rates and never invent any.
+fn cost_of_split(t: &TokenUsage, write_1h: u64, p: &ModelPrice) -> f64 {
+    let write_1h = write_1h.min(t.cache_creation_tokens);
+    let write_5m = t.cache_creation_tokens - write_1h;
     (t.input_tokens as f64 * p.input
         + t.output_tokens as f64 * p.output
-        + t.cache_creation_tokens as f64 * p.cache_write
+        + write_5m as f64 * p.cache_write
+        + write_1h as f64 * p.cache_write_1h
         + t.cache_read_tokens as f64 * p.cache_read)
         / 1_000_000.0
 }
@@ -219,6 +546,20 @@ struct TranscriptFold {
     /// (deduped) message never moves it — an old line replayed by `--resume`
     /// must not rewind the pane to the model it has since left.
     last_model: Option<String>,
+    /// The first counted real turn's context ([`SessionUsage::first_context_tokens`]).
+    /// Set once and never moved: a re-emitted line is dropped by the dedupe
+    /// above before it gets here, and a later turn is not the first.
+    first_context: Option<u64>,
+    /// The lifetime of the last cache write seen
+    /// ([`SessionUsage::detected_cache_ttl_minutes`]).
+    ///
+    /// **The last cache-WRITING request decides.** A request that only read
+    /// the cache leaves this alone: a hit refreshes an entry for the lifetime
+    /// it was written with (the pricing page's duration for a cache hit is
+    /// "Same duration as the preceding write"), so it is no evidence of a
+    /// change. A later write on a different lifetime replaces it, which is
+    /// what follows an account whose cache lifetime changes mid-session.
+    write_ttl: Option<u32>,
 }
 
 impl TranscriptFold {
@@ -264,8 +605,18 @@ impl TranscriptFold {
             return;
         }
         self.last_model = Some(model.to_string());
-        if let Some(p) = price_for(model) {
-            self.cost += cost_of(&t, &p);
+        // This request's prompt length: everything it was sent, which is the
+        // same sum `latest_context_tokens` reads off the newest turn.
+        let prompt = t.input_tokens + t.cache_creation_tokens + t.cache_read_tokens;
+        self.first_context.get_or_insert(prompt);
+        if let Some(ttl) = claude_write_ttl(usage) {
+            self.write_ttl = Some(ttl);
+        }
+        if let Some(q) = price_quote(model) {
+            // Priced per REQUEST, on two axes a session-wide price cannot
+            // carry (#3831): the prompt-length tier this request's own prompt
+            // falls in, and which cache its writes went to.
+            self.cost += cost_of_split(&t, claude_write_1h_tokens(usage), &q.at(prompt));
             self.any_priced = true;
             let out = t.output_tokens;
             match &mut self.best_model {
@@ -283,6 +634,8 @@ impl TranscriptFold {
             cost_usd: self.any_priced.then_some(self.cost),
             model: self.best_model.as_ref().map(|(m, _)| m.clone()),
             current_model: self.last_model.clone(),
+            first_context_tokens: self.first_context,
+            detected_cache_ttl_minutes: self.write_ttl,
         }
     }
 }
@@ -360,8 +713,9 @@ fn latest_real_assistant_turn(text: &str) -> Option<Value> {
 /// compact land with no offload.
 pub const DEFAULT_CLAUDE_CONTEXT_WINDOW_TOKENS: u64 = 200_000;
 
-/// Context-window size (tokens) for a Claude model, matched the SAME way
-/// `price_for` matches (substring of the transcript's own model id) — real
+/// Context-window size (tokens) for a Claude model, matched by FAMILY as a
+/// substring of the transcript's own model id, and by nothing else — unlike
+/// `price_for`, which since #3831 also reads the version beside it. Real
 /// evidence (a live demo, PR #329 round 7) showed a flat 200K denominator
 /// reads badly wrong for a model actually running with a much larger window:
 /// the CLI's own `/context` reported ~5% for a token count loomux read as
@@ -607,6 +961,11 @@ struct PiFold {
     /// carries no pricing decision to explain — it answers "which model is this
     /// pane on", and for that the latest turn is the truth.
     last_model: Option<String>,
+    /// The first ASSISTANT turn's context
+    /// ([`SessionUsage::first_context_tokens`]). Only an assistant entry can
+    /// set it: a tool's own usage, a compaction and a branch summary are spend
+    /// under this session, but none of them is the prompt the agent was sent.
+    first_context: Option<u64>,
 }
 
 impl PiFold {
@@ -639,11 +998,13 @@ impl PiFold {
         let Ok(v) = serde_json::from_str::<Value>(line) else {
             return;
         };
+        let mut is_turn = false;
         let usage = match v.get("type").and_then(Value::as_str) {
             Some("message") => {
                 let Some(msg) = v.get("message") else { return };
                 match msg.get("role").and_then(Value::as_str) {
                     Some("assistant") => {
+                        is_turn = true;
                         // Recorded even when the turn spent nothing — pi writes
                         // an all-zero `usage` on an errored turn — because this
                         // field is "which model is this pane on" rather than
@@ -668,6 +1029,12 @@ impl PiFold {
         let Some(usage) = usage else { return };
 
         let t = pi_tokens(usage);
+        // pi writes an all-zero `usage` on an errored turn; that is not a
+        // prompt anyone was sent, so it does not get to be the first.
+        let prompt = t.input_tokens + t.cache_creation_tokens + t.cache_read_tokens;
+        if is_turn && prompt > 0 {
+            self.first_context.get_or_insert(prompt);
+        }
         self.totals.input_tokens += t.input_tokens;
         self.totals.output_tokens += t.output_tokens;
         self.totals.cache_creation_tokens += t.cache_creation_tokens;
@@ -687,6 +1054,10 @@ impl PiFold {
             cost_usd: self.any_cost.then_some(self.cost),
             model: self.last_model.clone(),
             current_model: self.last_model.clone(),
+            first_context_tokens: self.first_context,
+            // pi's `usage` has one `cacheWrite` count and no lifetime beside
+            // it, so there is nothing to read a TTL off.
+            detected_cache_ttl_minutes: None,
         }
     }
 }
@@ -820,6 +1191,9 @@ struct CodexFold {
     /// `String` at the pin (`struct TurnContextItem`), so a line that parses at
     /// all either has it or is not a `turn_context`.
     last_model: Option<String>,
+    /// The first response's context
+    /// ([`SessionUsage::first_context_tokens`]).
+    first_context: Option<u64>,
 }
 
 impl CodexFold {
@@ -853,6 +1227,12 @@ impl CodexFold {
             Some("token_usage_record") => {
                 let Some(usage) = v.pointer("/payload/usage") else { return };
                 let t = codex_tokens(usage);
+                // The three input-side buckets add back up to codex's own
+                // whole-prompt `input_tokens` (see `codex_tokens`).
+                let prompt = t.input_tokens + t.cache_creation_tokens + t.cache_read_tokens;
+                if prompt > 0 {
+                    self.first_context.get_or_insert(prompt);
+                }
                 self.totals.input_tokens += t.input_tokens;
                 self.totals.output_tokens += t.output_tokens;
                 self.totals.cache_creation_tokens += t.cache_creation_tokens;
@@ -884,6 +1264,9 @@ impl CodexFold {
             cost_usd: price.map(|p| cost_of(&self.totals, &p)),
             model: self.last_model.clone(),
             current_model: self.last_model.clone(),
+            first_context_tokens: self.first_context,
+            // A rollout's `cache_write_input_tokens` carries no lifetime.
+            detected_cache_ttl_minutes: None,
         }
     }
 }
@@ -1636,6 +2019,10 @@ pub fn opencode_session_usage(
         // current model, not the one the session was created with.
         current_model: t.model.clone(),
         model: t.model,
+        // The session row is a running total with no per-turn record, so
+        // there is no first turn to read and no cache lifetime either.
+        first_context_tokens: None,
+        detected_cache_ttl_minutes: None,
     }))
 }
 
@@ -1978,5 +2365,296 @@ mod tests {
     fn latest_context_tokens_none_when_no_real_turn_exists() {
         assert_eq!(latest_context_tokens(""), None);
         assert_eq!(latest_context_tokens("not json\n{\"type\":\"user\"}"), None);
+    }
+
+    // ---------- the version-aware price table (#3831) ----------
+
+    /// The five numbers of one vendor row, in the page's column order.
+    fn cols(p: ModelPrice) -> [f64; 5] {
+        [p.input, p.cache_write, p.cache_write_1h, p.cache_read, p.output]
+    }
+
+    fn listed(model: &str) -> [f64; 5] {
+        let q = price_quote(model).unwrap_or_else(|| panic!("{model} is unpriced"));
+        assert_eq!(q.basis, PriceBasis::Listed, "{model} should be a listed version");
+        cols(q.price)
+    }
+
+    #[test]
+    fn price_for_reads_the_version_and_not_only_the_family() {
+        // The pair the family-only table could not tell apart: one family, two
+        // input prices.
+        assert_eq!(listed("claude-sonnet-5-5"), [2.0, 2.50, 4.0, 0.10, 10.0]);
+        assert_eq!(listed("claude-sonnet-4-6"), [3.0, 3.75, 6.0, 0.30, 15.0]);
+        // Same input price, different cache hit: 5 and 5.5 differ on one column.
+        assert_eq!(listed("claude-sonnet-5"), [2.0, 2.50, 4.0, 0.20, 10.0]);
+        assert_eq!(listed("claude-opus-5-5"), [4.0, 5.0, 8.0, 0.20, 20.0]);
+        assert_eq!(listed("claude-opus-4-8"), [5.0, 6.25, 10.0, 0.50, 25.0]);
+        assert_eq!(listed("claude-fable-5-1"), [10.0, 12.50, 20.0, 0.25, 50.0]);
+        assert_eq!(listed("claude-fable-5"), [10.0, 12.50, 20.0, 1.0, 50.0]);
+        assert_eq!(listed("claude-mythos-5-1"), listed("claude-fable-5-1"));
+        assert_eq!(listed("claude-haiku-4-5"), [1.0, 1.25, 2.0, 0.10, 5.0]);
+        // `price_for` is the same answer's base tier.
+        assert_eq!(price_for("claude-sonnet-5-5").map(cols), Some([2.0, 2.50, 4.0, 0.10, 10.0]));
+    }
+
+    #[test]
+    fn the_version_is_read_off_every_spelling_an_id_takes() {
+        // A date is not a minor version, a suffix ends the version, a provider
+        // prefix is ignored, and the pre-4 spelling puts the version first.
+        assert_eq!(listed("claude-sonnet-4-5-20250929"), listed("claude-sonnet-4-5"));
+        assert_eq!(listed("claude-opus-4-8[1m]"), listed("claude-opus-4-8"));
+        assert_eq!(listed("us.anthropic.claude-opus-4-8-v1:0"), listed("claude-opus-4-8"));
+        assert_eq!(listed("CLAUDE-OPUS-5-5"), listed("claude-opus-5-5"));
+        assert_eq!(listed("claude-sonnet-4.6"), listed("claude-sonnet-4-6"));
+        // A RETIRED version is still priced exactly, by its own row: an old
+        // transcript really does carry it, at three times a current Opus.
+        assert_eq!(listed("claude-opus-4-20250514"), [15.0, 18.75, 30.0, 1.50, 75.0]);
+        assert_eq!(listed("claude-opus-4-1-20250805"), [15.0, 18.75, 30.0, 1.50, 75.0]);
+        assert_eq!(listed("claude-3-5-haiku-20241022"), [0.80, 1.0, 1.60, 0.08, 4.0]);
+    }
+
+    #[test]
+    fn an_unknown_version_takes_its_familys_highest_current_price() {
+        let ceiling = |model: &str| {
+            let q = price_quote(model).unwrap_or_else(|| panic!("{model} is unpriced"));
+            assert_eq!(q.basis, PriceBasis::FamilyCeiling, "{model} is not a listed version");
+            assert_eq!(q.long_prompt, None, "a ceiling carries no tier: {model}");
+            cols(q.price)
+        };
+        // Sonnet's current rows run $2 to $3: the unknown version takes $3.
+        assert_eq!(ceiling("claude-sonnet-9"), [3.0, 3.75, 6.0, 0.30, 15.0]);
+        // Opus: the highest CURRENT row, never the retired $15 one — that
+        // would triple the figure for every Opus newer than this table.
+        assert_eq!(ceiling("claude-opus-9"), [5.0, 6.25, 10.0, 0.50, 25.0]);
+        // Per column: Fable 5 and 5.1 share an input price and differ on a
+        // cache hit, and the ceiling takes the dearer hit.
+        assert_eq!(ceiling("claude-fable-9"), [10.0, 12.50, 20.0, 1.0, 50.0]);
+        // Haiku: 4.5 is above both of 5.5's tiers.
+        assert_eq!(ceiling("claude-haiku-9"), [1.0, 1.25, 2.0, 0.10, 5.0]);
+        // An id with a family and no version at all.
+        assert_eq!(ceiling("claude-mythos-preview"), [10.0, 12.50, 20.0, 1.0, 50.0]);
+        assert_eq!(ceiling("opus"), [5.0, 6.25, 10.0, 0.50, 25.0]);
+        // An unknown FAMILY is not priced at all, whatever it is.
+        for unpriced in ["gpt-5.1-codex-max", "gpt-4o", "gemini-3-pro", "some-future-model-9", ""] {
+            assert_eq!(price_quote(unpriced), None, "{unpriced:?} must stay tokens-only");
+            assert!(price_for(unpriced).is_none());
+        }
+    }
+
+    #[test]
+    fn haiku_5_5_switches_tier_one_token_past_the_threshold() {
+        let q = price_quote("claude-haiku-5-5").unwrap();
+        assert_eq!(q.long_prompt.map(|l| l.over_tokens), Some(100_000));
+        assert_eq!(cols(q.at(100_000)), [0.10, 0.125, 0.20, 0.01, 0.50], "\"up to\" is inclusive");
+        assert_eq!(cols(q.at(100_001)), [0.50, 0.625, 1.0, 0.05, 2.50], "\"over\" starts one past");
+        // A model with no tier answers its one price at any length.
+        let opus = price_quote("claude-opus-5-5").unwrap();
+        assert_eq!(opus.long_prompt, None);
+        assert_eq!(opus.at(900_000), opus.price);
+    }
+
+    #[test]
+    fn every_price_row_obeys_the_multipliers_the_vendor_states() {
+        // The page states three multipliers on the base input price. Each row
+        // above is five transcribed numbers, so this is what catches a typo in
+        // one of the three derived columns.
+        let near = |a: f64, b: f64| (a - b).abs() < 1e-9;
+        let mut checked = 0;
+        for r in PRICE_ROWS {
+            let hit = match (r.family, r.version) {
+                (Family::Fable | Family::Mythos, (5, 1)) => 0.025,
+                (Family::Opus | Family::Sonnet, (5, 5)) => 0.05,
+                _ => 0.1,
+            };
+            let tiers = std::iter::once(r.price).chain(r.long_prompt.map(|(_, p)| p));
+            for p in tiers {
+                let at = format!("{:?} {:?}", r.family, r.version);
+                assert!(near(p.cache_write, p.input * 1.25), "5m write is 1.25x input: {at}");
+                assert!(near(p.cache_write_1h, p.input * 2.0), "1h write is 2x input: {at}");
+                assert!(near(p.cache_read, p.input * hit), "a hit is {hit}x input: {at}");
+                assert!(p.output > p.input, "output is dearer than input: {at}");
+                checked += 1;
+            }
+        }
+        // The page's table has 21 rows; one model's two rows are one entry here.
+        assert_eq!(checked, 21, "every row of the vendor table, and no more");
+        // No two entries answer for the same (family, version).
+        for (i, a) in PRICE_ROWS.iter().enumerate() {
+            for b in &PRICE_ROWS[i + 1..] {
+                assert!(a.family != b.family || a.version != b.version, "{:?} {:?} twice", a.family, a.version);
+            }
+        }
+    }
+
+    #[test]
+    fn the_newer_tokenizer_starts_at_4_7() {
+        let cpt = |model: &str| price_quote(model).unwrap().chars_per_token;
+        let (earlier, newer) = (3.5, 3.5 / 1.3);
+        assert_eq!(cpt("claude-sonnet-4-6"), earlier);
+        assert_eq!(cpt("claude-opus-4-6"), earlier);
+        assert_eq!(cpt("claude-haiku-4-5"), earlier);
+        assert_eq!(cpt("claude-opus-4-7"), newer, "the first version on the newer tokenizer");
+        assert_eq!(cpt("claude-opus-5-5"), newer);
+        assert_eq!(cpt("claude-haiku-5-5"), newer);
+        assert_eq!(cpt("claude-fable-5"), newer);
+        // An unlisted version errs toward MORE tokens, like its price.
+        assert_eq!(cpt("claude-sonnet-9"), newer);
+        assert!(newer < earlier, "fewer characters per token is more tokens");
+    }
+
+    // ---------- per-request pricing, first turn, detected TTL (#3831) ----------
+
+    /// An assistant line whose cache write is split into the two buckets the
+    /// API reports: `w5` tokens to the 5-minute cache, `w60` to the 1-hour one.
+    fn bucket_line(id: &str, model: &str, input: u64, w5: u64, w60: u64, cr: u64) -> String {
+        serde_json::json!({
+            "type": "assistant",
+            "message": {
+                "id": id,
+                "model": model,
+                "usage": {
+                    "input_tokens": input,
+                    "output_tokens": 0,
+                    "cache_creation_input_tokens": w5 + w60,
+                    "cache_read_input_tokens": cr,
+                    "cache_creation": {
+                        "ephemeral_5m_input_tokens": w5,
+                        "ephemeral_1h_input_tokens": w60,
+                    },
+                }
+            }
+        })
+        .to_string()
+    }
+
+    fn cost(lines: &[String]) -> f64 {
+        parse_claude_transcript(&lines.join("\n")).cost_usd.expect("priced")
+    }
+
+    #[test]
+    fn a_cache_write_is_priced_by_the_cache_it_went_to() {
+        let m = 1_000_000;
+        // Opus 5.5: $5 a million to the 5-minute cache, $8 to the 1-hour one.
+        assert!((cost(&[bucket_line("a", "claude-opus-5-5", 0, m, 0, 0)]) - 5.0).abs() < 1e-9);
+        assert!((cost(&[bucket_line("a", "claude-opus-5-5", 0, 0, m, 0)]) - 8.0).abs() < 1e-9);
+        assert!((cost(&[bucket_line("a", "claude-opus-5-5", 0, m, m, 0)]) - 13.0).abs() < 1e-9);
+        // A record with no bucket object is priced as it always was: the
+        // whole write at the 5-minute rate.
+        assert!((cost(&[line("a", "claude-opus-5-5", 0, 0, m, 0)]) - 5.0).abs() < 1e-9);
+        // Buckets that disagree with the total move tokens between the two
+        // rates and never invent any: 1M written, 3M claimed for the hour.
+        let lying = serde_json::json!({"type":"assistant","message":{"id":"a","model":"claude-opus-5-5",
+            "usage":{"input_tokens":0,"output_tokens":0,"cache_creation_input_tokens":m,
+                     "cache_read_input_tokens":0,
+                     "cache_creation":{"ephemeral_5m_input_tokens":0,"ephemeral_1h_input_tokens":3 * m}}}})
+        .to_string();
+        assert!((cost(&[lying]) - 8.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn haiku_5_5_is_priced_per_request_by_that_requests_own_prompt_length() {
+        // Two requests, each priced on its own: 100,000 tokens of prompt pays
+        // the lower price, 100,001 the higher. The prompt length is ALL the
+        // input side, so the second one crosses on a cache read.
+        let at = bucket_line("a", "claude-haiku-5-5", 100_000, 0, 0, 0);
+        let over = bucket_line("b", "claude-haiku-5-5", 1, 0, 0, 100_000);
+        let want_at = 100_000.0 * 0.10 / 1e6;
+        let want_over = (1.0 * 0.50 + 100_000.0 * 0.05) / 1e6;
+        assert!((cost(&[at.clone()]) - want_at).abs() < 1e-12);
+        assert!((cost(&[over.clone()]) - want_over).abs() < 1e-12);
+        assert!((cost(&[at, over]) - (want_at + want_over)).abs() < 1e-12, "earlier requests keep their price");
+        // The lower tier would have charged the same read a fifth as much.
+        assert!(want_over > 4.0 * (1.0 * 0.10 + 100_000.0 * 0.01) / 1e6);
+    }
+
+    #[test]
+    fn first_context_tokens_is_the_first_counted_turn_and_survives_a_resume_re_emit() {
+        assert_eq!(parse_claude_transcript("").first_context_tokens, None);
+        let text = [
+            // A synthetic line is not a turn anyone was sent.
+            line("synth", "<synthetic>", 999_999, 1, 0, 0),
+            // The first real turn: 10 fresh + 20 written + 30 read.
+            line("m1", "claude-opus-5-5", 10, 500, 20, 30),
+            line("m2", "claude-opus-5-5", 1, 500, 2, 80_000),
+            // `--resume` re-emits m1. Different numbers on purpose: if the fold
+            // read this line at all, the answer below would move.
+            line("m1", "claude-opus-5-5", 7_000, 500, 7_000, 7_000),
+        ]
+        .join("\n");
+        let u = parse_claude_transcript(&text);
+        assert_eq!(u.first_context_tokens, Some(60), "input + cache-written + cache-read, output excluded");
+        // Control: the newest turn's context is a different, much larger figure.
+        assert_eq!(latest_context_tokens(&text), Some(21_000));
+    }
+
+    // The detected TTL's three rules, one test each so that each can fail on
+    // its own (`docs/design/cache-age.md`, "Detecting the TTL").
+
+    fn detected(lines: &[String]) -> Option<u32> {
+        parse_claude_transcript(&lines.join("\n")).detected_cache_ttl_minutes
+    }
+    /// A request that wrote only to the 5-minute cache.
+    fn w5(id: &str) -> String {
+        bucket_line(id, "claude-opus-5-5", 1, 100, 0, 0)
+    }
+    /// A request that wrote only to the 1-hour cache.
+    fn w60(id: &str) -> String {
+        bucket_line(id, "claude-opus-5-5", 1, 0, 100, 0)
+    }
+    /// A request that wrote to BOTH.
+    fn w_both(id: &str) -> String {
+        bucket_line(id, "claude-opus-5-5", 1, 100, 100, 0)
+    }
+    /// A request that read the cache and wrote nothing to it.
+    fn read_only(id: &str) -> String {
+        bucket_line(id, "claude-opus-5-5", 1, 0, 0, 900_000)
+    }
+
+    #[test]
+    fn the_last_cache_writing_request_decides_the_detected_ttl() {
+        // Nothing written, nothing detected; each bucket names its own lifetime.
+        assert_eq!(detected(&[]), None);
+        assert_eq!(detected(&[w5("a")]), Some(5));
+        assert_eq!(detected(&[w60("a")]), Some(60));
+        // The LAST write decides, in both directions — so neither "first write
+        // wins" nor "the longer one sticks" passes.
+        assert_eq!(detected(&[w60("a"), w5("b")]), Some(5));
+        assert_eq!(detected(&[w5("a"), w60("b")]), Some(60));
+        assert_eq!(detected(&[w5("a"), w60("b"), w5("c"), w60("d")]), Some(60));
+        // A re-emitted line is deduped before it can rewind the reading.
+        assert_eq!(detected(&[w5("a"), w60("b"), w5("a")]), Some(60));
+    }
+
+    #[test]
+    fn within_one_request_the_shorter_cache_bucket_wins() {
+        // A request that wrote to both caches is on the SHORTER one: its
+        // conversational tail is what expires first.
+        assert_eq!(detected(&[w_both("a")]), Some(5));
+        // ...against a history of hour-long writes too.
+        assert_eq!(detected(&[w60("a"), w60("b"), w_both("c")]), Some(5));
+        // It is only that request's answer: a later hour-only write replaces
+        // it like any other, so this rule and the last-write rule compose.
+        assert_eq!(detected(&[w_both("a"), w60("b")]), Some(60));
+        // Control: an hour-only request is the hour, so the 5 above came from
+        // the mixed request's short bucket and not from a default.
+        assert_eq!(detected(&[w60("a")]), Some(60));
+    }
+
+    #[test]
+    fn a_read_only_request_leaves_the_detected_ttl_alone() {
+        // A cache hit refreshes an entry for the lifetime it was written with,
+        // so it is no evidence of a change — on either lifetime.
+        assert_eq!(detected(&[w60("a"), read_only("b"), read_only("c")]), Some(60));
+        assert_eq!(detected(&[w5("a"), read_only("b")]), Some(5));
+        // And it detects nothing on its own.
+        assert_eq!(detected(&[read_only("a")]), None);
+        // Neither does a write whose record names no bucket: it leaves the
+        // reading where it was rather than guessing one.
+        let unbucketed = |id: &str| line(id, "claude-opus-5-5", 1, 0, 100, 0);
+        assert_eq!(detected(&[unbucketed("a")]), None);
+        assert_eq!(detected(&[w60("a"), unbucketed("b")]), Some(60));
+        // Control: a WRITING request after the reads does move it.
+        assert_eq!(detected(&[w60("a"), read_only("b"), w5("c")]), Some(5));
     }
 }

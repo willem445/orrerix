@@ -37,8 +37,10 @@
 //! Per-CLI defaults live on [`crate::model::CliCaps::cache_ttl_minutes`] —
 //! a fact about the vendor, written down once — and a workflow block may
 //! override it (`cache_ttl_minutes:`), which is how an account on a longer TTL
-//! than the conservative default says so. [`effective_ttl_minutes`] is the one
-//! resolver. See `docs/design/cache-age.md`.
+//! than the conservative default says so. Between the two sits what the
+//! session's own records show (#3831): the lifetime of its last cache write,
+//! where the CLI records one. [`resolve_ttl`] is the one resolver, for every
+//! consumer. See `docs/design/cache-age.md`.
 
 use serde::{Deserialize, Serialize};
 
@@ -58,21 +60,73 @@ pub const WAKE_GAP_MS: u64 = 60_000;
 /// The shortest cooling band, in ms — see [`cooling_after_ms`].
 pub const MIN_COOLING_BAND_MS: u64 = 2 * 60_000;
 
-/// Resolve the TTL (minutes) in force for one agent: the block's
-/// `cache_ttl_minutes:` when it declares one, else its CLI's
-/// [`crate::model::CliCaps::cache_ttl_minutes`].
+/// Which rung of [`resolve_ttl`]'s ladder answered. It travels with the TTL to
+/// every surface that shows one, so a reader can tell a setting from a reading
+/// from an assumption (#3831).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum TtlSource {
+    /// The workflow block's `cache_ttl_minutes:`.
+    Block,
+    /// Read off the session's own records: the lifetime of its last cache
+    /// write (`detected`, below).
+    Session,
+    /// The CLI's [`crate::model::CliCaps::cache_ttl_minutes`] — the
+    /// conservative assumption, used when nothing better is known.
+    Cli,
+}
+
+/// Resolve the TTL (minutes) in force for one agent, and say which rung
+/// answered. Three rungs, first that decides wins:
+///
+/// 1. **The block's `cache_ttl_minutes:`** — what the human declared. `0` is
+///    "do not infer a cache state for me" and answers `None` outright: it is a
+///    decision, so a detected value below it does not get a turn.
+/// 2. **`detected`** — the lifetime the session's own records show its last
+///    cache write was made with (#3831). Evidence about THIS session, so it
+///    outranks an assumption about its CLI. This is the rung that covers a pane
+///    with no workflow block at all (a solo or lead pane), which has nowhere to
+///    declare a TTL. Where the host reads it, and the mixed-lifetime rule, is
+///    `docs/design/cache-age.md`, "Detecting the TTL".
+/// 3. **The CLI's [`crate::model::CliCaps::cache_ttl_minutes`]** — the
+///    conservative default.
+///
+/// A `detected` value of `0`, or one above [`CACHE_TTL_MINUTES_MAX`], is not a
+/// lifetime any provider describes and is ignored rather than trusted: the
+/// field is persisted with the usage row, and a hand-edited row gets the same
+/// treatment a hand-edited block does.
 ///
 /// `None` means **unknown**, and it is an answer, not a failure: a CLI whose
 /// provider is not fixed (copilot, opencode, pi route to several) has no
-/// honest default, and `cache_ttl_minutes: 0` is how a block says "do not
-/// infer a cache state for me". Every consumer shows the age alone and claims
-/// no hot/cold state for `None`.
-pub fn effective_ttl_minutes(block_override: Option<u32>, cli: &str) -> Option<u32> {
+/// honest default. Every consumer shows the age alone and claims no hot/cold
+/// state for `None`.
+///
+/// **This is the one resolver.** The usage row (the chip, and the next-prompt
+/// estimate that reads the chip's TTL) and the orchestrator's idle-compact
+/// backstop both call it with the same three inputs, so a pane cannot read
+/// `hot` on one TTL while it is nudged on another.
+pub fn resolve_ttl(
+    block_override: Option<u32>,
+    detected: Option<u32>,
+    cli: &str,
+) -> Option<(u32, TtlSource)> {
     match block_override {
-        Some(0) => None,
-        Some(n) => Some(n),
-        None => crate::model::cli_caps(cli).and_then(|c| c.cache_ttl_minutes),
+        Some(0) => return None,
+        Some(n) => return Some((n, TtlSource::Block)),
+        None => {}
     }
+    if let Some(n) = detected.filter(|n| *n > 0 && *n <= CACHE_TTL_MINUTES_MAX) {
+        return Some((n, TtlSource::Session));
+    }
+    crate::model::cli_caps(cli)
+        .and_then(|c| c.cache_ttl_minutes)
+        .map(|n| (n, TtlSource::Cli))
+}
+
+/// [`resolve_ttl`] without the rung — for a consumer that acts on the TTL and
+/// never shows where it came from.
+pub fn effective_ttl_minutes(block_override: Option<u32>, detected: Option<u32>, cli: &str) -> Option<u32> {
+    resolve_ttl(block_override, detected, cli).map(|(n, _)| n)
 }
 
 /// Idle time (ms) after which a pane on this TTL reads **cooling**: the TTL
@@ -114,8 +168,8 @@ impl Counters {
 ///
 /// That is exactly the quantity that shows what a cold cache costs: a wake on
 /// a hot cache is mostly `cache_read_tokens` (0.1x input on Anthropic's
-/// table), a wake on a cold one is mostly `cache_creation_tokens` (1.25x) plus
-/// `input_tokens`. At the usage tick's one-second cadence it is usually one
+/// table), a wake on a cold one is mostly `cache_creation_tokens` (1.25x on the
+/// 5-minute cache, 2x on the 1-hour one) plus `input_tokens`. At the usage tick's one-second cadence it is usually one
 /// request; when two landed inside one tick it is both, which only ever makes
 /// the figure larger, never mislabels a hot read as cold.
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
@@ -392,15 +446,45 @@ mod tests {
 
     #[test]
     fn a_block_override_beats_the_cli_default_and_zero_means_unknown() {
-        assert_eq!(effective_ttl_minutes(None, "claude"), Some(5));
-        assert_eq!(effective_ttl_minutes(Some(60), "claude"), Some(60));
-        assert_eq!(effective_ttl_minutes(Some(0), "claude"), None);
+        assert_eq!(effective_ttl_minutes(None, None, "claude"), Some(5));
+        assert_eq!(effective_ttl_minutes(Some(60), None, "claude"), Some(60));
+        assert_eq!(effective_ttl_minutes(Some(0), None, "claude"), None);
         // A multi-provider CLI has no honest default, and an override still
         // applies to it.
-        assert_eq!(effective_ttl_minutes(None, "copilot"), None);
-        assert_eq!(effective_ttl_minutes(Some(30), "copilot"), Some(30));
+        assert_eq!(effective_ttl_minutes(None, None, "copilot"), None);
+        assert_eq!(effective_ttl_minutes(Some(30), None, "copilot"), Some(30));
         // An unknown CLI is unknown, never claude's arm.
-        assert_eq!(effective_ttl_minutes(None, "not-a-cli"), None);
+        assert_eq!(effective_ttl_minutes(None, None, "not-a-cli"), None);
+    }
+
+    #[test]
+    fn the_ttl_ladder_is_block_then_session_then_cli() {
+        // Each rung answers only when every rung above it is silent, and says
+        // which rung it was. The three values differ pairwise, so no rung can
+        // stand in for another.
+        assert_eq!(resolve_ttl(Some(30), Some(60), "claude"), Some((30, TtlSource::Block)));
+        assert_eq!(resolve_ttl(None, Some(60), "claude"), Some((60, TtlSource::Session)));
+        assert_eq!(resolve_ttl(None, None, "claude"), Some((5, TtlSource::Cli)));
+        // A block's `0` is a decision ("infer nothing"), so the detected value
+        // below it does not get a turn.
+        assert_eq!(resolve_ttl(Some(0), Some(60), "claude"), None);
+        // Detection covers a CLI with no default of its own.
+        assert_eq!(resolve_ttl(None, Some(60), "copilot"), Some((60, TtlSource::Session)));
+        // A detected value no provider describes is ignored, not trusted: the
+        // ladder falls to the next rung rather than answering with it.
+        assert_eq!(resolve_ttl(None, Some(0), "claude"), Some((5, TtlSource::Cli)));
+        assert_eq!(
+            resolve_ttl(None, Some(CACHE_TTL_MINUTES_MAX + 1), "claude"),
+            Some((5, TtlSource::Cli))
+        );
+        assert_eq!(
+            resolve_ttl(None, Some(CACHE_TTL_MINUTES_MAX), "copilot"),
+            Some((CACHE_TTL_MINUTES_MAX, TtlSource::Session)),
+            "the ceiling itself is inclusive, as it is for a block"
+        );
+        assert_eq!(resolve_ttl(None, Some(0), "copilot"), None);
+        // The wire spelling the usage row carries.
+        assert_eq!(serde_json::to_value(TtlSource::Session).unwrap(), serde_json::json!("session"));
     }
 
     #[test]

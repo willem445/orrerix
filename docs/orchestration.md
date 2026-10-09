@@ -4200,7 +4200,7 @@ from the launcher, a lead pane, and each orchestration agent. A launcher pane ge
 orrerix identity as it opens, so its usage can be read. claude, pi, copilot and codex
 get the full identity when channel tools are on. Any other agent pane is adopted as a
 delivery-only member, and nothing is added to its command line. A terminal pane has no
-chip at all.
+chip at all. A pane restored after a restart shows its chip again after its next request.
 
 **`cache —`** is the muted chip for a pane the chip cannot read. Its tooltip names the
 missing piece:

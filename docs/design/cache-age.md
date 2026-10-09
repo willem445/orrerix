@@ -277,9 +277,19 @@ session, so the chip never showed on one.
   session are passed, so claude and pi need no second round trip.
 - **The session id.** `orch_human_pane_session(agent_id, session_id)` records it on a
   `Role::Solo` or `Role::Lead` entry. It refuses any other role (a delegate's session comes
-  from its own CLI, through the watcher), an id already set, and an id that is not one path
+  from its own CLI, through the watcher), a different id on record, and an id that is not one path
   component (the usage reader builds a transcript path from it). A solo pane is not
-  persisted, because `__solo__` has no roster. A lead's row is rewritten with its session.
+  persisted, because `__solo__` has no roster. A lead's row is rewritten with its session. The
+  same id again is a success that changes nothing, so a restored pane can re-report the session its
+  entry already holds.
+- **Restored panes.** A restore (the resume, fresh and dormant arms), a fork and a resume that falls
+  back to a fresh respawn each give the pane an identity through `remintSoloIdentity`, which calls
+  `soloPrepare`. Each of those five call sites calls `reportHumanSession` right after the pane's pty
+  is bound, so a restored pane's session reaches the backend at once. A session the pane learns
+  later reaches it through the session-identified hook, which calls the same function. The two cover
+  both orders: a session known when the identity is set is reported then, and one learned after is
+  reported by the hook. The adopt-on-connect path (`orchestration.ts`) and the launch and adopt paths
+  (`bindSoloIfNeeded`, `bindLeadIfNeeded`) call it too.
 - **The CLI.** `compute_group_usage` and `agent_context_signals_for_group` resolve a pane's
   CLI with `cli_for_agent`, which reads the pane's own `solo_cli` before its block. Every
   other agent resolves exactly as it did (#2167).
@@ -306,12 +316,6 @@ clones each running agent that has a session id, once per call.
   file I/O, and the roster write takes `tasks_lock`, which the task board shares. A synchronous
   command doing that on the webview thread is what `perf_dispatch.rs` (INV-1) refuses without a
   debt row, and a debt row needs an owning issue that has accepted the scope. None does.
-- **A re-minted solo pane has its session on the frontend only.** A restore, or a resume that
-  falls back to a fresh respawn (`panerestore.ts`, the `remintSoloIdentity` path in `main.ts`),
-  gives the pane a new identity through `soloPrepare` without going through
-  `bindSoloIfNeeded`. The backend entry then has no session, so the chip reads `no request
-  recorded` until one is recorded. The follow-up is to call `humanPaneSession` where those
-  paths call `setChannelAgent`.
 - SSH panes, and panes whose CLI the frontend does not know, get no identity. Gemini is not a
   session source here, so it reads as a terminal.
 

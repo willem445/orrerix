@@ -797,7 +797,7 @@ impl OrchRegistry {
         let now = now_ms();
         let begun = self.qd_edit_run(group, |r| {
             let own_root = r.pane(quickdrive::QuickSide::Root).standing(agent_id) == Some(true);
-            if !r.described || !r.state().is_idle() || !own_root {
+            if !r.described || !r.state().is_idle() {
                 return Ok((false, None));
             }
             match r.begin_task(now) {

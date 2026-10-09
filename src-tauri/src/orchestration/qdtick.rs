@@ -1599,7 +1599,8 @@ impl OrchRegistry {
                     String::new()
                 } else {
                     format!(
-                        "The task this run was started with, in the human's own words:\n\n{task}\n\n"
+                        "The task this run was started with, in the human's own words:\n\n{}\n\n",
+                        rec.task
                     )
                 };
                 render_template(

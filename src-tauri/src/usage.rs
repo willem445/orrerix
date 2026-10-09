@@ -609,9 +609,7 @@ impl TranscriptFold {
         // same sum `latest_context_tokens` reads off the newest turn.
         let prompt = t.input_tokens + t.cache_creation_tokens + t.cache_read_tokens;
         self.first_context.get_or_insert(prompt);
-        if let Some(ttl) = claude_write_ttl(usage) {
-            self.write_ttl = Some(ttl);
-        }
+        self.write_ttl = claude_write_ttl(usage);
         if let Some(q) = price_quote(model) {
             // Priced per REQUEST, on two axes a session-wide price cannot
             // carry (#3831): the prompt-length tier this request's own prompt

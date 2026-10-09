@@ -301,10 +301,11 @@ clones each running agent that has a session id, once per call.
 
 **Residuals.**
 
-- `human_pane_session` is synchronous inside `mutating_command` (constraint 10, like
-  `orch_solo_bind`). It appends one audit row on the webview thread, and a lead also writes
-  its roster row there. Both are single small appends. If either grows, the command becomes
-  `async` like `orch_solo_adopt`.
+- `orch_human_pane_session` is an async command over `run_blocking`, as `todo_apply` is, and
+  it still goes through `mutating_command`. Its audit append and a lead's roster write are
+  file I/O, and the roster write takes `tasks_lock`, which the task board shares. A synchronous
+  command doing that on the webview thread is what `perf_dispatch.rs` (INV-1) refuses without a
+  debt row, and a debt row needs an owning issue that has accepted the scope. None does.
 - **A re-minted solo pane has its session on the frontend only.** A restore, or a resume that
   falls back to a fresh respawn (`panerestore.ts`, the `remintSoloIdentity` path in `main.ts`),
   gives the pane a new identity through `soloPrepare` without going through

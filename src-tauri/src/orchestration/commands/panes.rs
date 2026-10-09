@@ -87,19 +87,25 @@ pub async fn orch_solo_adopt(
 /// the CLI after the pane is registered for some CLIs. See
 /// `OrchRegistry::human_pane_session`.
 ///
-/// Synchronous, and inside `mutating_command` (constraint 10), like its sibling
-/// `orch_solo_bind`. It does one audit append on the webview thread, and for a
-/// lead one roster write; both are small, and a lead's roster row is the only
-/// disk write here.
+/// Off-thread, like `todo_apply`: the audit append, and for a lead the roster
+/// write, are file I/O, and that write takes `tasks_lock`, which background
+/// board writers hold. Inside `run_blocking` it still goes through
+/// `mutating_command` (constraint 10), so it gets the same re-entrant-refusal
+/// frame a synchronous command gets. The perf guard (`perf_dispatch.rs`, INV-1)
+/// is why it is not a synchronous command with a debt row.
 #[tauri::command]
-pub fn orch_human_pane_session(
-    reg: tauri::State<Arc<OrchRegistry>>,
+pub async fn orch_human_pane_session(
+    app: AppHandle,
     agent_id: String,
     session_id: String,
 ) -> Result<(), String> {
-    OrchRegistry::mutating_command("orch_human_pane_session", || Err(COMMAND_REFUSED.to_string()), || {
-        reg.human_pane_session(&agent_id, &session_id)
+    let reg = reg_of(&app);
+    run_blocking(move || {
+        OrchRegistry::mutating_command("orch_human_pane_session", || Err(COMMAND_REFUSED.to_string()), || {
+            reg.human_pane_session(&agent_id, &session_id)
+        })
     })
+    .await
 }
 
 // ---------- lead panes (#2519): human-only, from the launcher's

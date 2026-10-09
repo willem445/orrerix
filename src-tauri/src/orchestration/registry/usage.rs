@@ -1273,7 +1273,7 @@ impl OrchRegistry {
                 // Every field is `null` where it is not known; none is ever a
                 // zero standing in for that.
                 "prompt_cost": live.then(|| json!({
-                    "context_tokens": context_signals.get(&s.agent_id).and_then(|c| c.tokens),
+                    "context_tokens": None::<u64>,
                     "first_context_tokens": s.first_context_tokens,
                     "price_model": quote.as_ref().map(|(m, _)| *m),
                     "price_per_mtok": quote.as_ref().map(|(_, q)| q.price),

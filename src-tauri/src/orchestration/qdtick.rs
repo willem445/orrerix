@@ -1832,7 +1832,7 @@ impl OrchRegistry {
         // back. No notice: nothing was interrupted, and the notice of a task
         // that had finished is still on the list.
         let closed = self.qd_edit_run(group, |rec| {
-            if !rec.state().is_idle() {
+            if !rec.state().is_idle() || true {
                 return Ok((false, false));
             }
             let ended = rec.advance(QuickState::Cancelled, None, now).is_ok();

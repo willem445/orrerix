@@ -1213,7 +1213,9 @@ impl OrchRegistry {
                 // nothing to park, and a record left idle would need a Stop
                 // for no reason. Gone by ITSELF — a CLI that died at boot —
                 // the run parks instead, so a failed launch is not a pane
-                // that vanished without a word. `expected` is which.
+                // that vanished without a word. `expected` is which — except
+                // at app shutdown, whose kills all arrive unasked-for and
+                // move nothing (`note_shutdown`).
                 if a.role == Role::Quick {
                     self.qd_root_exited(&a.group, &a.id, expected);
                 }

@@ -678,3 +678,58 @@ fn an_idle_roots_session_watch_waits_for_its_first_tool_call_where_the_store_is_
     close_pane(&reg, &root, 7871);
     assert_eq!(reg.qd_deferred_watch_for_test(&group), None);
 }
+
+// ── review round 2: a quit is not a root that died by itself ────────────────
+
+/// **Quitting the app with an idle root open ends the run; it holds nothing.**
+///
+/// A quit ends every pane through `PtyManager::kill_all`, which does not mark
+/// its exits as asked-for, so each pane's exit reaches the registry exactly
+/// as a CLI that died by itself does — and that is the exit that PARKS an
+/// idle run. The registry is told the app is shutting down before the kills
+/// (`note_shutdown`), and from then on an idle run is left as it is, for the
+/// next start's scan to end.
+///
+/// This sends the exit a real quit sends — no exit tail, no bytes, nobody
+/// asked — and then restarts over the same directory. The control is the same
+/// exit with no shutdown announced, which is a crash and parks.
+#[test]
+fn quitting_with_an_idle_root_open_ends_the_run_at_the_next_start_and_holds_nothing() {
+    let dir = tempfile::tempdir().unwrap();
+    let repo = Repo::new();
+    let crashed_repo = Repo::new();
+    let (quit, crashed) = {
+        let reg = relaunch_registry(dir.path());
+        // The control first, while the app is still running: the same exit
+        // is a root that died by itself, and holds its run.
+        let (crashed, crashed_root) = describing(&reg, &crashed_repo);
+        reg.set_pty_for_test(&crashed_root, 7881);
+        reg.on_pty_exit(7881, None, "", 0, false);
+        assert_eq!(held_reason(&reg, &crashed), "unresumable", "the control: no shutdown, so it parks");
+        assert_eq!(open_items(&reg, &crashed).len(), 1);
+
+        // The quit: announced, then the pane is killed.
+        let (quit, quit_root) = describing(&reg, &repo);
+        reg.set_pty_for_test(&quit_root, 7882);
+        reg.note_shutdown();
+        reg.on_pty_exit(7882, None, "", 0, false);
+        assert_eq!(state(&reg, &quit), "root-idle", "left exactly as it was");
+        assert!(open_items(&reg, &quit).is_empty(), "no notice as the window closes");
+        assert_eq!(action_count(&reg, &quit, quickdrive::audit_action::HELD), 0);
+        (quit, crashed)
+    };
+
+    // The next start.
+    let reg = relaunch_registry(dir.path());
+    reg.qd_driver_tick(T0 + 10 * MIN);
+    assert_eq!(state(&reg, &quit), "cancelled", "the idle run is over");
+    assert!(open_items(&reg, &quit).is_empty(), "with no notice");
+    let listed: Vec<String> = reg
+        .quick_list()
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|r| r["group_id"].as_str().unwrap_or_default().to_string())
+        .collect();
+    assert_eq!(listed, vec![crashed.as_str().to_string()], "only the run that really crashed is listed");
+}

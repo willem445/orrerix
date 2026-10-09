@@ -869,7 +869,8 @@ impl OrchRegistry {
 
     /// **Move an IDLE run whose root's pane is gone**, and answer the record
     /// as it then stands — `None` when there was nothing to move: the run is
-    /// not idle, or `agent_id` is not its current root.
+    /// not idle, `agent_id` is not its current root, or the app is shutting
+    /// down (below).
     ///
     /// Which way it moves is decided by WHO ended the pane:
     ///
@@ -892,6 +893,17 @@ impl OrchRegistry {
     /// Only the run's CURRENT root moves it. A superseded pane closing says
     /// nothing about the one that replaced it.
     ///
+    /// **Nothing moves while the app is shutting down.** A quit ends every
+    /// pane through `PtyManager::kill_all`, which — unlike a single pane's
+    /// `kill` — does not mark the exit as expected, so each one arrives here
+    /// looking exactly like a CLI that died by itself. Parking on that would
+    /// hold an idle run because the human quit: a high-urgency notice and a
+    /// toast as the window closes, and a run under Unfinished runs at the next
+    /// start that nothing ever ends. So once
+    /// [`note_shutdown`](Self::note_shutdown) has been called the run is left
+    /// exactly as it is, idle, and the next process's start-up scan ends it
+    /// the way it ends any idle run an earlier process left behind.
+    ///
     /// No notice is raised here: both callers raise the one a hold is owed,
     /// each in its own place.
     pub(in crate::orchestration) fn qd_idle_root_gone(
@@ -902,6 +914,9 @@ impl OrchRegistry {
         now: u64,
     ) -> Option<QuickDriveRecord> {
         if !self.is_quick_group(group) {
+            return None;
+        }
+        if self.is_shutting_down() {
             return None;
         }
         // Read before the state lock is taken: a pane's exit record is behind

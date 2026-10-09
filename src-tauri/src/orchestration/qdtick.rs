@@ -1075,7 +1075,10 @@ impl OrchRegistry {
             let same_turn = cur.state() == expected && cur.brief_pending;
             match &result {
                 Ok(h) => {
-                    if same_turn {
+                    if same_turn && idle {
+                        // No brief was delivered: the pane opened, typed nothing.
+                        cur.root_opened(&h.agent, &h.session, now);
+                    } else if same_turn {
                         cur.brief_delivered(side, &h.agent, &h.session, now);
                     } else {
                         // The run moved while the pane was opening. The pane is

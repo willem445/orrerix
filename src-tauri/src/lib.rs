@@ -385,6 +385,14 @@ pub fn run() {
         .on_window_event(|window, event| {
             if let tauri::WindowEvent::Destroyed = event {
                 obs::breadcrumb("shutdown", "window destroyed");
+                // Before the kills, not after: every pane `kill_all` ends
+                // reaches the registry as an exit nobody asked for, and the
+                // registry has to know those are the shutdown's (#3723).
+                if let Some(reg) =
+                    window.app_handle().try_state::<Arc<orchestration::OrchRegistry>>()
+                {
+                    reg.note_shutdown();
+                }
                 let state: tauri::State<pty::PtyManager> = window.app_handle().state();
                 state.kill_all();
                 // Record a clean exit last, so a crash during teardown still

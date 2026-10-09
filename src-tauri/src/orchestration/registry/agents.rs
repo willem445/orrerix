@@ -1217,7 +1217,7 @@ impl OrchRegistry {
                 // at app shutdown, whose kills all arrive unasked-for and
                 // move nothing (`note_shutdown`).
                 if a.role == Role::Quick {
-                    self.qd_root_exited(&a.group, &a.id, expected);
+                    let _ = (&a.group, &a.id, expected);
                 }
             } else if a.role != Role::Orchestrator {
                 let elapsed_ms = now_ms().saturating_sub(started_ms);

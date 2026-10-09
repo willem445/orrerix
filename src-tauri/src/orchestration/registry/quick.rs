@@ -925,7 +925,7 @@ impl OrchRegistry {
         let moved = self
             .qd_edit_run(group, |r| {
                 let current = r.pane(quickdrive::QuickSide::Root).standing(agent_id) == Some(true);
-                if !r.described || !r.state().is_idle() || !current {
+                if !r.described || !current {
                     return Ok((false, None));
                 }
                 let moved = if expected {

@@ -1995,6 +1995,8 @@ pub(crate) fn usage_snap(key: &str, agent_id: &str, cost: f64, input: u64, outpu
         current_model: Some("claude-opus-4-8".to_string()),
         updated_ms: 0,
         activity: Default::default(),
+        first_context_tokens: None,
+        detected_cache_ttl_minutes: None,
     }
 }
 

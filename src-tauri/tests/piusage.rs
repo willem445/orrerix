@@ -327,6 +327,32 @@ fn the_model_is_the_last_assistant_turn_not_the_one_that_spent_the_most() {
 }
 
 #[test]
+fn the_first_context_is_the_first_assistant_turn_that_was_actually_sent_a_prompt() {
+    // #3831: what "the same prompt in a fresh agent" is priced off. Only an
+    // ASSISTANT turn is a prompt the agent was sent, and an errored turn's
+    // all-zero usage is not one either — so each of the three records ahead of
+    // the real first turn would give a different, wrong answer if it counted.
+    let text = file(&[
+        header(SES, "C:/tmp/repo"),
+        compaction("e0", Some(Turn { input: 300, output: 30, ..Turn::default() })),
+        tool_result_with_usage("e1", Turn { input: 7, output: 3, ..Turn::default() }),
+        assistant("e2", "openrouter", "z-ai/glm-5.3-flash", Turn::default()),
+        assistant("e3", "openrouter", "z-ai/glm-5.3-flash", Turn {
+            input: 1000, output: 100, cache_read: 20, cache_write: 5, ..Turn::default()
+        }),
+        assistant("e4", "openrouter", "z-ai/glm-5.3-flash", Turn {
+            input: 2000, output: 200, cache_read: 40_000, cache_write: 10, ..Turn::default()
+        }),
+    ]);
+    let u = parse_pi_transcript(&text);
+    assert_eq!(u.first_context_tokens, Some(1000 + 20 + 5), "input + cache read + cache write, output excluded");
+    // pi's usage carries one cache-write count and no lifetime beside it.
+    assert_eq!(u.detected_cache_ttl_minutes, None);
+    // No assistant turn yet: unknown, never zero.
+    assert_eq!(parse_pi_transcript(&file(&[header(SES, "C:/tmp/repo")])).first_context_tokens, None);
+}
+
+#[test]
 fn an_errored_turn_still_names_the_model_even_though_it_spent_nothing() {
     // pi writes an assistant entry with an all-zero `usage` and an
     // `errorMessage` when a turn fails. The pane is still ON that model, which

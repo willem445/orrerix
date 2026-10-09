@@ -403,6 +403,32 @@ fn the_model_is_the_latest_turn_context() {
 }
 
 #[test]
+fn the_first_context_is_the_first_responses_whole_prompt_count() {
+    // #3831: codex's `input_tokens` is the WHOLE prompt with both cache details
+    // inside it, so the three buckets this fold splits it into add back up to
+    // it. The running totals on the same line differ from the per-response
+    // figure, so reading either of them instead gives 9,000 here.
+    let first = Usage { input: 1_000, cached: 400, cache_write: 100, output: 60, reasoning: 20 };
+    let second = Usage { input: 50_000, cached: 49_000, output: 10, ..Usage::default() };
+    let running = Usage { input: 9_000, ..Usage::default() };
+    let u = parse_codex_transcript(&format!(
+        "{}{}{}{}",
+        header(THREAD, "C:/tmp/codex-repo"),
+        turn_context("gpt-5.1-codex-max"),
+        usage_line(first, running, running),
+        usage_line(second, running, running)
+    ));
+    assert_eq!(u.first_context_tokens, Some(1_000), "the first response's prompt, output excluded");
+    // A rollout's cache-write count carries no lifetime.
+    assert_eq!(u.detected_cache_ttl_minutes, None);
+    assert_eq!(
+        parse_codex_transcript(&header(THREAD, "C:/tmp/codex-repo")).first_context_tokens,
+        None,
+        "no response yet: unknown, never zero"
+    );
+}
+
+#[test]
 fn a_cumulative_token_count_event_is_not_folded_in() {
     // `event_msg`/`token_count` carries `info.total_token_usage`, the same
     // cumulative figure `thread_token_usage` is. It sits on its own LINE rather

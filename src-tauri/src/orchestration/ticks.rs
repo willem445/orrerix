@@ -275,6 +275,10 @@ pub(in crate::orchestration) struct CacheIdleCandidate {
     pub(in crate::orchestration) id: String,
     pub(in crate::orchestration) group: GroupId,
     pub(in crate::orchestration) block: String,
+    /// The key this agent's usage row is stored under
+    /// (`OrchRegistry::usage_key`), so the decide phase can read the cache
+    /// lifetime the usage tick detected for it (#3831).
+    pub(in crate::orchestration) usage_key: String,
     pub(in crate::orchestration) pty_id: Option<u32>,
     pub(in crate::orchestration) idle_ms: u64,
     pub(in crate::orchestration) latched: bool,

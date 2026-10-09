@@ -1969,6 +1969,7 @@ impl OrchRegistry {
                 id: a.id.clone(),
                 group: a.group.clone(),
                 block: a.block.clone(),
+                usage_key: Self::usage_key(a),
                 pty_id: a.pty_id,
                 idle_ms: now.saturating_sub(a.last_progress_ms),
                 latched: a.cache_idle_nudge_latched,
@@ -1992,10 +1993,19 @@ impl OrchRegistry {
             if compact_command_for(cli).is_none() {
                 continue;
             }
-            let ttl = cacheage::effective_ttl_minutes(
-                g.block(&c.block).and_then(|b| b.cache_ttl_minutes),
-                cli,
-            );
+            // The SAME three-rung ladder the usage row resolves (#3831): the
+            // block's declared TTL, then the lifetime the session's own cache
+            // writes show, then the CLI's default. Without the middle rung an
+            // orchestrator on a block that declares no TTL would be nudged
+            // inside a five-minute band while its own chip, reading the
+            // detected hour, still said `hot`. The store is consulted only
+            // when the block is silent, since a declared value wins anyway.
+            let declared = g.block(&c.block).and_then(|b| b.cache_ttl_minutes);
+            let detected = match declared {
+                Some(_) => None,
+                None => self.stored_detected_cache_ttl(&c.group, &c.usage_key),
+            };
+            let ttl = cacheage::effective_ttl_minutes(declared, detected, cli);
             // The heuristic nudge's floor setting, resolved the way that feature
             // resolves it when it is ON — `None` is the smart default, `Some(0)`
             // an explicit "no floor" — and independent of whether the heuristic

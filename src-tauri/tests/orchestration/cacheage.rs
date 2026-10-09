@@ -240,6 +240,91 @@ fn a_block_ttl_override_moves_the_backstop_band_and_zero_turns_it_off() {
 }
 
 // ---------------------------------------------------------------------------
+// #3831: the TTL a session's own cache writes show, as the middle rung of the
+// one resolver — on the usage row, and on the idle-compact backstop.
+// ---------------------------------------------------------------------------
+
+/// A usage row for `agent` stored under `key`, whose session was last seen
+/// writing to a cache of `detected` minutes.
+fn detected_snap(key: &str, agent: &str, detected: Option<u32>) -> UsageSnapshot {
+    UsageSnapshot { detected_cache_ttl_minutes: detected, ..usage_snap(key, agent, 1.0, 100, 0) }
+}
+
+#[test]
+fn a_detected_ttl_sits_between_the_blocks_and_the_clis_on_the_usage_row() {
+    let row_for = |declared: Option<u32>, detected: Option<u32>| -> Value {
+        let (reg, _d) = test_registry();
+        let mut r = rails();
+        r.blocks.iter_mut().find(|b| b.id == "worker").unwrap().cache_ttl_minutes = declared;
+        let g = reg.create_group("C:/tmp/repo", r).unwrap();
+        reg.upsert_usage_snapshot(&g.id, detected_snap("sess-ttl", "w-ttl", detected));
+        usage_row(&reg.group_usage(&g.id), "w-ttl").clone()
+    };
+    let read = |row: &Value| (row["cache_ttl_minutes"].clone(), row["cache_ttl_source"].clone(), row["cache_cooling_after_ms"].clone());
+
+    // Three values that differ pairwise — 30 declared, 60 detected, 5 from the
+    // CLI — so no rung can be mistaken for another.
+    assert_eq!(read(&row_for(Some(30), Some(60))), (json!(30), json!("block"), json!(24 * MIN)));
+    assert_eq!(read(&row_for(None, Some(60))), (json!(60), json!("session"), json!(48 * MIN)));
+    assert_eq!(read(&row_for(None, None)), (json!(5), json!("cli"), json!(3 * MIN)));
+    // A block's `0` is a decision to infer nothing; the detected hour below it
+    // does not get a turn.
+    assert_eq!(read(&row_for(Some(0), Some(60))), (Value::Null, Value::Null, Value::Null));
+    // A persisted value no provider describes is ignored, not trusted.
+    assert_eq!(read(&row_for(None, Some(0))), (json!(5), json!("cli"), json!(3 * MIN)));
+    assert_eq!(read(&row_for(None, Some(100_000))), (json!(5), json!("cli"), json!(3 * MIN)));
+}
+
+#[test]
+fn the_idle_backstop_reads_the_detected_ttl_and_a_declared_one_still_wins() {
+    let t0 = 1_000 * MIN;
+    // The orchestrator's block declares nothing, and its session was last seen
+    // writing to the HOUR cache. The usage tick stored that on its row; the
+    // backstop must read the same rung the row does.
+    let (reg, _d, gid, oid) = idle_orch_setup(t0);
+    let key = reg.agent(&oid).unwrap().session_id.clone().unwrap_or_else(|| format!("agent:{oid}"));
+    reg.upsert_usage_snapshot(&gid, detected_snap(&key, &oid, Some(60)));
+    // Four minutes idle is inside claude's default 3–5 minute band, and is
+    // where this pane WOULD be nudged without detection (the control below).
+    assert!(
+        reg.cache_idle_nudge_tick(t0 + 4 * MIN, &pct(&oid, 70)).is_empty(),
+        "4m is hot on a detected 60m TTL — the default band must not fire"
+    );
+    assert_eq!(audit_count(&reg, &gid, "cache-idle-nudge"), 0);
+    // The hour's own band is 48–60 minutes.
+    assert_eq!(reg.cache_idle_nudge_tick(t0 + 50 * MIN, &pct(&oid, 70)), vec![oid.clone()]);
+
+    // Control: the same pane with NOTHING detected is nudged at four minutes,
+    // so the silence above was the detected TTL and not a broken fixture.
+    let (reg, _d, gid, oid) = idle_orch_setup(t0);
+    let key = reg.agent(&oid).unwrap().session_id.clone().unwrap_or_else(|| format!("agent:{oid}"));
+    reg.upsert_usage_snapshot(&gid, detected_snap(&key, &oid, None));
+    assert_eq!(reg.cache_idle_nudge_tick(t0 + 4 * MIN, &pct(&oid, 70)), vec![oid.clone()]);
+
+    // A detected lifetime on ANOTHER agent's row is not this pane's.
+    let (reg, _d, gid, oid) = idle_orch_setup(t0);
+    reg.upsert_usage_snapshot(&gid, detected_snap("sess-someone-else", "w-other", Some(60)));
+    assert_eq!(reg.cache_idle_nudge_tick(t0 + 4 * MIN, &pct(&oid, 70)), vec![oid.clone()]);
+
+    // The block's DECLARED value still wins over a detected one: five declared,
+    // sixty detected, and the band is the declared five's.
+    let (reg, _d) = test_registry();
+    let mut r = compact_rails(0, &["orchestrator"]);
+    r.blocks.iter_mut().find(|b| b.id == "orchestrator").unwrap().cache_ttl_minutes = Some(5);
+    let g = reg.create_group("C:/tmp/repo", r).unwrap();
+    let o = reg.spawn_agent(&g.id, Role::Orchestrator, "orch", "", false, None).unwrap();
+    let grew: HashMap<String, u64> = [(o.id.clone(), 64 * 1024u64)].into_iter().collect();
+    reg.compact_nudge_tick(t0, &grew, &HashMap::new(), &HashMap::new(), &HashMap::new(), &HashMap::new(), &HashMap::new());
+    let key = o.session_id.clone().unwrap_or_else(|| format!("agent:{}", o.id));
+    reg.upsert_usage_snapshot(&g.id, detected_snap(&key, &o.id, Some(60)));
+    assert_eq!(
+        reg.cache_idle_nudge_tick(t0 + 4 * MIN, &pct(&o.id, 70)),
+        vec![o.id.clone()],
+        "a declared 5m beats a detected 60m"
+    );
+}
+
+// ---------------------------------------------------------------------------
 // #3407 review round 1: the drive arms of "in flight" (N1), the re-baseline
 // across a source flip (N2), and the honest Compact-now reply (N3).
 // ---------------------------------------------------------------------------

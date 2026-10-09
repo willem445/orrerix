@@ -1012,6 +1012,28 @@ pub struct UsageSnapshot {
     /// before the field existed reads as unknown, and the next growth fills it.
     #[serde(default)]
     pub activity: loomux_engine::cacheage::Activity,
+    /// The context this session's first counted turn was sent
+    /// (`SessionUsage::first_context_tokens`, #3831) — what the next-prompt
+    /// estimate prices "the same prompt in a fresh agent" off. `None` where
+    /// the source has no per-turn record.
+    ///
+    /// Additive in both directions, like `forked_from` on the roster: absent
+    /// from every row written before the field and from every row with nothing
+    /// to say, so an older build reading a newer file meets at most one key it
+    /// does not know and ignores it, and a newer build reading an older file
+    /// reads `None`. `a_usage_file_from_before_the_prompt_cost_fields_loads_unchanged`
+    /// pins both.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub first_context_tokens: Option<u64>,
+    /// The prompt-cache lifetime (minutes) the session's own records show its
+    /// last cache write was made with (`SessionUsage::detected_cache_ttl_minutes`,
+    /// #3831) — the middle rung of `loomux_engine::cacheage::resolve_ttl`.
+    /// Persisted with the row so that a tick whose fresh read came back empty
+    /// (the merge keeps the stored row then) does not drop a pane back to its
+    /// CLI's default TTL for that tick. Additive on `first_context_tokens`'s
+    /// terms.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub detected_cache_ttl_minutes: Option<u32>,
 }
 
 /// What the usage-series sampler remembers about one group between ticks

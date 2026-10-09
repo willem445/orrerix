@@ -1031,7 +1031,7 @@ impl PiFold {
         // pi writes an all-zero `usage` on an errored turn; that is not a
         // prompt anyone was sent, so it does not get to be the first.
         let prompt = t.input_tokens + t.cache_creation_tokens + t.cache_read_tokens;
-        if is_turn && prompt > 0 {
+        if prompt > 0 {
             self.first_context.get_or_insert(prompt);
         }
         self.totals.input_tokens += t.input_tokens;

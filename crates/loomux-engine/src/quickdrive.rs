@@ -689,7 +689,8 @@ pub struct QuickDriveRecord {
     /// sanitized it. **Empty for a described run** (#3723): its task is given
     /// in the root's own pane and never reaches the record. A described
     /// record written before that change carries the text it was started
-    /// with, and it is kept for the chip and the list to show.
+    /// with; it is kept, for the chip and the list to show, until that task
+    /// is over and the next one begins.
     pub task: String,
     /// Private on purpose: [`advance`](QuickDriveRecord::advance) is the only
     /// way to change it, and it goes through [`transition`].
@@ -920,6 +921,12 @@ impl QuickDriveRecord {
     /// notice it raised — is dropped from the record. The notice ITSELF is not
     /// withdrawn: it says where finished work is, and that stays true.
     ///
+    /// So is `task`. Only a record written before #3723 carries one — that
+    /// build took the task on the form — and it describes the task that record
+    /// was started with. Left in place it would be quoted in the finish or
+    /// hold notice of every LATER task, each of which the human gave in the
+    /// pane and none of which it describes.
+    ///
     /// Refused from every state but `root-idle`. In particular a HELD run does
     /// not begin a task by its root acting; only the human's Resume moves it.
     pub fn begin_task(&mut self, now_ms: u64) -> Result<u32, QuickInvalidTransition> {
@@ -931,6 +938,7 @@ impl QuickDriveRecord {
         self.started_ms = now_ms;
         self.clock_ms = now_ms;
         self.task_seq = self.task_seq.saturating_add(1);
+        self.task.clear();
         self.worker_note.clear();
         self.pr = None;
         self.notice_item.clear();
@@ -1526,6 +1534,8 @@ pub mod audit_action {
     pub const TASK_BEGUN: &str = "qd-task-begun";
     /// An idle described run ended because its root's pane is gone (#3723).
     pub const CLOSED: &str = "qd-closed";
+    /// An idle root's session watch was held back, or started (#3723).
+    pub const SESSION_WATCH: &str = "qd-session-watch";
 }
 
 #[cfg(test)]
@@ -2437,6 +2447,7 @@ mod tests {
         rec.take(&done, T0 + 4).unwrap();
         assert_eq!(rec.state(), QuickState::RootIdle);
         assert_eq!(rec.begin_task(T0 + 5), Ok(1), "and the next task is this build's first");
+        assert_eq!(rec.task, "", "which the old task's text does not describe, so it goes");
 
         // A described run that had ENDED under that build is still ended.
         let ended = beta8.replace("\"root-wait\"", "\"satisfied\"");

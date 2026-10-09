@@ -1053,6 +1053,9 @@ impl OrchRegistry {
                 // in before the kickoff below — it arrived first, and
                 // admission order is delivery order.
                 self.readmit_recovered(group_id, &agent_id, pty_id);
+                // Whether this pane was opened with nothing typed (#3723) —
+                // an idle quick root. Read below by the session watch.
+                let mut idle_start = false;
                 if resume {
                     // Resumed sessions already have their role and history;
                     // deliver only the follow-up (if any) instead of the
@@ -1089,10 +1092,11 @@ impl OrchRegistry {
                         .agent(&agent_id)
                         .ok_or("agent vanished during spawn")?;
                     // `None` is an idle quick root (#3723): nothing is typed.
-                    if let Some(kickoff) =
-                        self.fresh_kickoff(&a, &group, &branch_note, inject.kickoff.as_deref())
-                    {
-                        self.deliver_prompt(&agent_id, &kickoff, brand::AUDIT_ACTOR, Delivery::FreshKickoff)?;
+                    match self.fresh_kickoff(&a, &group, &branch_note, inject.kickoff.as_deref()) {
+                        Some(kickoff) => {
+                            self.deliver_prompt(&agent_id, &kickoff, brand::AUDIT_ACTOR, Delivery::FreshKickoff)?;
+                        }
+                        None => idle_start = true,
                     }
                 }
                 // The CLI minted a session as it booted; watch for it and bind
@@ -1100,8 +1104,14 @@ impl OrchRegistry {
                 // resumable and shows in the session browser. Needs an owned
                 // registry (background thread) — a no-op in unit tests, which
                 // don't set the self-arc.
+                //
+                // #3723: not at once for an idle root on a CLI whose store is
+                // the human's own — there the watch waits for the root's first
+                // tool call (`qd_defer_session_watch` says why).
                 if let Some(baseline) = session_baseline {
-                    if let Some(reg) = self.arc() {
+                    if defers_session_watch(idle_start, &baseline) {
+                        self.qd_defer_session_watch(group_id, &agent_id, &cwd, baseline);
+                    } else if let Some(reg) = self.arc() {
                         reg.spawn_session_watcher(
                             agent_id.clone(),
                             group_id.clone(),

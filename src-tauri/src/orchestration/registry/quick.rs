@@ -10,7 +10,7 @@
 
 use super::*;
 
-use crate::orchestration::qdtick::{qd_fact, qd_text};
+use crate::orchestration::qdtick::{qd_fact, qd_text, QdDeferredWatch};
 use crate::orchestration::quickdrive::{
     self, audit_action as act, QuickDriveFile, QuickDriveRecord, QuickLimits, QuickState,
 };
@@ -328,6 +328,8 @@ impl OrchRegistry {
             // that opens that pane takes an idle run off the list again.
             mem.working.insert(group.id.clone());
             mem.signals.remove(&group.id);
+            // A watch held back for an earlier run's root in this group id.
+            mem.root_watch.remove(&group.id);
         }
         // THE MARKER, written after the record: a marker with no run would make
         // every report in this group answer "nothing is listening".
@@ -788,6 +790,11 @@ impl OrchRegistry {
         tool: &str,
         answer: String,
     ) -> String {
+        // The root has just had a tool call answered, so its CLI is running a
+        // turn and its session exists: the moment a watch held back at its
+        // idle start can begin without a stranger's session being the only
+        // one there is to find. Before the filter below — any tool will do.
+        self.qd_start_deferred_watch(group, agent_id);
         if !matches!(tool, "spawn_agent" | "fork_session" | "send_prompt") {
             return answer;
         }
@@ -830,45 +837,196 @@ impl OrchRegistry {
         )
     }
 
-    /// **A quick root's pane has gone** — and if no task was in progress, the
-    /// run goes with it (#3723).
+    /// **A quick root's pane has gone** — what that does to a run with no task
+    /// in progress (#3723). The pane-exit path's entry: the record is moved by
+    /// [`qd_idle_root_gone`](Self::qd_idle_root_gone), and this adds the two
+    /// things only a caller outside a step owes — the notice of a hold, and
+    /// the word to the window.
     ///
-    /// A root that dies with a task in progress is the tick's to find: the run
-    /// parks on `root-gone`, the human is told, and Resume re-opens the
-    /// session. An IDLE root has nothing to park. Every task it was given has
-    /// finished, or it was never given one, so a record left behind would be a
-    /// run that needs stopping for no reason — and would hold its group id for
-    /// a pane that is not coming back. So closing an idle root is the whole of
-    /// ending it: the record goes to `cancelled`, with no notice, because
-    /// nothing was interrupted.
-    ///
-    /// Only the run's CURRENT root ends it. A superseded pane closing says
-    /// nothing about the one that replaced it.
-    pub(in crate::orchestration) fn qd_root_exited(&self, group: &GroupId, agent_id: &str) {
-        if !self.is_quick_group(group) {
-            return;
+    /// A root that dies with a task in progress is not this function's: the
+    /// tick finds it, the run parks on `root-gone`, the human is told and
+    /// Resume re-opens the session.
+    pub(in crate::orchestration) fn qd_root_exited(
+        &self,
+        group: &GroupId,
+        agent_id: &str,
+        expected: bool,
+    ) {
+        // A watch held back for this root has nobody left to watch for.
+        {
+            let mut mem = self.qd_mem.lock_safe();
+            if mem.root_watch.get(group).is_some_and(|w| w.agent == agent_id) {
+                mem.root_watch.remove(group);
+            }
         }
         let now = now_ms();
-        let closed = self.qd_edit_run(group, |r| {
-            let current = r.pane(quickdrive::QuickSide::Root).standing(agent_id) == Some(true);
-            if !r.described || !r.state().is_idle() || !current {
-                return Ok((false, false));
-            }
-            let ended = r.advance(QuickState::Cancelled, None, now).is_ok();
-            Ok((ended, ended))
-        });
-        if let Ok(true) = closed {
-            {
-                let mut mem = self.qd_mem.lock_safe();
-                mem.working.remove(group);
-                mem.signals.remove(group);
-            }
+        let Some(rec) = self.qd_idle_root_gone(group, agent_id, expected, now) else { return };
+        if rec.state() == QuickState::Held {
+            self.qd_raise_notice(group, &rec, now);
+        }
+        self.qd_emit_changed(group);
+    }
+
+    /// **Move an IDLE run whose root's pane is gone**, and answer the record
+    /// as it then stands — `None` when there was nothing to move: the run is
+    /// not idle, or `agent_id` is not its current root.
+    ///
+    /// Which way it moves is decided by WHO ended the pane:
+    ///
+    /// - **`expected`** — orrerix or the human closed it. Every task the run
+    ///   was given has finished, or it was never given one, so there is
+    ///   nothing to park: the run ends (`cancelled`), with no notice, because
+    ///   nothing was interrupted. A record left behind would need a Stop for
+    ///   no reason and would hold its group id for a pane that is not coming
+    ///   back.
+    /// - **not expected** — the CLI exited by itself. That is not the human
+    ///   being done with the pane. An idle root is recorded the moment its
+    ///   pane binds, with nothing typed and so nothing waiting for the CLI to
+    ///   boot, which means a CLI that dies at boot — a wrong model, not signed
+    ///   in — dies AFTER it is recorded, in all but the one window the
+    ///   hand-over closes for itself. Ending the run silently there
+    ///   would turn every failed launch into a pane that vanished with no
+    ///   reason given. So it parks instead, on `unresumable`, with what the
+    ///   pane went out saying; Resume opens a fresh root.
+    ///
+    /// Only the run's CURRENT root moves it. A superseded pane closing says
+    /// nothing about the one that replaced it.
+    ///
+    /// No notice is raised here: both callers raise the one a hold is owed,
+    /// each in its own place.
+    pub(in crate::orchestration) fn qd_idle_root_gone(
+        &self,
+        group: &GroupId,
+        agent_id: &str,
+        expected: bool,
+        now: u64,
+    ) -> Option<QuickDriveRecord> {
+        if !self.is_quick_group(group) {
+            return None;
+        }
+        // Read before the state lock is taken: a pane's exit record is behind
+        // `agents`, which ranks above it.
+        let said = if expected { String::new() } else { self.qd_exit_note(agent_id) };
+        let moved = self
+            .qd_edit_run(group, |r| {
+                let current = r.pane(quickdrive::QuickSide::Root).standing(agent_id) == Some(true);
+                if !r.described || !r.state().is_idle() || !current {
+                    return Ok((false, None));
+                }
+                let moved = if expected {
+                    r.advance(QuickState::Cancelled, None, now).is_ok()
+                } else {
+                    let parked = r
+                        .advance(QuickState::Held, Some(quickdrive::QuickHeld::Unresumable), now)
+                        .is_ok();
+                    if parked {
+                        r.held_note = qd_fact(&said);
+                    }
+                    parked
+                };
+                Ok((moved, moved.then(|| r.clone())))
+            })
+            .ok()
+            .flatten()?;
+        {
+            let mut mem = self.qd_mem.lock_safe();
+            mem.working.remove(group);
+            mem.signals.remove(group);
+        }
+        if moved.state() == QuickState::Held {
+            self.qd_audit(group, act::HELD, json!({
+                "from": QuickState::RootIdle.as_str(), "to": moved.state().as_str(),
+                "reason": moved.held_reason.map(|h| h.as_str()),
+                "agent": agent_id, "detail": moved.held_note,
+            }));
+        } else {
             self.qd_audit(group, act::CLOSED, json!({
                 "agent": agent_id,
-                "why": "its root's pane closed with no task in progress",
+                "why": "its root's pane was closed with no task in progress",
             }));
-            self.qd_emit_changed(group);
         }
+        Some(moved)
+    }
+
+    /// **Hold an idle root's session watch back** until the root shows it is
+    /// running (#3723) — where watching from the spawn could bind a session
+    /// that is not the root's.
+    ///
+    /// The watch learns a pane's session by looking for a NEW one in the
+    /// pane's directory. A quick root's directory is the repository itself,
+    /// and on a CLI whose session store is the human's own, a session the
+    /// human starts there is exactly that: new, in that directory, unclaimed.
+    /// For every other pane the window is the seconds a kickoff takes to
+    /// start a turn. An idle root has no kickoff, so the window was as long
+    /// as the human took to say something — and for all of it, the only new
+    /// session there could be was somebody else's.
+    ///
+    /// So the watch is not started. It is kept here, with the baseline taken
+    /// before the spawn, and started by the root's first successful tool call
+    /// ([`qd_root_acted`](Self::qd_root_acted)): by then the root's own
+    /// session exists, so a stranger's can no longer be the only candidate —
+    /// the search finds the root's, or finds two and refuses to guess.
+    ///
+    /// Which CLIs this applies to is `defers_session_watch`'s to say.
+    pub(in crate::orchestration) fn qd_defer_session_watch(
+        &self,
+        group: &GroupId,
+        agent_id: &str,
+        cwd: &str,
+        baseline: SessionBaseline,
+    ) {
+        self.qd_audit(group, act::SESSION_WATCH, json!({
+            "agent": agent_id, "cli": baseline.cli(), "when": "deferred",
+        }));
+        self.qd_mem.lock_safe().root_watch.insert(
+            group.clone(),
+            QdDeferredWatch { agent: agent_id.to_string(), cwd: cwd.to_string(), baseline },
+        );
+    }
+
+    /// Start the watch [`qd_defer_session_watch`](Self::qd_defer_session_watch)
+    /// held back for `agent_id`, if there is one. Taken exactly once.
+    ///
+    /// The watcher is a thread, so on a registry with no self-handle — every
+    /// integration test — the entry is taken and nothing is started, which is
+    /// what `spawn_agent_full` does with a watch it would have started at once.
+    fn qd_start_deferred_watch(&self, group: &GroupId, agent_id: &str) {
+        let taken = {
+            let mut mem = self.qd_mem.lock_safe();
+            if mem.root_watch.get(group).is_some_and(|w| w.agent == agent_id) {
+                mem.root_watch.remove(group)
+            } else {
+                None
+            }
+        };
+        let Some(watch) = taken else { return };
+        self.qd_audit(group, act::SESSION_WATCH, json!({
+            "agent": watch.agent, "cli": watch.baseline.cli(), "when": "started",
+        }));
+        if let Some(reg) = self.arc() {
+            reg.spawn_session_watcher(watch.agent, group.clone(), watch.cwd, watch.baseline);
+        }
+    }
+
+    /// Test seam: which agent a session watch is being held back for in
+    /// `group`, if any.
+    #[doc(hidden)]
+    pub fn qd_deferred_watch_for_test(&self, group: &GroupId) -> Option<String> {
+        self.qd_mem.lock_safe().root_watch.get(group).map(|w| w.agent.clone())
+    }
+
+    /// Test seam: [`qd_defer_session_watch`](Self::qd_defer_session_watch), as
+    /// the spawn path calls it once a pane has bound — the half of a spawn no
+    /// test reaches, since a test has no frontend to bind one.
+    #[doc(hidden)]
+    pub fn qd_defer_session_watch_for_test(
+        &self,
+        group: &GroupId,
+        agent_id: &str,
+        cwd: &str,
+        baseline: SessionBaseline,
+    ) {
+        self.qd_defer_session_watch(group, agent_id, cwd, baseline);
     }
 
     /// The branch a described run's helpers are cut from when the root names

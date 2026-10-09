@@ -525,3 +525,156 @@ fn a_root_the_run_does_not_name_begins_no_task() {
     assert!(text.contains("start of a task in this quick run (task 1)"), "{text}");
     assert_eq!(state(&reg, &group), "root-wait");
 }
+
+// ── review round 1: a root that dies by itself, and whose session is whose ──
+
+/// **An idle root that exits BY ITSELF parks the run; it does not end it.**
+/// An idle root is recorded the moment its pane binds — nothing is typed, so
+/// nothing waits for its CLI to boot — which means a CLI that dies at boot
+/// dies after it is recorded. Ending the run silently there would make
+/// every failed launch a pane that vanished without a word. So the run is
+/// held, with what the pane went out saying, and Resume opens a fresh root.
+///
+/// The control is the same exit when orrerix or the human asked for it, which
+/// ends the run with no notice.
+#[test]
+fn an_idle_root_that_exits_by_itself_parks_the_run_and_resume_opens_a_fresh_one() {
+    let dir = tempfile::tempdir().unwrap();
+    let reg = relaunch_registry(dir.path());
+    let repo = Repo::new();
+    let (group, root) = describing(&reg, &repo);
+
+    reg.set_pty_for_test(&root, 7861);
+    reg.on_pty_exit(7861, Some(1), "error: unknown model opsu", 25, false);
+
+    assert_eq!(held_reason(&reg, &group), "unresumable", "parked, not ended");
+    let s = status(&reg, &group);
+    let note = s["held_note"].as_str().unwrap_or_default().to_string();
+    assert!(note.contains("unknown model"), "the hold quotes what the pane went out saying: {s}");
+    assert!(note.contains(&root), "and names the pane: {s}");
+    let items = open_items(&reg, &group);
+    assert_eq!(items.len(), 1, "the human is told");
+    assert!(items[0].text.contains("unknown model"), "{}", items[0].text);
+    assert!(is_one_paragraph(&items[0].text), "{:?}", items[0].text);
+    assert_eq!(action_count(&reg, &group, quickdrive::audit_action::CLOSED), 0, "it was not closed");
+    assert_eq!(reg.quick_list().as_array().unwrap().len(), 1, "and it is reachable from the list");
+
+    let after = reg.quick_resume_at(&group, T0 + 2).expect("the run resumes");
+    assert_eq!(after["state"], json!("root-idle"), "back to idle, with no task: {after}");
+    let fresh = pane(&reg, &group, QuickSide::Root);
+    assert!(!fresh.is_empty() && fresh != root, "in a fresh pane: {after}");
+    assert_eq!(reg.agent(&fresh).unwrap().task, "", "opened with nothing typed");
+    assert!(open_items(&reg, &group).is_empty(), "the hold's notice is answered by the resume");
+
+    // The control, in the same registry: the exit somebody asked for ends
+    // the run, and raises nothing.
+    reg.set_pty_for_test(&fresh, 7862);
+    reg.on_pty_exit(7862, Some(1), "error: unknown model opsu", 25, true);
+    assert_eq!(state(&reg, &group), "cancelled");
+    assert!(open_items(&reg, &group).is_empty());
+    assert_eq!(action_count(&reg, &group, quickdrive::audit_action::CLOSED), 1);
+}
+
+/// One codex session file, as the CLI writes it: its id and the directory it
+/// was started in. `tests/orchestration/helpers.rs`'s fixture, duplicated
+/// because helpers do not cross integration-test binaries.
+fn codex_session(store: &std::path::Path, id: &str, cwd: &str) {
+    assert!(!cwd.contains('\\'), "fixture cwds use forward slashes: {cwd}");
+    let day = store.join("2026").join("10").join("08");
+    std::fs::create_dir_all(&day).unwrap();
+    let body = format!(
+        "{{\"timestamp\":\"2026-10-08T10:00:00.000Z\",\"type\":\"session_meta\",\
+         \"payload\":{{\"session_id\":\"{id}\",\"id\":\"{id}\",\
+         \"timestamp\":\"2026-10-08T10:00:00.000Z\",\"cwd\":\"{cwd}\",\
+         \"originator\":\"codex_cli_rs\",\"cli_version\":\"0.153.4\"}}}}\n"
+    );
+    std::fs::write(day.join(format!("rollout-2026-10-08T10-00-00-{id}.jsonl")), body).unwrap();
+}
+
+/// **An idle root's session watch waits for the root's own first tool call**
+/// where watching from the spawn could bind somebody else's session.
+///
+/// The search below is the watcher's own, asked at the two moments. While the
+/// root waits, the only new session in its directory — the human's checkout —
+/// is one the human started there, and the search answers THAT one: a watch
+/// running then would bind it. Once the root has made a tool call its own
+/// session is there too, and the search answers the root's, or — with both
+/// present — refuses. Deferring is what moves the watch from the first moment
+/// to the second.
+#[test]
+fn an_idle_roots_session_watch_waits_for_its_first_tool_call_where_the_store_is_shared() {
+    use loomux_lib::orchestration::{defers_session_watch, SessionBaseline, SessionSearch};
+    use std::collections::HashSet;
+
+    let dir = tempfile::tempdir().unwrap();
+    let reg = relaunch_registry(dir.path());
+    let repo = Repo::new();
+    let (group, root) = describing(&reg, &repo);
+    let store = dir.path().join("codex-sessions");
+    let here = repo.path();
+    let codex = || SessionBaseline::Codex { ids: HashSet::new(), root: store.clone() };
+
+    // The decision: deferred for an idle start on the one store that is the
+    // human's and is written at the first turn, and for nothing else.
+    assert!(defers_session_watch(true, &codex()));
+    assert!(!defers_session_watch(false, &codex()), "a pane typed a kickoff watches at once");
+    assert!(!defers_session_watch(true, &SessionBaseline::OpenCode { ids: HashSet::new() }));
+    assert!(!defers_session_watch(
+        true,
+        &SessionBaseline::Copilot { ids: HashSet::new(), root: store.clone() }
+    ));
+
+    // THE HAZARD, at the spawn's moment: the human starts their own codex in
+    // the repository while the root waits. It is the one new session there.
+    codex_session(&store, "the-humans-own", &here);
+    assert_eq!(
+        reg.search_for_session(&group, &root, &here, &codex()),
+        SessionSearch::Found("the-humans-own".to_string()),
+        "the fixture's premise: a watch running now would bind a session that is not the root's"
+    );
+
+    // So the watch is held back instead of started…
+    reg.qd_defer_session_watch_for_test(&group, &root, &here, codex());
+    assert_eq!(reg.qd_deferred_watch_for_test(&group), Some(root.clone()));
+    // …through a call that was refused, which says nothing about a turn…
+    let (is_error, _) = call(&reg, &root, "spawn_agent", json!({ "kind": "orchestrator", "task": "t" }));
+    assert!(is_error);
+    assert_eq!(reg.qd_deferred_watch_for_test(&group), Some(root.clone()), "a refused call starts nothing");
+    // …and is started by the root's first answered tool call, whatever it is:
+    // the root's CLI is running a turn, so its own session exists.
+    codex_session(&store, "the-roots-own", &here);
+    let (is_error, text) = call(&reg, &root, "list_agents", json!({}));
+    assert!(!is_error, "{text}");
+    assert_eq!(reg.qd_deferred_watch_for_test(&group), None, "taken, once");
+    assert_eq!(state(&reg, &group), "root-idle", "and looking around began no task");
+    let watch: Vec<Value> = audit_details(&reg, &group, quickdrive::audit_action::SESSION_WATCH);
+    assert_eq!(
+        watch.iter().map(|d| d["when"].clone()).collect::<Vec<_>>(),
+        vec![json!("deferred"), json!("started")],
+        "{watch:?}"
+    );
+
+    // At THAT moment the human's session is no longer the only candidate: the
+    // search refuses to choose between two, and never answers the human's.
+    assert_eq!(
+        reg.search_for_session(&group, &root, &here, &codex()),
+        SessionSearch::Contested(2)
+    );
+    // And where the human started none, it is simply the root's.
+    let quiet = dir.path().join("codex-sessions-quiet");
+    codex_session(&quiet, "the-roots-own", &here);
+    assert_eq!(
+        reg.search_for_session(
+            &group,
+            &root,
+            &here,
+            &SessionBaseline::Codex { ids: HashSet::new(), root: quiet }
+        ),
+        SessionSearch::Found("the-roots-own".to_string())
+    );
+
+    // A watch held back for a root that then goes is dropped with it.
+    reg.qd_defer_session_watch_for_test(&group, &root, &here, codex());
+    close_pane(&reg, &root, 7871);
+    assert_eq!(reg.qd_deferred_watch_for_test(&group), None);
+}

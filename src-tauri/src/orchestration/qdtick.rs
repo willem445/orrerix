@@ -40,7 +40,7 @@ use super::quickdrive::{
 };
 use super::{
     brand, is_live_cap_refusal, needsyou, notify, pr_number, render_template, report, tail_snippet,
-    AgentStatus, Delivery, GroupId, LockExt, OrchRegistry, Role,
+    AgentEntry, AgentStatus, Delivery, GroupId, LockExt, OrchRegistry, Role, SessionBaseline,
 };
 
 // ── the briefs ──────────────────────────────────────────────────────────────
@@ -275,6 +275,18 @@ pub struct QdMem {
     pub(super) serviced_ms: HashMap<GroupId, u64>,
     /// Whether this process has looked for runs an earlier one left behind.
     pub(super) scanned: bool,
+    /// An idle root's session watch, held back until the root shows it is
+    /// running (#3723) — see `OrchRegistry::qd_defer_session_watch`. At most
+    /// one per group: a quick run has one root.
+    pub(super) root_watch: HashMap<GroupId, QdDeferredWatch>,
+}
+
+/// A session watch that was not started at the spawn: who it is for, where
+/// that pane runs, and the store as it stood before the pane was spawned.
+pub(super) struct QdDeferredWatch {
+    pub(super) agent: String,
+    pub(super) cwd: String,
+    pub(super) baseline: SessionBaseline,
 }
 
 /// One caller's exclusive right to step one group, released on drop.
@@ -803,7 +815,7 @@ impl OrchRegistry {
     }
 
     /// What a dead pane went out saying, for the hold's notice.
-    fn qd_exit_note(&self, agent_id: &str) -> String {
+    pub(super) fn qd_exit_note(&self, agent_id: &str) -> String {
         let Some(a) = self.agent(agent_id) else { return String::new() };
         let how = match a.killed_by {
             Some(who) => format!("ended by {}", who.as_str()),
@@ -853,7 +865,7 @@ impl OrchRegistry {
         // idle pane costs no wake at all however long it sits.
         if before.state().is_idle() {
             let cur = if before.brief_pending {
-                self.qd_open_idle_root(group, &before, now, &mut out)
+                self.qd_hand_over(group, &before, now, &mut out)
             } else {
                 before
             };
@@ -1020,114 +1032,6 @@ impl OrchRegistry {
         }
     }
 
-    /// **Open an idle described run's root pane, typing nothing into it**
-    /// (#3723), and record what happened. Answers the record as it stands
-    /// afterwards.
-    ///
-    /// This is the one hand-over that delivers no brief. The root's role
-    /// instructions reach it the way its CLI takes them at launch — the
-    /// system-prompt layer, for every CLI that has one — and its task is the
-    /// human's first message, so the pane is opened with an EMPTY task and
-    /// the spawn path types no kickoff for it (`idle_start_types_nothing`).
-    ///
-    /// A root already alive is left exactly as it is: there is nothing to
-    /// re-deliver to a pane that was never owed a message. A failure parks the
-    /// run with the refusal quoted, as every other hand-over's does, which is
-    /// what lets the launcher show why the pane did not open.
-    fn qd_open_idle_root(
-        &self,
-        group: &GroupId,
-        rec: &QuickDriveRecord,
-        now: u64,
-        out: &mut QdDriveReport,
-    ) -> QuickDriveRecord {
-        let recorded = rec.pane(QuickSide::Root).agent.clone();
-        let present = (!recorded.is_empty())
-            .then(|| self.agent(&recorded))
-            .flatten()
-            .filter(|a| a.status != AgentStatus::Dead);
-        let result: Result<(String, String, &'static str), String> = match present {
-            Some(a) => Ok((a.id, a.session_id.unwrap_or_default(), "present")),
-            None => match self.qd_live_root(group) {
-                Some(other) => Err(format!(
-                    "this run's group already has a live root pane ({other}) — a quick run has \
-                     exactly one"
-                )),
-                None => self
-                    .spawn_agent_bound(
-                        group,
-                        Role::Quick,
-                        Some(Role::Quick.as_str().to_string()),
-                        "quick: task",
-                        "",
-                        false,
-                        None,
-                        None,
-                        None,
-                        None,
-                        None,
-                        None,
-                    )
-                    .map(|a| (a.id, a.session_id.unwrap_or_default(), "opened")),
-            },
-        };
-        let stored = self.qd_edit_run(group, |cur| {
-            let still_owed = cur.state().is_idle() && cur.brief_pending;
-            match &result {
-                Ok((agent, session, _)) => {
-                    if still_owed {
-                        cur.root_opened(agent, session, now);
-                    } else {
-                        // The run moved while the pane was opening — a Stop.
-                        // The pane is still this run's, so it is recorded and
-                        // its traffic is answered rather than misdelivered.
-                        cur.pane_mut(QuickSide::Root).record(agent, session);
-                    }
-                    Ok((true, cur.clone()))
-                }
-                Err(why) => {
-                    if !still_owed {
-                        return Ok((false, cur.clone()));
-                    }
-                    let reason = if is_live_cap_refusal(why) {
-                        QuickHeld::CapRefused
-                    } else {
-                        QuickHeld::Unresumable
-                    };
-                    if cur.advance(QuickState::Held, Some(reason), now).is_ok() {
-                        cur.held_note = qd_fact(why);
-                    }
-                    Ok((true, cur.clone()))
-                }
-            }
-        });
-        let cur = match stored {
-            Ok(c) => c,
-            Err(e) => {
-                out.state_unreadable = true;
-                self.qd_audit(group, act::STATE_UNREADABLE, json!({ "error": e }));
-                return rec.clone();
-            }
-        };
-        match &result {
-            Ok((agent, _, how)) => {
-                out.handed_to =
-                    Some((QuickSide::Root.as_str().to_string(), agent.clone(), how.to_string()));
-                self.qd_audit(group, act::OPENED, json!({
-                    "agent": agent, "how": how, "typed": false,
-                }));
-            }
-            Err(why) => {
-                out.refusal = why.clone();
-                self.qd_audit(group, act::HELD, json!({
-                    "from": QuickState::RootIdle.as_str(), "to": cur.state().as_str(),
-                    "reason": cur.held_reason.map(|h| h.as_str()), "detail": why,
-                }));
-            }
-        }
-        cur
-    }
-
     // ---------- the hand-over ----------
 
     /// Deliver the pending brief to the pane that now holds the turn, opening
@@ -1138,6 +1042,14 @@ impl OrchRegistry {
     /// live-agent cap, `unresumable` for anything else — with the refusal
     /// quoted, because a hold whose notice does not say what was refused is a
     /// hold nobody can act on.
+    ///
+    /// **An idle described run comes through here too** (#3723), for the one
+    /// thing it can be owed: its root's pane. That is a hand-over with no
+    /// brief — the pane is opened and nothing is typed
+    /// ([`qd_open_root`](Self::qd_open_root)) — and everything after the
+    /// delivery is this function's, unchanged: the same store, the same "the
+    /// run moved while the pane was opening", the same park with the refusal
+    /// quoted. One copy of "a failed open parks", not two that could drift.
     fn qd_hand_over(
         &self,
         group: &GroupId,
@@ -1145,9 +1057,19 @@ impl OrchRegistry {
         now: u64,
         out: &mut QdDriveReport,
     ) -> QuickDriveRecord {
-        let Some(side) = rec.state().turn() else { return rec.clone() };
-        let text = self.qd_brief(group, rec);
-        let result = self.qd_deliver_turn(group, rec, side, &text);
+        let idle = rec.state().is_idle();
+        let side = match rec.state().turn() {
+            Some(side) => side,
+            // Nobody holds a turn while idle; the pane owed is the root's.
+            None if idle => QuickSide::Root,
+            None => return rec.clone(),
+        };
+        let result = if idle {
+            self.qd_open_root(group, rec)
+        } else {
+            let text = self.qd_brief(group, rec);
+            self.qd_deliver_turn(group, rec, side, &text)
+        };
         let expected = rec.state();
         let stored = self.qd_edit_run(group, |cur| {
             let same_turn = cur.state() == expected && cur.brief_pending;
@@ -1185,7 +1107,7 @@ impl OrchRegistry {
                 }
             }
         });
-        let cur = match stored {
+        let mut cur = match stored {
             Ok(c) => c,
             Err(e) => {
                 out.state_unreadable = true;
@@ -1197,10 +1119,29 @@ impl OrchRegistry {
             Ok(h) => {
                 out.handed_to =
                     Some((side.as_str().to_string(), h.agent.clone(), h.how.to_string()));
-                self.qd_audit(group, act::HANDOFF, json!({
+                let mut detail = json!({
                     "side": side.as_str(), "agent": h.agent, "how": h.how,
                     "state": expected.as_str(),
-                }));
+                });
+                // An idle open is audited as what it was: a pane, and no text.
+                let action = if idle {
+                    detail["typed"] = json!(false);
+                    act::OPENED
+                } else {
+                    act::HANDOFF
+                };
+                self.qd_audit(group, action, detail);
+                // #3723: an idle root is recorded the moment its pane binds —
+                // nothing is typed, so nothing here waits for its CLI to boot.
+                // A pane that died between the spawn returning and the store
+                // above went unseen by the exit path, which found no root to
+                // match. Look once, now that it is recorded, so a record
+                // cannot be left idle on a pane that is already gone.
+                if idle && !self.qd_pane_alive(&h.agent) {
+                    if let Some(parked) = self.qd_idle_root_gone(group, &h.agent, false, now) {
+                        cur = parked;
+                    }
+                }
             }
             Err(why) => {
                 out.refusal = why.clone();
@@ -1211,6 +1152,67 @@ impl OrchRegistry {
             }
         }
         cur
+    }
+
+    /// **An idle described run's root pane, opened with nothing typed**
+    /// (#3723) — the delivery half of the one hand-over that has no brief.
+    ///
+    /// The root's role instructions reach it the way its CLI takes them at
+    /// launch — the system-prompt layer, for every CLI that has one — and its
+    /// task is the human's first message, so the pane is opened with an EMPTY
+    /// task and the spawn path types no kickoff for it
+    /// (`idle_start_types_nothing`).
+    ///
+    /// A root already alive is left exactly as it is: there is nothing to
+    /// re-deliver to a pane that was never owed a message.
+    fn qd_open_root(&self, group: &GroupId, rec: &QuickDriveRecord) -> Result<QdHandOver, String> {
+        let recorded = rec.pane(QuickSide::Root).agent.clone();
+        let present = (!recorded.is_empty())
+            .then(|| self.agent(&recorded))
+            .flatten()
+            .filter(|a| a.status != AgentStatus::Dead);
+        let (a, how) = match present {
+            Some(a) => (a, "present"),
+            None => (self.qd_first_root_pane(group, "")?, "opened"),
+        };
+        Ok(QdHandOver {
+            session: a.session_id.clone().unwrap_or_default(),
+            agent: a.id,
+            how,
+            cwd: String::new(),
+            branch: String::new(),
+        })
+    }
+
+    /// The first pane of a described run's root (#3679): the repository, no
+    /// worktree, and exactly one — `qd_live_root` is the backstop on that, for
+    /// the reason `lead_prepare` has one: a group with two roots delivers a
+    /// helper's report to whichever a map iteration returns first.
+    ///
+    /// `text` is what the pane is opened with: the resume message of a task
+    /// that was in progress, or nothing at all for an idle root. Both openers
+    /// call this, so the backstop and the spawn are written once.
+    fn qd_first_root_pane(&self, group: &GroupId, text: &str) -> Result<AgentEntry, String> {
+        if let Some(other) = self.qd_live_root(group) {
+            return Err(format!(
+                "this run's group already has a live root pane ({other}) — a quick run has \
+                 exactly one"
+            ));
+        }
+        self.spawn_agent_bound(
+            group,
+            Role::Quick,
+            Some(Role::Quick.as_str().to_string()),
+            "quick: task",
+            text,
+            false,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+        )
     }
 
     /// Put `text` in front of the pane that runs `side`.
@@ -1380,33 +1382,10 @@ impl OrchRegistry {
                     None,
                 )?
             }
-            // The root of a described run (#3679): the repository, no
-            // worktree, and exactly one — `qd_live_root` is the backstop on
-            // that, for the reason `lead_prepare` has one: a group with two
-            // roots delivers a helper's report to whichever a map iteration
-            // returns first.
-            QuickSide::Root => {
-                if let Some(other) = self.qd_live_root(group) {
-                    return Err(format!(
-                        "this run's group already has a live root pane ({other}) — a quick \
-                         run has exactly one"
-                    ));
-                }
-                self.spawn_agent_bound(
-                    group,
-                    role,
-                    Some(block.to_string()),
-                    name,
-                    text,
-                    false,
-                    None,
-                    None,
-                    None,
-                    None,
-                    None,
-                    None,
-                )?
-            }
+            // The root of a described run (#3679), re-opened cold with the
+            // resume message of a task in progress. The idle open shares the
+            // spawn and its one-root backstop: `qd_first_root_pane`.
+            QuickSide::Root => self.qd_first_root_pane(group, text)?,
         };
         Ok(QdHandOver {
             session: a.session_id.clone().unwrap_or_default(),

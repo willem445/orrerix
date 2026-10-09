@@ -269,3 +269,33 @@ export function cacheChipTitle(
   lines.push(hint);
   return lines.join("\n");
 }
+
+/** A solo or lead pane's identity for the session report (#3831). */
+export interface HumanPaneIdentity {
+  readonly agentId: string;
+  readonly role: "solo" | "lead";
+}
+
+/** A session the frontend has reported for one agent (#3831). */
+export interface ReportedSession {
+  readonly agentId: string;
+  readonly sessionId: string;
+}
+
+/** The session a pane should report to the backend now, or null for nothing to
+ *  report (#3831). `humanIdentity` is null for a terminal, a delegate and a pane
+ *  orrerix does not know; `reported` is what this pane has already reported. A
+ *  pane reports each (agent, session) pair once, so a restored pane whose session
+ *  is already on record is not sent it again. */
+export function sessionToReport(input: {
+  readonly humanIdentity: HumanPaneIdentity | null;
+  readonly sessionId: string | null;
+  readonly reported: ReportedSession | null;
+}): ReportedSession | null {
+  const { humanIdentity, sessionId, reported } = input;
+  if (humanIdentity === null || sessionId === null) return null;
+  if (reported !== null && reported.agentId === humanIdentity.agentId && reported.sessionId === sessionId) {
+    return null;
+  }
+  return { agentId: humanIdentity.agentId, sessionId };
+}

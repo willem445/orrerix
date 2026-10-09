@@ -7,6 +7,7 @@
 // role, and focus panes on request.
 
 import type { WakeCostReading } from "./cacheage";
+import { reportHumanSession } from "./humansession";
 import { invoke, listen } from "./transport.ts";
 import type { Grid } from "./grid";
 import type { Pane, PaneEvents } from "./pane";
@@ -1301,6 +1302,7 @@ async function adoptIfEligible(pane: Pane): Promise<void> {
     // Adopted panes are ALWAYS delivery-only (soloAdopt mints no token) — see
     // `OrchRegistry::solo_adopt`.
     pane.setChannelAgent({ group: SOLO_GROUP, agentId: agent_id, role: "solo", canSend: false });
+    reportHumanSession(pane);
   } catch {
     /* best-effort — falls back to NOT_CAPABLE this time */
   }
@@ -3022,15 +3024,6 @@ export const soloAdopt = (
     sessionId: sessionId ?? null,
   });
 
-/** Record a solo or lead pane's session id (#3831), so the cache-age chip can
- *  read its usage from its own transcript. The launcher calls it once the id
- *  is known: at bind for a claude or pi pane (the id is minted on the command
- *  line), and on the frontend's session-identified hook for a CLI that names
- *  its session later. The backend refuses an id already set, a delegate, and an
- *  id that is not one path component, so a caller treats a refusal as "not
- *  recorded" and moves on. */
-export const humanPaneSession = (agentId: string, sessionId: string): Promise<void> =>
-  invoke("orch_human_pane_session", { agentId, sessionId });
 
 /** What `orch_fork_agent` answers: the fork's agent id, pane name, and its
  *  session id when the CLI's fork names the child up front (claude per L1,

@@ -13,6 +13,7 @@ import { LeftPanel } from "./leftpanel";
 import { AgentsView } from "./agentsview";
 import { rosterIdleFor } from "./rosteridle";
 import { cacheAgeFor, cacheIdentityOfPane } from "./cacheage";
+import { reportHumanSession } from "./humansession";
 import {
   ensureOutputRouter,
   onPtyExit,
@@ -81,7 +82,6 @@ import {
   soloPrepare,
   soloBind,
   soloAdopt,
-  humanPaneSession,
   leadPrepare,
   leadBind,
   quickStart,
@@ -696,10 +696,9 @@ function eventsFor(ws: Workspace): PaneEvents {
       if (facts.sessionId === null) return;
       const sessionId = facts.sessionId;
       void sessionLog.rekey(pane.key, sessionId, Date.now()).then(() => recordPaneSession(pane));
-      // #3831: a solo or lead pane whose CLI named its session after the pane was
-      // registered. From now on the cache-age chip reads its transcript.
-      const humanAgent = humanPaneAgentId(pane);
-      if (humanAgent !== null) void bindHumanPaneSession(humanAgent, sessionId);
+      // #3831: a session learned after the pane's identity was set. Reporting it
+      // here is what gives a restored or launched pane the chip from its next request.
+      reportHumanSession(pane);
     },
   };
 }
@@ -953,6 +952,7 @@ const orchWiring: OrchWiring = {
       source
     );
     if (pane.ptyId !== null) remint.bind(pane.ptyId);
+    reportHumanSession(pane);
     reapIfExited(ws, pane);
     onGridChanged();
     persistTabs();
@@ -1381,6 +1381,7 @@ async function openActionPane(
         anchor
       );
       if (pane.ptyId !== null) remint.bind(pane.ptyId);
+      reportHumanSession(pane);
       bindLeadTab(ws, remint);
       // #456: a restored kickoff is trusted no differently than a fresh one
       // (#364's own precedent for the group path) — checked against the
@@ -1446,6 +1447,7 @@ async function openActionPane(
         anchor
       );
       if (pane.ptyId !== null) remint.bind(pane.ptyId);
+      reportHumanSession(pane);
       bindLeadTab(ws, remint);
       // #456: see the identical guard in "resume-agent" above.
       if (shouldWatchCopilotOnRestore(remint.command ?? null, remint.argv ?? null) && pane.ptyId !== null) {
@@ -1533,6 +1535,7 @@ async function openActionPane(
               ...leadPaneOptions(remint),
             });
             if (pane.ptyId !== null) remint.bind(pane.ptyId);
+            reportHumanSession(pane);
             bindLeadTab(ws, remint);
             // #456: today's most-reachable copilot restore path — copilot
             // never carries a tracked session id on this build, so it always
@@ -2514,6 +2517,7 @@ function tryResumeFallback(pane: Pane, exit: PtyExit): boolean {
         .then(() => {
           if (!wasLead) pane.setChannelAgent(remint.channelAgent ?? null);
           if (pane.ptyId !== null) remint.bind(pane.ptyId);
+          reportHumanSession(pane);
           bindLeadTab(leadWs, remint);
           onGridChanged();
         })
@@ -2901,7 +2905,7 @@ async function bindLeadIfNeeded(ws: Workspace, pane: Pane, spec: AgentLaunchSpec
     showToast(`"${spec.name}" opened, but its lead briefing didn't arrive: ${String(err)}`, "error");
   }
   // #3831: the lead's session, so its cache-age chip reads its own transcript.
-  if (pane.sessionId !== null) await bindHumanPaneSession(spec.lead.agentId, pane.sessionId);
+  reportHumanSession(pane);
 }
 
 async function bindSoloIfNeeded(pane: Pane, spec: AgentLaunchSpec): Promise<void> {
@@ -2916,7 +2920,7 @@ async function bindSoloIfNeeded(pane: Pane, spec: AgentLaunchSpec): Promise<void
     // A session the launcher minted onto the command line (claude, pi) is
     // recorded now, so the pane's usage reads from its own transcript from its
     // first request (#3831).
-    if (pane.sessionId !== null) await bindHumanPaneSession(agentId, pane.sessionId);
+    reportHumanSession(pane);
     return;
   }
   // #3831: every other harness agent pane is adopted at spawn, so the cache-age
@@ -2927,27 +2931,10 @@ async function bindSoloIfNeeded(pane: Pane, spec: AgentLaunchSpec): Promise<void
   try {
     const adopted = await soloAdopt(pane.ptyId, spec.name, spec.cwd ?? "", cli, pane.sessionId);
     pane.setChannelAgent({ group: SOLO_GROUP, agentId: adopted.agent_id, role: "solo", canSend: false });
+    reportHumanSession(pane);
   } catch {
     /* best-effort — the pane is adopted on its first Connect gesture, as before */
   }
-}
-
-/** Record a solo or lead pane's session id with the backend (#3831).
- *  Best-effort: the backend refuses an id already set, and the pane keeps the
- *  one it has. */
-function bindHumanPaneSession(agentId: string, sessionId: string): Promise<void> {
-  return humanPaneSession(agentId, sessionId).catch(() => {
-    /* best-effort — see the doc comment above */
-  });
-}
-
-/** The agent a solo or lead pane's session is recorded against (#3831), or null
- *  for every other pane: a delegate learns its session from its own CLI through
- *  the watcher, and must not get a second source. */
-function humanPaneAgentId(pane: Pane): string | null {
-  if (pane.orchRole === "lead") return pane.orchAgentId;
-  if (pane.channelAgentRole === "solo") return pane.channelAgentAgentId;
-  return null;
 }
 
 

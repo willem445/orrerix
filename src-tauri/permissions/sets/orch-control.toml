@@ -65,6 +65,7 @@ permissions = [
     "allow-orch-quick-control",
     "allow-orch-confirm-solo-copilot-autopilot",
     "allow-orch-solo-adopt",
+    "allow-orch-human-pane-session",
     "allow-orch-fork-agent",
     "allow-orch-fork-solo-result",
     "allow-todo-apply",

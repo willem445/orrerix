@@ -447,7 +447,7 @@ impl OrchRegistry {
             // given has finished, or it was never given one, so there is
             // nothing here to resume or stop — and a pane opened and left
             // alone must not sit on this list for ever.
-            if !run.state().is_in_progress() {
+            if run.state().is_terminal() {
                 continue;
             }
             let mut row = self.qd_status_json(&group, &run);

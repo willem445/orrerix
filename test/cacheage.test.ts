@@ -7,8 +7,11 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 
 import {
+  CACHE_GAP_LABEL,
   cacheAgeFor,
   cacheChipLabel,
+  cacheGapTitle,
+  cacheIdentityFor,
   cacheChipTitle,
   cacheState,
   formatAge,
@@ -123,9 +126,10 @@ test("the tooltip says the state is inferred, not observed, and carries the wake
 
 const strip = (rows: CacheStripReading["groups"][string]): CacheStripReading => ({ groups: { g1: rows } });
 
-test("the strip lookup answers null for every way the strip does not cover a pane", () => {
+test("the strip lookup reads a pane that has a request on record, and names the gap when it has none", () => {
   const row = {
     id: "w-1",
+    source: "transcript",
     last_active_ms: T0,
     cache_ttl_minutes: 5,
     cache_cooling_after_ms: 3 * MIN,
@@ -133,26 +137,57 @@ test("the strip lookup answers null for every way the strip does not cover a pan
     compact_supported: true,
   };
   const s = strip({ usage: { live_agents: [row] } });
-  assert.deepEqual(cacheAgeFor(s, "g1", "w-1"), {
-    lastActiveMs: T0,
-    ttlMinutes: 5,
-    coolingAfterMs: 3 * MIN,
-    lastWake: wake(),
-    compactSupported: true,
+  const id = { group: "g1", agentId: "w-1" };
+  assert.deepEqual(cacheAgeFor(s, id), {
+    reading: {
+      lastActiveMs: T0,
+      ttlMinutes: 5,
+      coolingAfterMs: 3 * MIN,
+      lastWake: wake(),
+      compactSupported: true,
+    },
+    gap: null,
   });
-  assert.equal(cacheAgeFor(s, null, "w-1"), null, "no orchestration identity");
-  assert.equal(cacheAgeFor(s, "g1", null), null, "no agent id");
-  assert.equal(cacheAgeFor(s, "g2", "w-1"), null, "a group the strip did not carry");
-  assert.equal(cacheAgeFor(strip({ usage: null }), "g1", "w-1"), null, "a refused usage section");
-  assert.equal(cacheAgeFor(s, "g1", "w-2"), null, "an agent with no usage row");
-  // A row from a backend that predates the fields reads as "nothing known" —
-  // and compact support must be affirmatively true, never assumed.
-  const bare = cacheAgeFor(strip({ usage: { live_agents: [{ id: "w-1" }] } }), "g1", "w-1");
-  assert.deepEqual(bare, {
-    lastActiveMs: null,
-    ttlMinutes: null,
-    coolingAfterMs: null,
-    lastWake: null,
-    compactSupported: false,
-  });
+  assert.deepEqual(cacheAgeFor(s, null), { reading: null, gap: "no-identity" }, "no identity at all");
+  assert.deepEqual(cacheAgeFor(s, { group: "g2", agentId: "w-1" }), { reading: null, gap: "no-row" }, "a group the strip did not carry");
+  assert.deepEqual(cacheAgeFor(strip({ usage: null }), id), { reading: null, gap: "no-row" }, "a refused usage section");
+  assert.deepEqual(cacheAgeFor(s, { group: "g1", agentId: "w-2" }), { reading: null, gap: "no-row" }, "an agent with no usage row");
+  // A row from a backend that predates the compact field: compact support must
+  // be affirmatively true, never assumed.
+  const predates = cacheAgeFor(strip({ usage: { live_agents: [{ id: "w-1", source: "transcript", last_active_ms: T0 }] } }), id);
+  assert.equal(predates.reading?.compactSupported, false);
+  // And a row with no source at all has not had a request observed.
+  assert.deepEqual(cacheAgeFor(strip({ usage: { live_agents: [{ id: "w-1" }] } }), id), { reading: null, gap: "no-request-yet" });
+});
+
+test("a row with no request on record says which kind of source it is missing", () => {
+  const id = { group: "g1", agentId: "w-1" };
+  const withSource = (source: string) => strip({ usage: { live_agents: [{ id: "w-1", source }] } });
+  assert.deepEqual(cacheAgeFor(withSource("statusline"), id), { reading: null, gap: "no-tokens:statusline" }, "a token-less source");
+  assert.deepEqual(cacheAgeFor(withSource("none"), id), { reading: null, gap: "no-tokens:none" }, "no record of any kind yet");
+  assert.deepEqual(cacheAgeFor(withSource("transcript"), id), { reading: null, gap: "no-request-yet" }, "a first sighting folds no wake");
+});
+
+test("a pane's cache identity is its orchestration agent, else its channel agent", () => {
+  const orch = { group: "lead-group", agentId: "lead-1" };
+  const channel = { group: "__solo__", agentId: "solo-3" };
+  assert.deepEqual(cacheIdentityFor(orch, channel), orch, "an orchestration identity wins");
+  assert.deepEqual(cacheIdentityFor(null, channel), channel, "a solo or adopted pane is keyed by its channel agent");
+  assert.equal(cacheIdentityFor(null, null), null, "a terminal pane has neither");
+});
+
+test("the tooltip names exactly what is missing", () => {
+  const local = { cli: "claude", remote: false, sessionKnown: true };
+  assert.match(cacheGapTitle("no-identity", local), /not registered with orrerix/);
+  assert.doesNotMatch(cacheGapTitle("no-identity", local), /remote/i, "a local pane is not called remote");
+  assert.match(cacheGapTitle("no-identity", { ...local, remote: true }), /remote host/, "an SSH pane names the remote session");
+  assert.match(cacheGapTitle("no-row", local), /no usage record/);
+  assert.match(cacheGapTitle("no-tokens:statusline", { ...local, cli: "copilot" }), /^copilot writes no token record/);
+  assert.match(cacheGapTitle("no-tokens:none", local), /No request has been recorded/);
+  assert.match(cacheGapTitle("no-tokens:none", { ...local, sessionKnown: false }), /session has not been identified yet/);
+  assert.match(cacheGapTitle("no-request-yet", local), /No request has been recorded/);
+});
+
+test("every reason shows the same muted label", () => {
+  assert.equal(CACHE_GAP_LABEL, "cache —");
 });

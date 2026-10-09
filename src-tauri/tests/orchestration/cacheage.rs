@@ -359,3 +359,110 @@ fn the_compact_now_reply_names_every_condition_holding_the_request() {
     assert!(w1.contains("only once all of these"), "{w1}");
     assert!(!w1.contains("fires once it resolves"), "the round-1 promise is false with the budget spent: {w1}");
 }
+
+// #3831 PR A — the chip on solo, lead and plain agent panes. A solo pane's
+// usage is read as ITS OWN CLI and ITS OWN session: `__solo__` is one group
+// across panes running different CLIs, so the group's class default answers
+// nothing for them.
+
+/// One Claude assistant turn for `sid` with `input` tokens, under `proj`. The
+/// transcript is found by session id under every project directory, so the
+/// directory name only has to be one.
+fn write_solo_claude_turn(proj: &Path, sid: &str, input: u64) {
+    let dir = proj.join("C--tmp-solo");
+    fs::create_dir_all(&dir).unwrap();
+    let line = json!({"type":"assistant","message":{"id":format!("m{input}"),
+        "model":"claude-opus-4-8",
+        "usage":{"input_tokens":input,"output_tokens":0,
+                 "cache_creation_input_tokens":0,"cache_read_input_tokens":0}}});
+    fs::write(dir.join(format!("{sid}.jsonl")), format!("{line}\n")).unwrap();
+}
+
+#[test]
+fn a_solo_panes_usage_row_is_read_from_its_own_session() {
+    let proj = tempfile::tempdir().unwrap();
+    let (reg, _d) = test_registry();
+    reg.set_claude_projects_dir(proj.path().to_path_buf());
+    let prepared = reg.solo_prepare("claude", "C:/tmp/solo", "my solo").unwrap();
+    let agent = prepared["agent_id"].as_str().unwrap().to_string();
+    reg.solo_bind(&agent, 7001).unwrap();
+    reg.human_pane_session(&agent, "solo-claude-session")
+        .expect("a bound solo pane takes its session id");
+
+    // Before the first prompt there is no transcript to read.
+    let before = reg.group_usage(solo_group_id());
+    assert_eq!(usage_row(&before, &agent)["source"], "none");
+
+    // The first prompt lands in the transcript; the next tick reads it.
+    write_solo_claude_turn(proj.path(), "solo-claude-session", 1000);
+    let after = reg.group_usage(solo_group_id());
+    let row = usage_row(&after, &agent);
+    assert_eq!(row["source"], "transcript", "the pane's own session is the source: {row}");
+    assert_eq!(row["tokens"]["input"], json!(1000));
+    assert!(row["last_active_ms"].is_number(), "the request is observed, so the chip has a reading: {row}");
+}
+
+#[test]
+fn the_usage_collector_reads_a_solo_panes_cli_off_its_own_record() {
+    // The class default is `claude`. A pi pane answering to that default would
+    // read the wrong transcript store and carry the wrong TTL on its chip.
+    let (reg, _d) = test_registry();
+    let prepared = reg.solo_prepare("pi", "C:/tmp/solo", "pi solo").unwrap();
+    let agent = prepared["agent_id"].as_str().unwrap().to_string();
+    let u = reg.group_usage(solo_group_id());
+    let row = usage_row(&u, &agent);
+    assert_eq!(row["cli"], "pi", "a pi pane is read as pi: {row}");
+    assert_eq!(row["cache_ttl_minutes"], Value::Null, "pi documents no fixed cache lifetime: {row}");
+}
+
+#[test]
+fn an_adopted_plain_pane_is_read_as_its_own_cli_and_session() {
+    // A plain agent pane is adopted at spawn with the CLI and session the
+    // launcher already holds, so it reads the same way a solo pane does.
+    let proj = tempfile::tempdir().unwrap();
+    let (reg, _d) = test_registry();
+    reg.set_claude_projects_dir(proj.path().to_path_buf());
+    let adopted = reg
+        .solo_adopt(7101, "plain claude", "C:/tmp/solo", Some("claude"), Some("adopted-session"))
+        .unwrap();
+    let agent = adopted["agent_id"].as_str().unwrap().to_string();
+    write_solo_claude_turn(proj.path(), "adopted-session", 500);
+    let u = reg.group_usage(solo_group_id());
+    let row = usage_row(&u, &agent);
+    assert_eq!(row["source"], "transcript", "{row}");
+    assert_eq!(row["cli"], "claude", "{row}");
+    assert!(row["cache_ttl_minutes"].is_number(), "claude's documented TTL reaches the row: {row}");
+
+    // A CLI loomux does not know is refused rather than stored as a name
+    // nothing reads.
+    assert!(
+        reg.solo_adopt(7102, "mystery", "C:/tmp/solo", Some("not-a-cli"), None).is_err(),
+        "an unknown CLI must not be recorded on the pane"
+    );
+}
+
+#[test]
+fn a_session_id_is_taken_once_by_a_solo_or_lead_pane_and_only_as_a_path_segment() {
+    let (reg, _d) = test_registry();
+    let g = reg.create_group("C:/tmp/repo", rails()).unwrap();
+    let worker = reg.spawn_agent(&g.id, Role::Worker, "w", "task", false, None).unwrap();
+    assert!(
+        reg.human_pane_session(&worker.id, "worker-session").is_err(),
+        "a delegate learns its session from its own CLI, never from the human"
+    );
+
+    let prepared = reg.solo_prepare("claude", "C:/tmp/solo", "solo").unwrap();
+    let agent = prepared["agent_id"].as_str().unwrap().to_string();
+    assert!(
+        reg.human_pane_session(&agent, "../escape").is_err(),
+        "a session id names a transcript file, so it must be one path component"
+    );
+    assert_eq!(reg.agent(&agent).unwrap().session_id, None, "a refused id is not recorded");
+
+    reg.human_pane_session(&agent, "first-session").unwrap();
+    assert!(
+        reg.human_pane_session(&agent, "second-session").is_err(),
+        "an id already set is never overwritten"
+    );
+    assert_eq!(reg.agent(&agent).unwrap().session_id.as_deref(), Some("first-session"));
+}

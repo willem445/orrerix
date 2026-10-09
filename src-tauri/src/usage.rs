@@ -2587,42 +2587,73 @@ mod tests {
         assert_eq!(latest_context_tokens(&text), Some(21_000));
     }
 
+    // The detected TTL's three rules, one test each so that each can fail on
+    // its own (`docs/design/cache-age.md`, "Detecting the TTL").
+
+    fn detected(lines: &[String]) -> Option<u32> {
+        parse_claude_transcript(&lines.join("\n")).detected_cache_ttl_minutes
+    }
+    /// A request that wrote only to the 5-minute cache.
+    fn w5(id: &str) -> String {
+        bucket_line(id, "claude-opus-5-5", 1, 100, 0, 0)
+    }
+    /// A request that wrote only to the 1-hour cache.
+    fn w60(id: &str) -> String {
+        bucket_line(id, "claude-opus-5-5", 1, 0, 100, 0)
+    }
+    /// A request that wrote to BOTH.
+    fn w_both(id: &str) -> String {
+        bucket_line(id, "claude-opus-5-5", 1, 100, 100, 0)
+    }
+    /// A request that read the cache and wrote nothing to it.
+    fn read_only(id: &str) -> String {
+        bucket_line(id, "claude-opus-5-5", 1, 0, 0, 900_000)
+    }
+
     #[test]
-    fn the_detected_ttl_is_the_lifetime_of_the_last_cache_writing_request() {
-        let ttl = |lines: &[String]| parse_claude_transcript(&lines.join("\n")).detected_cache_ttl_minutes;
-        let w5 = |id: &str| bucket_line(id, "claude-opus-5-5", 1, 100, 0, 0);
-        let w60 = |id: &str| bucket_line(id, "claude-opus-5-5", 1, 0, 100, 0);
-        let both = |id: &str| bucket_line(id, "claude-opus-5-5", 1, 100, 100, 0);
-        let read_only = |id: &str| bucket_line(id, "claude-opus-5-5", 1, 0, 0, 900_000);
-
-        // Nothing written, nothing detected.
-        assert_eq!(ttl(&[]), None);
-        assert_eq!(ttl(&[read_only("a")]), None);
-        // Each bucket names its own lifetime.
-        assert_eq!(ttl(&[w5("a")]), Some(5));
-        assert_eq!(ttl(&[w60("a")]), Some(60));
-
-        // (1) The LAST cache-writing request decides, in both directions.
-        assert_eq!(ttl(&[w60("a"), w5("b")]), Some(5));
-        assert_eq!(ttl(&[w5("a"), w60("b")]), Some(60));
-
-        // (2) Within ONE request the shorter bucket wins — against a history
-        // of hour-long writes, and whichever order the keys are read in.
-        assert_eq!(ttl(&[w60("a"), both("b")]), Some(5));
-        assert_eq!(ttl(&[both("a")]), Some(5));
-        // ...and it is only that request's answer: a later hour-only write
-        // replaces it like any other.
-        assert_eq!(ttl(&[both("a"), w60("b")]), Some(60));
-
-        // (3) A read-only request changes nothing, on either lifetime.
-        assert_eq!(ttl(&[w60("a"), read_only("b"), read_only("c")]), Some(60));
-        assert_eq!(ttl(&[w5("a"), read_only("b")]), Some(5));
-
-        // A write whose record names no bucket is not evidence of a lifetime:
-        // it leaves the reading where it was rather than guessing.
-        assert_eq!(ttl(&[line("a", "claude-opus-5-5", 1, 0, 100, 0)]), None);
-        assert_eq!(ttl(&[w60("a"), line("b", "claude-opus-5-5", 1, 0, 100, 0)]), Some(60));
+    fn the_last_cache_writing_request_decides_the_detected_ttl() {
+        // Nothing written, nothing detected; each bucket names its own lifetime.
+        assert_eq!(detected(&[]), None);
+        assert_eq!(detected(&[w5("a")]), Some(5));
+        assert_eq!(detected(&[w60("a")]), Some(60));
+        // The LAST write decides, in both directions — so neither "first write
+        // wins" nor "the longer one sticks" passes.
+        assert_eq!(detected(&[w60("a"), w5("b")]), Some(5));
+        assert_eq!(detected(&[w5("a"), w60("b")]), Some(60));
+        assert_eq!(detected(&[w5("a"), w60("b"), w5("c"), w60("d")]), Some(60));
         // A re-emitted line is deduped before it can rewind the reading.
-        assert_eq!(ttl(&[w5("a"), w60("b"), w5("a")]), Some(60));
+        assert_eq!(detected(&[w5("a"), w60("b"), w5("a")]), Some(60));
+    }
+
+    #[test]
+    fn within_one_request_the_shorter_cache_bucket_wins() {
+        // A request that wrote to both caches is on the SHORTER one: its
+        // conversational tail is what expires first.
+        assert_eq!(detected(&[w_both("a")]), Some(5));
+        // ...against a history of hour-long writes too.
+        assert_eq!(detected(&[w60("a"), w60("b"), w_both("c")]), Some(5));
+        // It is only that request's answer: a later hour-only write replaces
+        // it like any other, so this rule and the last-write rule compose.
+        assert_eq!(detected(&[w_both("a"), w60("b")]), Some(60));
+        // Control: an hour-only request is the hour, so the 5 above came from
+        // the mixed request's short bucket and not from a default.
+        assert_eq!(detected(&[w60("a")]), Some(60));
+    }
+
+    #[test]
+    fn a_read_only_request_leaves_the_detected_ttl_alone() {
+        // A cache hit refreshes an entry for the lifetime it was written with,
+        // so it is no evidence of a change — on either lifetime.
+        assert_eq!(detected(&[w60("a"), read_only("b"), read_only("c")]), Some(60));
+        assert_eq!(detected(&[w5("a"), read_only("b")]), Some(5));
+        // And it detects nothing on its own.
+        assert_eq!(detected(&[read_only("a")]), None);
+        // Neither does a write whose record names no bucket: it leaves the
+        // reading where it was rather than guessing one.
+        let unbucketed = |id: &str| line(id, "claude-opus-5-5", 1, 0, 100, 0);
+        assert_eq!(detected(&[unbucketed("a")]), None);
+        assert_eq!(detected(&[w60("a"), unbucketed("b")]), Some(60));
+        // Control: a WRITING request after the reads does move it.
+        assert_eq!(detected(&[w60("a"), read_only("b"), w5("c")]), Some(5));
     }
 }

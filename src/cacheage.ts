@@ -47,6 +47,16 @@ export interface CacheAgeReading {
   readonly compactSupported: boolean;
 }
 
+/** SCRATCH STUBS: exports only, so the test module loads. */
+export const CACHE_GAP_LABEL = "";
+export function cacheIdentityFor(orch: { group: string; agentId: string } | null, channel: { group: string; agentId: string } | null): { group: string; agentId: string } | null {
+  void orch; void channel;
+  return null;
+}
+export function cacheGapTitle(_gap: string, _facts: { cli: string | null; remote: boolean; sessionKnown: boolean }): string {
+  return "";
+}
+
 export type CacheState = "hot" | "cooling" | "cold" | "unknown";
 
 /** The usage row fields this module reads — structural, see the header. */

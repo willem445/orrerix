@@ -240,6 +240,14 @@ impl OrchRegistry {
         Ok(json!({ "agent_id": agent_id, "mcp_args": mcp_args, "delivery_only": delivery_only }))
     }
 
+    /// SCRATCH STUB: signature only, no behaviour.
+    pub fn human_pane_session(&self, agent_id: &str, _session_id: &str) -> Result<(), String> {
+        // SCRATCH MUTATION: persists a SOLO pane into __solo__/agents.json.
+        let entry = self.agent(agent_id).ok_or("unknown agent")?;
+        self.persist_agent_record(&entry, "running");
+        Ok(())
+    }
+
     /// Human-only: bind the pty a newly-spawned solo pane's launcher just
     /// opened to the `AgentEntry` `solo_prepare` created. Unlike `bind` (the
     /// channel-based rendezvous a `spawn_agent_ex` call blocks on),
@@ -304,7 +312,8 @@ impl OrchRegistry {
     /// makes that pane a legitimate **receiver** rather than refusing the
     /// connect outright. Idempotent by pty: re-adopting an already-adopted
     /// pty returns its existing agent id instead of minting a second one.
-    pub fn solo_adopt(&self, pty_id: u32, name: &str, cwd: &str) -> Result<Value, String> {
+    pub fn solo_adopt(&self, pty_id: u32, name: &str, cwd: &str, _cli: Option<&str>, _session_id: Option<&str>) -> Result<Value, String> {
+        // SCRATCH STUB: the new arguments are ignored.
         if let Some(existing) = self.by_pty.lock_safe().get(&pty_id).cloned() {
             return Ok(json!({ "agent_id": existing }));
         }

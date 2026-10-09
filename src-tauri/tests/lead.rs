@@ -32,7 +32,7 @@ use loomux_lib::orchestration::workflow;
 use loomux_lib::orchestration::{
     counts_against_max_agents, is_live_cap_refusal, mechanics_core, resume_recorded_session,
     spawn_opens_minimized, AgentEntry, Caller, Delivery, GroupId, Guardrails, OrchRegistry,
-    Role, CLI_CAPS,
+    solo_group_id, Role, CLI_CAPS,
 };
 use serde_json::{json, Value};
 use std::collections::BTreeSet;
@@ -1992,4 +1992,70 @@ fn a_leads_named_self_fork_carries_its_name_on_the_request() {
     let rows = fork_rows(&reg, &gid, "agent-fork-requested");
     assert_eq!(rows.len(), 3, "{rows:?}");
     assert_eq!(rows[2]["detail"]["name"], json!(format!("é{}", "x".repeat(39))));
+}
+
+// #3831 PR A — a lead pane's session is taken on its bound pane, and a solo
+// pane's never reaches a roster file.
+
+/// One Claude assistant turn for `sid` with `input` tokens, under `proj`.
+fn write_lead_claude_turn(proj: &Path, sid: &str, input: u64) {
+    let dir = proj.join("C--tmp-lead");
+    std::fs::create_dir_all(&dir).unwrap();
+    let line = json!({"type":"assistant","message":{"id":format!("m{input}"),
+        "model":"claude-opus-4-8",
+        "usage":{"input_tokens":input,"output_tokens":0,
+                 "cache_creation_input_tokens":0,"cache_read_input_tokens":0}}});
+    std::fs::write(dir.join(format!("{sid}.jsonl")), format!("{line}\n")).unwrap();
+}
+
+/// The usage row for `agent` in a `group_usage` value.
+fn agent_usage_row(usage: &Value, agent: &str) -> Value {
+    usage["agents"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|r| r["id"] == agent)
+        .unwrap_or_else(|| panic!("no usage row for {agent}: {usage}"))
+        .clone()
+}
+
+#[test]
+fn a_lead_bind_then_session_reads_the_transcript() {
+    let proj = tempfile::tempdir().unwrap();
+    let (reg, _d, _repo, gid, agent, _out) = prepared_lead("claude", 4);
+    reg.set_claude_projects_dir(proj.path().to_path_buf());
+    reg.lead_bind(&agent, 9601).unwrap();
+    reg.human_pane_session(&agent, "lead-session").expect("a bound lead takes its session id");
+
+    let before = reg.group_usage(&gid);
+    assert_eq!(agent_usage_row(&before, &agent)["source"], "none");
+
+    write_lead_claude_turn(proj.path(), "lead-session", 2000);
+    let after = reg.group_usage(&gid);
+    let row = agent_usage_row(&after, &agent);
+    assert_eq!(row["source"], "transcript", "{row}");
+    assert_eq!(row["tokens"]["input"], json!(2000));
+}
+
+#[test]
+fn a_solo_session_bind_writes_no_agents_json() {
+    // A solo pane is not a roster member. `__solo__` must never grow an
+    // `agents.json`: the session-baseline and recorded-groups readers walk every
+    // group directory's roster, and a solo pane would turn up in them.
+    let (reg, _d) = test_registry();
+    let prepared = reg.solo_prepare("claude", "C:/tmp/solo", "solo").unwrap();
+    let agent = prepared["agent_id"].as_str().unwrap().to_string();
+    reg.solo_bind(&agent, 9501).unwrap();
+    reg.human_pane_session(&agent, "solo-roster-session").unwrap();
+    let solo_roster = reg.state_root().join(solo_group_id().as_str()).join("agents.json");
+    assert!(!solo_roster.exists(), "a solo session bind wrote {}", solo_roster.display());
+
+    // Positive control: the same call on a lead DOES persist its row, so the
+    // absence above is the solo rule and not a roster that never writes.
+    let (lead_reg, _d2, _repo, gid, lead, _out) = prepared_lead("claude", 4);
+    lead_reg.lead_bind(&lead, 9502).unwrap();
+    lead_reg.human_pane_session(&lead, "lead-roster-session").unwrap();
+    let lead_roster = lead_reg.state_root().join(gid.as_str()).join("agents.json");
+    let text = std::fs::read_to_string(&lead_roster).expect("a lead's roster is written");
+    assert!(text.contains("lead-roster-session"), "the lead's row carries its session: {text}");
 }

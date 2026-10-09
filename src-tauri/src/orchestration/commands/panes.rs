@@ -77,7 +77,7 @@ pub async fn orch_solo_adopt(
     cwd: String,
 ) -> Result<Value, String> {
     let reg = reg_of(&app);
-    run_blocking(move || reg.solo_adopt(pty_id, &name, &cwd)).await
+    run_blocking(move || reg.solo_adopt(pty_id, &name, &cwd, None, None)).await
 }
 
 // ---------- lead panes (#2519): human-only, from the launcher's

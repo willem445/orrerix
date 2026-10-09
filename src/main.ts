@@ -13,6 +13,7 @@ import { LeftPanel } from "./leftpanel";
 import { AgentsView } from "./agentsview";
 import { rosterIdleFor } from "./rosteridle";
 import { cacheAgeFor } from "./cacheage";
+import { promptCostFor } from "./promptcost";
 import {
   ensureOutputRouter,
   onPtyExit,
@@ -4083,6 +4084,10 @@ void (async () => {
         // #3407: the cache-age chip rides the same read. Every pane is told, for
         // the reason above — a pane that lost its binding must drop its chip.
         pane.noteCacheAge(cacheAgeFor(strip, pane.orchGroupId, pane.orchAgentId));
+        // #3831: the next-prompt estimate's inputs are fields on the same usage
+        // row, so they ride the same read under the same identity. After the
+        // chip's reading, which the estimate takes its cache state from.
+        pane.notePromptCost(promptCostFor(strip, pane.orchGroupId, pane.orchAgentId));
       }
     }
     refreshAgents();

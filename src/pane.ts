@@ -27,6 +27,7 @@ import { decideRefresh, REPO_SIGNAL_WINDOW_MS } from "./refreshthrottle";
 import { showToast } from "./toast";
 import { endGroup, notifyPaneDisposed, registerStructuredPane } from "./orchestration";
 import { type CacheAgeReading } from "./cacheage";
+import { type PromptCostReading } from "./promptcost";
 import { type QueueDepthReading } from "./queuebadge";
 import { makeRenameCommit } from "./panerename";
 import { shouldResizePty } from "./panefit";
@@ -2237,6 +2238,13 @@ export class Pane implements VoiceTargetPane {
   noteCacheAge(reading: CacheAgeReading | null, nowMs: number = Date.now()): void {
     this.badges.noteCacheAge(reading, nowMs);
   }
+  /** Hand this pane the next-prompt estimate's inputs (#3831) on a strip
+   *  delivery, AFTER `noteCacheAge` — the estimate takes its cache state from
+   *  the chip's reading — and redraw the compose strip's line from them. */
+  notePromptCost(reading: PromptCostReading | null): void {
+    this.badges.notePromptCost(reading);
+    this.compose.refreshCostLine();
+  }
   setConnected(info: PaneChannelBadge | null): void { this.badges.setConnected(info); }
   get channelId(): string | null { return this.badges.channelId; }
   get channelBadge(): PaneChannelBadge | null { return this.badges.channelBadge; }
@@ -3060,6 +3068,7 @@ export class Pane implements VoiceTargetPane {
     clearTimeout(this.fitTimer);
     clearTimeout(this.shiftTimer);
     clearTimeout(this.compose.composeStatusTimer);
+    this.compose.cancelCostFrame(); // #3831: a pending cost-line redraw
     clearTimeout(this.lifecycle.flushTimer); // #720 output throttle
     clearTimeout(this.dirRefreshTimer); // #743 repo-signal throttle
     clearTimeout(this.lifecycle.webglRetryTimer); // #720 WebGL re-acquire

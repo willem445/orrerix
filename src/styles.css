@@ -1631,13 +1631,29 @@ body.dragging-pane, body.dragging-pane * { cursor: grabbing !important; }
    `display`): showing/hiding it must never change `.orch-compose` height, or it
    would shrink `.pane-term` and trigger a ConPTY resize-repaint. One line,
    ellipsised; the full message lives in the element's `title`. */
+.orch-compose-foot { position: relative; height: 15px; flex: none; }
 .orch-compose-status {
+  position: absolute; inset: 0;
   height: 15px; line-height: 15px; font-size: 11px; color: var(--state-danger);
   padding: 0 2px; user-select: text;
   white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
   visibility: hidden;
 }
 .orch-compose-status.show { visibility: visible; }
+/* What the next prompt will cost (#3831). It shares the status slot above
+   rather than taking a row: `.orch-compose-foot` is the 15px the status line
+   always reserved, and both children are positioned over it, so the strip is
+   exactly as tall as it was before this line existed and the terminal above is
+   never resized. One line, ellipsised, the full account in its `title`. Dim,
+   because it is an estimate and not a state; a rejected send's message takes
+   the slot while it shows. */
+.orch-compose-cost {
+  position: absolute; inset: 0;
+  height: 15px; line-height: 15px; font-size: 11px; color: var(--ink-dim);
+  padding: 0 2px; font-variant-numeric: tabular-nums;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.orch-compose-status.show + .orch-compose-cost { visibility: hidden; }
 
 /* xterm.js 6.0's viewport draws its own (VS Code base) scrollbar widget
    instead of a native overflow scrollbar, so the old `::-webkit-scrollbar`

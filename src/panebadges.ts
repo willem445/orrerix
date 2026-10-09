@@ -22,6 +22,13 @@ import {
   wakeCostLine,
   type CacheAgeReading,
 } from "./cacheage";
+import {
+  estimatePromptCost,
+  promptCostRows,
+  type CostContext,
+  type PromptCostEstimate,
+  type PromptCostReading,
+} from "./promptcost";
 import { heldPresentation } from "./heldbadge";
 import { queuePresentation, type QueueDepthReading } from "./queuebadge";
 import { mailboxPresentation } from "./mailboxbadge";
@@ -90,6 +97,10 @@ export class PaneBadges {
   private cacheChip: HTMLButtonElement;
   /** The last reading `noteCacheAge` was handed, for the menu and `facts()`. */
   cacheReading: CacheAgeReading | null = null;
+  /** The next-prompt estimate's inputs for this pane (#3831), handed over on the
+   *  same strip delivery as `cacheReading`. Null when the strip does not cover
+   *  the pane. */
+  private costReading: PromptCostReading | null = null;
   /** Whether an `orch-mailbox-changed` PUSH has ever been applied to this pane.
    *  The seed read (`applyMailSeed`) is asynchronous and a push can land while
    *  it is in flight, so without this the seed's older number would overwrite a
@@ -537,11 +548,51 @@ export class PaneBadges {
     if (this.cacheChip.hidden) this.cacheChip.hidden = false;
   }
 
-  /** The cache chip's menu: what the last wake cost (read-only rows) and
-   *  "Compact now", which asks the backend to type `/compact` at the pane's next
-   *  idle moment through the same path an agent's own `request_compact` takes.
-   *  Disabled, with the reason, where it cannot do anything — never offered as a
-   *  click that silently fails. */
+  /** Hand this pane the next-prompt estimate's inputs (#3831), or `null` when
+   *  the strip does not cover it. Called on every strip delivery, beside
+   *  `noteCacheAge`. Nothing is rendered here: the menu reads it when opened,
+   *  and the compose strip's line is refreshed by the pane right after. */
+  notePromptCost(reading: PromptCostReading | null): void {
+    this.costReading = reading;
+  }
+
+  /** The next-prompt estimate for this pane as it stands at `nowMs` (#3831):
+   *  the reading, the three figures, and what the surface showing them knows.
+   *  `null` when there is no usage row or no chip reading to take the cache
+   *  state from.
+   *
+   *  One place builds this, for the chip's menu and the compose strip's line
+   *  both, so the two cannot be computed from different TTLs or different
+   *  typed text. The state and the TTL are the CHIP's own reading — the estimate
+   *  never resolves a TTL of its own. The typed text is the compose strip's,
+   *  which only an orchestrator pane has; everywhere else it is not visible
+   *  and the estimate is for the history alone. */
+  promptCostView(
+    nowMs: number = Date.now()
+  ): { reading: PromptCostReading; estimate: PromptCostEstimate; context: CostContext } | null {
+    const reading = this.costReading;
+    const cache = this.cacheReading;
+    if (reading === null || cache === null) return null;
+    const { state, ageMs } = cacheState(cache, nowMs);
+    const input = this.pane.compose.composeInput;
+    const promptChars = input === null ? 0 : input.value.length;
+    const ttlMs = cache.ttlMinutes === null ? null : cache.ttlMinutes * 60_000;
+    const context: CostContext = {
+      state,
+      ttlMinutes: cache.ttlMinutes,
+      coldInMs: state === "cooling" && ttlMs !== null && ageMs !== null ? Math.max(0, ttlMs - ageMs) : null,
+      promptVisible: input !== null,
+      promptChars,
+    };
+    const estimate = estimatePromptCost(reading, { state, ttlMinutes: cache.ttlMinutes }, promptChars);
+    return { reading, estimate, context };
+  }
+
+  /** The cache chip's menu: what the last wake cost and what the next prompt
+   *  will (read-only rows, #3831), and "Compact now", which asks the backend to
+   *  type `/compact` at the pane's next idle moment through the same path an
+   *  agent's own `request_compact` takes. Disabled, with the reason, where it
+   *  cannot do anything — never offered as a click that silently fails. */
   private openCacheMenu(x: number, y: number): void {
     const reading = this.cacheReading;
     if (reading === null) return;
@@ -554,6 +605,16 @@ export class PaneBadges {
       reason: "Read-only: tokens the first request after the last quiet stretch read from the cache, wrote to it, and sent uncached.",
     });
     items.push({ label: "", separator: true });
+    // #3831: the next prompt's input cost, three ways. Every row is read-only;
+    // its tooltip carries what the figure assumes. `promptcost.ts` writes the
+    // words, where they are tested.
+    const cost = this.promptCostView();
+    if (cost !== null) {
+      for (const row of promptCostRows(cost.reading, cost.estimate, cost.context)) {
+        items.push({ label: row.label, disabled: true, reason: row.reason });
+      }
+      items.push({ label: "", separator: true });
+    }
     const group = this.pane.orchGroup;
     const agent = this.pane.orchAgent;
     const why =

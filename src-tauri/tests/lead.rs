@@ -2102,3 +2102,77 @@ fn a_different_session_id_is_refused_and_the_held_one_stays() {
     );
     assert_eq!(lead_reg.agent(&lead).unwrap().session_id.as_deref(), Some("held-lead"));
 }
+
+// #3837 review: a refused session id adopts nothing; an adopted opencode pane is
+// read as opencode; a solo pi pane's context signal comes from pi's own store.
+
+#[test]
+fn solo_adopt_refuses_a_session_id_that_is_not_one_path_component() {
+    let (reg, _d) = test_registry();
+    assert!(
+        reg.solo_adopt(7201, "bad session", "C:/tmp/solo", Some("claude"), Some("../escape")).is_err(),
+        "an adopted pane's session names a transcript file, so it must be one path component"
+    );
+    // The refusal adopted nothing, so the same pty adopts cleanly with a good id.
+    let ok = reg.solo_adopt(7201, "bad session", "C:/tmp/solo", Some("claude"), Some("good-session")).unwrap();
+    let agent = ok["agent_id"].as_str().unwrap().to_string();
+    assert_eq!(reg.agent(&agent).unwrap().session_id.as_deref(), Some("good-session"));
+}
+
+#[test]
+fn an_adopted_opencode_pane_is_read_as_opencode_not_as_the_class_default() {
+    let (reg, _d) = test_registry();
+    let adopted = reg
+        .solo_adopt(7301, "opencode pane", "C:/tmp/solo", Some("opencode"), Some("ses_abc"))
+        .unwrap();
+    let agent = adopted["agent_id"].as_str().unwrap().to_string();
+    let u = reg.group_usage(solo_group_id());
+    let row = agent_usage_row(&u, &agent);
+    assert_eq!(row["cli"], "opencode", "{row}");
+    assert_eq!(row["cache_ttl_minutes"], Value::Null, "opencode documents no fixed cache lifetime: {row}");
+}
+
+/// A pi session file for `id` under `dir`, named the way pi names it.
+fn write_pi_session(dir: &Path, id: &str, text: &str) {
+    std::fs::create_dir_all(dir).unwrap();
+    std::fs::write(dir.join(format!("2026-09-03T03-06-45-266Z_{id}.jsonl")), text).unwrap();
+}
+
+#[test]
+fn a_solo_pi_panes_context_signal_comes_from_pi_s_own_store() {
+    // The signal read resolves a pane's CLI through `cli_for_agent`. Read as the
+    // class default, claude, a solo pi pane's session would be looked for in
+    // claude's store and found nowhere.
+    let proj = tempfile::tempdir().unwrap();
+    let (reg, _d) = test_registry();
+    reg.set_claude_projects_dir(proj.path().to_path_buf());
+    let prepared = reg.solo_prepare("pi", "C:/tmp/solo", "pi solo").unwrap();
+    let agent = prepared["agent_id"].as_str().unwrap().to_string();
+    // The signal read covers Running agents only, and a solo pane starts Starting.
+    reg.solo_bind(&agent, 7401).unwrap();
+    let sid = "pi-solo-session";
+    reg.human_pane_session(&agent, sid).unwrap();
+    let header = json!({
+        "type": "session", "version": 3, "id": sid,
+        "timestamp": "2026-09-03T03:06:45.266Z", "cwd": "C:/tmp/solo",
+    })
+    .to_string();
+    let message = json!({
+        "type": "message", "id": "e1", "parentId": null,
+        "timestamp": "2026-09-03T03:06:45.266Z",
+        "message": {
+            "role": "assistant", "content": [{ "type": "text", "text": "ok" }],
+            "api": "openai-completions", "provider": "openrouter", "model": "z-ai/glm-5.3-flash",
+            "usage": { "input": 1000, "output": 0, "cacheRead": 0, "cacheWrite": 0, "totalTokens": 1000 },
+            "stopReason": "stop", "timestamp": 1_772_000_000_000u64,
+        },
+    })
+    .to_string();
+    write_pi_session(&reg.pi_sessions_dir(solo_group_id()), sid, &format!("{header}\n{message}\n"));
+    let signals = reg.agent_context_signals_for_group(Some(solo_group_id()));
+    assert!(
+        signals.contains_key(&agent),
+        "a solo pi pane is read from pi's own store: {:?}",
+        signals.keys().collect::<Vec<_>>()
+    );
+}

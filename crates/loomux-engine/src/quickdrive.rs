@@ -768,7 +768,6 @@ pub struct QuickDriveRecord {
     /// tasks in one pane do not read as the same one. Defaulted: a record
     /// written before the field existed is on its first task, which the
     /// notice then simply does not number.
-    #[serde(default)]
     pub task_seq: u32,
     #[serde(default)]
     pub planner: QuickPane,

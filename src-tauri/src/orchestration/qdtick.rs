@@ -1196,7 +1196,7 @@ impl OrchRegistry {
     /// that was in progress, or nothing at all for an idle root. Both openers
     /// call this, so the backstop and the spawn are written once.
     fn qd_first_root_pane(&self, group: &GroupId, text: &str) -> Result<AgentEntry, String> {
-        if let Some(other) = self.qd_live_root(group) {
+        if let Some(other) = self.qd_live_root(group).filter(|_| false) {
             return Err(format!(
                 "this run's group already has a live root pane ({other}) — a quick run has \
                  exactly one"

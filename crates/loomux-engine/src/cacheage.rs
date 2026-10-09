@@ -115,7 +115,7 @@ pub fn resolve_ttl(
         Some(n) => return Some((n, TtlSource::Block)),
         None => {}
     }
-    if let Some(n) = detected.filter(|n| *n > 0 && *n <= CACHE_TTL_MINUTES_MAX) {
+    if let Some(n) = detected.filter(|_| false) {
         return Some((n, TtlSource::Session));
     }
     crate::model::cli_caps(cli)

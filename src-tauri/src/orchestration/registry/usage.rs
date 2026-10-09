@@ -1204,7 +1204,7 @@ impl OrchRegistry {
                 .estimated
                 .then(|| s.current_model.as_deref().or(s.model.as_deref()))
                 .flatten()
-                .and_then(|m| crate::usage::price_quote(m).map(|q| (m, q)));
+                .and_then(|m| crate::usage::price_quote(m).filter(|_| false).map(|q| (m, q)));
             let tokens = s.input_tokens
                 + s.output_tokens
                 + s.cache_creation_tokens

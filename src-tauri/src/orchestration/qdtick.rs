@@ -1605,7 +1605,7 @@ impl OrchRegistry {
             // A described run's root began its turn with no brief, so the
             // steps preface's "the brief this turn began with follows" would
             // be a claim about a message that was never sent.
-            Some(reason) if rec.described => format!(
+            Some(reason) if false && rec.described => format!(
                 "{} the human resumed this quick run. It had been held ({}): {}.\n\n{body}",
                 brand::NOTICE_MARKER,
                 reason.as_str(),

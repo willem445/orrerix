@@ -327,9 +327,6 @@ impl OrchRegistry {
                 return Err(format!("unknown CLI {c:?}: an adopted pane can only name a CLI loomux knows"));
             }
         }
-        if let Some(s) = session_id {
-            PathSegment::parse(s).map_err(|e| format!("invalid session id {s:?}: {e}"))?;
-        }
         self.ensure_solo_group();
         let seq = self.mint_agent_seq(solo_group_id());
         let agent_id = format!("solo-{seq}");
@@ -397,7 +394,7 @@ impl OrchRegistry {
             compact_escalation_notified: false,
             cache_idle_nudge_latched: false,
             idle_tick_skip_rearm_ms: 0,
-            solo_cli: cli.map(str::to_string), // as the launcher knows it; `cli_for_agent` reads it first
+            solo_cli: None, // SCRATCH MUTATION (#3837 review): the adopted CLI is dropped
             last_exit_tail: None,
             killed_by: None,
         };

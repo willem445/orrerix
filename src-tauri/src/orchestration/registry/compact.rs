@@ -1526,7 +1526,7 @@ impl OrchRegistry {
                 let rails = guardrails.get(&agent.group)?;
                 // The same resolution `compute_group_usage` reads (#3831): a solo
                 // pane's own CLI, else its block's.
-                let cli = self.cli_for_agent(&agent);
+                let cli = rails.cli_for_block(&agent.block, agent.role).to_string(); // SCRATCH MUTATION
                 let effort = rails
                     .block(&agent.block)
                     .or_else(|| rails.block_for(agent.role))

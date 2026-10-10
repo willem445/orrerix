@@ -1160,11 +1160,8 @@ impl OrchRegistry {
         group: &GroupId,
         rec: &QuickDriveRecord,
     ) -> bool {
-        let recorded = rec.worker_cwd.trim();
-        match self.group(group) {
-            Some(g) if !recorded.is_empty() => same_path_key(recorded, &g.repo),
-            _ => self.qd_plain_folder(group).unwrap_or(false),
-        }
+        let _ = rec;
+        self.qd_plain_folder(group).unwrap_or(false)
     }
 
     /// The branch a described run's helpers are cut from when the root names

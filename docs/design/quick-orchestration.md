@@ -1179,7 +1179,7 @@ loudly in a folder with no repository.
 
 ### 18.3 One predicate
 
-`OrchRegistry::qd_plain_folder(group)` is the only place this is decided. It
+`OrchRegistry::qd_plain_folder(group)` is the only place git is asked. It
 answers `false` for any group without the quick marker before git is asked
 anything, and otherwise asks `git::in_work_tree`, which is the
 `rev-parse --show-toplevel` that `git_worktree_add_sync` opens with, read
@@ -1207,29 +1207,44 @@ without git was the alternative, and it would mean answering "is this a
 repository" by looking for a `.git` entry — a second, weaker definition of
 the thing git itself decides.
 
-Two callers read it:
+Four functions read it, and each is about a pane that is not open yet:
 
-- `spawn_agent_full`, where every helper spawn ends: a described run's
-  `spawn_agent` and `fork_session`, and a steps run's own worker. It is asked
-  only for a spawn that would otherwise cut a worktree, so a resume (which
-  carries its `cwd`) and a planner ask nothing. The root's spawn reads it too,
-  for its workspace note alone, and opens whatever it answers.
-- `qd_brief`, for the two briefs that are about a pane not yet opened: the
-  plan brief and a described root's resume message. A brief cannot refuse, so
-  an `Err` there renders the repository's wording; the spawn beside it is
-  where that failure is reported.
+- `qd_plain_workspace`, which is how `spawn_agent_full` asks — where every
+  helper spawn ends: a described run's `spawn_agent` and `fork_session`, and a
+  steps run's own worker. It is asked only for a spawn that would otherwise
+  cut a worktree, so a resume (which carries its `cwd`) and a planner ask
+  nothing.
+- `qd_root_workspace_note`, for the line a root is opened with. The root
+  opens whatever it answers.
+- `qd_brief`, for the two briefs that say where the next pane will work: the
+  plan brief, and the helpers bullet of a described root's resume message. A
+  brief cannot refuse, so an `Err` there renders the repository's wording; the
+  spawn beside it is where that failure is reported.
+- `qd_work_in_place`, only until the worker has been opened.
 
-Nothing records the answer. It is asked of git each time, so a folder the
-human runs `git init` and commits in is a repository from the next helper on.
-A persisted flag on the run's record was considered and not added: it would be
-a contract change to `quick_drive.json` for a fact git already holds.
+The predicate's answer is stored nowhere. It is asked of git each time, so a
+folder the human runs `git init` and commits in is a repository from the next
+helper on. A persisted flag on the run's record was considered and not added:
+it would be a contract change to `quick_drive.json` for a fact git already
+holds.
 
-**From the next helper on, and not from the next brief on.** A pane that is
-already open in the folder was given no worktree, and `git init` does not
-give it one. So the work and review briefs of a steps run do not ask git:
-they read `qd_work_in_place`, which is the run's own record once the worker
-has been opened — its recorded workspace is the group's folder exactly when
-the spawn opened it in place — and the predicate only before that. Asking git
+**What a pane was given is a second question, and it is read off records
+that already exist.** "From the next helper on" is not "from the next brief
+on": a pane already open in the folder was given no worktree, and `git init`
+does not give it one. Two readers answer that question, and neither asks git
+once there is a record to read:
+
+- `qd_work_in_place`, for a steps run's work and review briefs. It reads the
+  run's own record: the worker's recorded workspace is the group's folder
+  exactly when the spawn opened it in place.
+- `qd_helpers_in_place`, for the closing line of a described root's resume
+  message, which asks where the finished work is. A described run's helpers
+  are not sides of the run, so its record names none; the roster does, across
+  a restart, and a worker or reviewer row at the folder is a helper that was
+  opened in place.
+
+So the decision has one place git is asked and two places a record is read,
+and no place that guesses. For a steps run, asking git
 at every brief told a resumed worker to "commit as you go" on a branch it was
 never cut, and its reviewer to diff against one. Their wording follows for
 the same reason: it says what the worker was given, not what the folder is,
@@ -1258,9 +1273,21 @@ and each is corrected where it is made rather than by one sentence somewhere:
   each carried one passage naming a worktree, a branch or a git command. Each
   passage is now a placeholder `qd_brief` fills: with the same text, to the
   byte, in a repository — the goldens in `tests/quickdrive/briefs.rs` did not
-  move — and with the plain folder's in one. `quick-root.md` is the same for a
-  resumed described run. The review brief in particular printed three git
-  commands that would all fail.
+  move — and with the plain folder's in one. The review brief in particular
+  printed three git commands that would all fail.
+- **A described root's resume message** (`quick-root.md`) named a branch
+  twice: the bullet saying where helpers branch from, and the closing line
+  asking the root to report "the branch, and the pull request if one was
+  opened". Both are placeholders now. The second was missed at first, which
+  left a message that said there is no branch and then asked for it; it is
+  pinned as a golden built from the repository's with the two fragments
+  exchanged.
+- **The lines that are the same in both cases** were made true of both rather
+  than qualified: the root is told it is in "the human's own folder" and that
+  the work is a worker's to do "in the workspace it was opened in", where it
+  said "checkout" and "a worker's worktree". `report`'s description, the
+  `branch` and `base` arguments and `fork_session`'s description each say what
+  holds in a plain folder.
 - **The root's instructions** (`templates/quick.md`) gain a section on the
   case, since its steps tell it to name the worker's branch.
 - **`spawn_agent`'s description** on the root's surface says it as well.

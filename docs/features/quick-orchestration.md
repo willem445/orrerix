@@ -25,7 +25,8 @@ work is approved or a limit is reached. There is no orchestrator pane, no task
 board and no issue queue, and you do not need a `.orrerix/workflow.yml`.
 
 There are two ways to run one, and you pick under **How**. The form opens on
-**Describe it**, so pressing Start with nothing typed opens one agent that waits:
+**Describe it**, so pressing **Create** with nothing typed opens one agent
+that waits:
 
 - **Describe it.** One agent opens and waits. You tell it the task in its pane,
   and it decides whether to plan and review and opens its own helpers. See

@@ -127,7 +127,8 @@ test("an empty repository or task is refused, naming the field", () => {
 
 test("an untouched form starts: the opening mode needs nothing typed (#3876)", () => {
   // quickform.ts opens the form on QUICK_MODES[0] with every box empty. That
-  // is the mode that needs no task, so a blank Start is accepted and sends none.
+  // is the mode that needs no task, so submitting it blank is accepted and sends
+  // none.
   const untouched = form({
     mode: QUICK_MODES[0],
     task: "",

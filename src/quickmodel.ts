@@ -56,7 +56,7 @@ export const QUICK_STEP_CLIS: Record<QuickStep, readonly string[]> = {
  *
  *  `QUICK_MODES` lists them in the order the form shows them under **How**,
  *  and its FIRST entry is the mode the form opens on: `describe`, the one that
- *  needs nothing typed, so a Start with the form untouched opens one waiting
+ *  needs nothing typed, so submitting the form untouched opens one waiting
  *  agent (#3876). */
 export type QuickMode = "steps" | "describe";
 

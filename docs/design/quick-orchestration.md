@@ -1,6 +1,6 @@
 # Quick orchestration — a plan, work, review run with no orchestrator
 
-Issues #3679 and #3723. User page: `docs/features/quick-orchestration.md`.
+Issues #3679, #3723 and #3878. User page: `docs/features/quick-orchestration.md`.
 
 A **quick task** is one short-lived run for one task: an optional plan, the
 work, an optional review, and a bounded loop between the worker and the
@@ -14,7 +14,8 @@ orrerix relays between the steps itself; §1–§12 describe it. In the
 pane, and decides for itself whether to plan and review; §15 describes it and
 the capability class it needed, and §17 argues its lifecycle — the idle start,
 what begins a task, and what a second one means. §16 is how a run is reached
-when none of its panes is left, which applies to both.
+when none of its panes is left, which applies to both. §18 is what either does
+in a folder that is not a git repository.
 
 ## 1. Why a state machine in the engine, and not a small orchestrator
 
@@ -482,6 +483,13 @@ branch, and by the brief.
 23. An idle run whose root's CLI exits by itself is held on `unresumable`
     (§17.5). On codex, an idle root's session watch starts at its first tool
     call instead of at its spawn (§17.8).
+24. In a quick group whose folder is not a git repository, a worker or
+    reviewer spawn opens in that folder with no worktree and no recorded
+    branch, where it used to be refused; `branch` and `base` on such a spawn
+    are ignored; and the answer to `spawn_agent` and `fork_session` gains a
+    `NOTE:` saying so (§18). The `agent-spawn` audit row gains `in_place`.
+    Nothing persisted changes shape: `quick_drive.json`, `agents.json` and a
+    run's status are as they were, with `branch` empty where there is none.
 
 ## 14. Residuals
 
@@ -1119,3 +1127,161 @@ part of.
   them.
 - **Helpers left open show the run's chip.** A status is painted on every pane
   of its group, so a helper still open after a task reads `quick · idle` too.
+
+## 18. A folder that is not a git repository
+
+Issue #3878. A quick run started in a plain folder could open no helper: every
+worker and reviewer spawn cuts a git worktree, and `git_worktree_add_sync`
+failed with git's own `fatal: not a git repository`. The run started without
+complaint, because nothing before the first helper needs git, and then could do
+nothing.
+
+### 18.1 The decision: support it, in the folder itself
+
+The alternative was to refuse the folder on the form. That was rejected. A
+single agent pane works in a plain folder, and a quick task is offered as that
+pane with a second pair of eyes; a form that turned the folder away would make
+the lighter feature the stricter one.
+
+So a worker and a reviewer in such a run open **in the folder itself**: no
+worktree, no branch, and no branch recorded on the pane. A planner and a
+described run's root already ran there.
+
+### 18.2 Why the worktree guarantee is relaxed here, and only here
+
+#338/#359 gives every worker and reviewer a workspace of its own so that none
+works in the human's checkout. The rule has a premise: a repository to cut a
+worktree from. A plain folder does not meet it, so there the rule can only
+refuse, and the refusal protects nothing — there is no branch state to
+contend on and no checkout to disturb.
+
+What the guarantee also bought, isolation between panes, is given up, and the
+two modes pay for it differently:
+
+- **Steps** gives up nothing. Exactly one pane holds the turn, and the reviewer
+  was already opened in the worker's workspace (§6). In a plain folder that
+  workspace is the folder.
+- **Describe** gives up the isolation between helpers. Two workers opened at
+  once would change the same files. Nothing enforces "one at a time": the root
+  is told, in its instructions, in `spawn_agent`'s description and in the
+  answer to every spawn, and it is the root's to keep.
+
+It is not relaxed for an orchestration group or a lead group. Their workflow is
+built on a branch per worker, a pull request and a merge gate; a worker opened
+in place there would have nothing to open a pull request from, and several
+workers at once is the ordinary case rather than a mistake. They keep failing
+loudly in a folder with no repository.
+
+### 18.3 One predicate
+
+`OrchRegistry::qd_plain_folder(group)` is the only place this is decided. It
+answers `false` for any group without the quick marker before git is asked
+anything, and otherwise asks `git::in_work_tree`, which is the
+`rev-parse --show-toplevel` that `git_worktree_add_sync` opens with, read
+through the one classification of its failure the git view already used.
+
+It has three answers, and the third is not folded into the second:
+
+| Answer | Meaning | What the spawn does |
+| --- | --- | --- |
+| `Ok(false)` | git resolved a work tree | cuts a worktree, as before |
+| `Ok(true)` | git's discovery found no repository | opens in the folder |
+| `Err` | git could not answer: not installed, a bare repository, an ownership it refuses | refuses, quoting git |
+
+"I could not look" is not "there is nothing there". Reading a failure as a
+plain folder would put a helper to work inside a repository git had just
+declined to open — in a bare one, among its objects.
+
+Two callers read it:
+
+- `spawn_agent_full`, where every helper spawn ends: a described run's
+  `spawn_agent` and `fork_session`, and a steps run's own worker. It is asked
+  only for a spawn that would otherwise cut a worktree, so a resume (which
+  carries its `cwd`) and a planner ask nothing. The root's spawn reads it too,
+  for its workspace note alone, and opens whatever it answers.
+- `qd_brief`, so a brief names a branch only where there is one. A brief
+  cannot refuse, so an `Err` there renders the repository's wording; the spawn
+  beside it is where that failure is reported.
+
+Nothing records the answer. It is asked of git each time, so a folder the
+human runs `git init` and commits in is a repository from the next helper on.
+A persisted flag on the run's record was considered and not added: it would be
+a contract change to `quick_drive.json` for a fact git already holds.
+
+### 18.4 What each agent is told
+
+The claim "this pane has a worktree and a branch" was made in several places,
+and each is corrected where it is made rather than by one sentence somewhere:
+
+- **The helper's own kickoff** carries `quick_plain_folder_note` in place of
+  the "dedicated git worktree … on branch" line. A worker's and a reviewer's
+  role instructions are written for a repository, and a described run's helper
+  has no quick brief to overrule them, so this line says that it does.
+- **The answer to the spawn** carries `quick_plain_folder_disclosure` as its
+  `NOTE:`, through the channel a persona warning already travels by
+  (`spawn_notices`), so `spawn_agent` and `fork_session` say it without either
+  knowing why.
+- **The steps briefs.** `quick-work.md`, `quick-review.md` and `quick-plan.md`
+  each carried one passage naming a worktree, a branch or a git command. Each
+  passage is now a placeholder `qd_brief` fills: with the same text, to the
+  byte, in a repository — the goldens in `tests/quickdrive/briefs.rs` did not
+  move — and with the plain folder's in one. `quick-root.md` is the same for a
+  resumed described run. The review brief in particular printed three git
+  commands that would all fail.
+- **The root's instructions** (`templates/quick.md`) gain a section on the
+  case, since its steps tell it to name the worker's branch.
+- **`spawn_agent`'s description** on the root's surface says it as well.
+
+### 18.5 `branch` and `base` are ignored, not refused
+
+A described run's root may pass `branch` or `base` to `spawn_agent`. In a plain
+folder neither means anything. They are ignored, and the answer names the ones
+that were passed.
+
+Refusing was the alternative. It would be the stricter reading, and it would
+cost a round for nothing: the root's tool description tells it a worker gets a
+branch, so a root that names one has followed its instructions. The answer it
+gets either way has to carry the correction; ignoring delivers it with the
+helper already open. The run's own **Branch from** value is defaulted onto
+every helper spawn (§17.3) and is not reported as ignored, because the caller
+did not pass it.
+
+### 18.6 What else assumed git, and what was found
+
+- **Resume.** A worker or reviewer resume inherits the roster's recorded
+  workspace when it still exists (`resolve_worker_resume_cwd`), and the folder
+  does. Its refusal of the group's main clone applies only to a workspace
+  found in a CLI's own store with nothing recorded, which is not this case.
+- **The reviewer-scratch reclaim** removes a worktree some reviewer record
+  carries a branch for, and never the group's own folder
+  (`reviewer_scratch_verdict`, rules 1 and 2). An in-place reviewer carries no
+  branch and its path is the folder, so it is excluded twice.
+- **Group teardown** skips the repository root when it removes worktrees
+  (`worktree_cleanup_targets`).
+- **The `gh` close guard** lets a pane close only a pull request whose head is
+  its own recorded branch. An in-place pane records none, so it can close
+  nothing.
+- **The run's status and notices.** `branch` is empty and `cwd` is the folder.
+  The finished and held notices name a branch only when one is recorded.
+- **`pr`.** A worker may still put a `ref` in its report; the brief no longer
+  suggests one.
+
+### 18.7 Residuals
+
+- **"Not a repository" is read off git's English message**, as the git view
+  has always read it. A git that words it otherwise answers `Err`, and the
+  helper is refused with git's text — the pre-#3878 behaviour, not a wrong
+  placement.
+- **A `.git` file that names a missing directory** is reported by git as not a
+  repository, and is treated as a plain folder.
+- **A repository with no commits** is a repository. Its worker is still
+  refused, by `git_worktree_add_sync`, which has no commit to cut from.
+- **Two helpers booting at once in one folder** can leave a session
+  unrecorded on a CLI that mints its own session id: the watch finds two new
+  sessions in one directory and binds neither (§17.8). The consequence is
+  that resume opens that pane fresh. A steps run opens one pane at a time and
+  is not affected.
+- **A `worktree: false` argument** is still refused for a worker or reviewer
+  with the dedicated-worktree sentence, in a plain folder too. The argument is
+  not on a quick root's surface, and the refusal's remedy — omit it — is the
+  right one.

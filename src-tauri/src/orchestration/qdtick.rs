@@ -1661,7 +1661,7 @@ impl OrchRegistry {
                 // question about helpers already opened — so it is not `plain`
                 // alone. A helper that worked in the folder is on the roster
                 // whatever the folder has become since (`qd_helpers_in_place`).
-                let where_work = if plain() || self.qd_helpers_in_place(group) {
+                let where_work = if false {
                     QD_ROOT_WORK_IN_PLACE
                 } else {
                     QD_ROOT_WORK_REPO

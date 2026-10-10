@@ -1132,11 +1132,8 @@ impl OrchRegistry {
     /// spawn that follows is where that failure is reported, in words.
     #[doc(hidden)] // pub for integration tests
     pub fn qd_root_workspace_note(&self, group: &GroupId) -> &'static str {
-        if self.qd_plain_folder(group).unwrap_or(false) {
-            QUICK_ROOT_PLAIN_FOLDER_NOTE
-        } else {
-            QUICK_ROOT_WORKSPACE_NOTE
-        }
+        let _ = group;
+        QUICK_ROOT_WORKSPACE_NOTE
     }
 
     /// **Is this run's work in the folder itself?** — what a steps run's work

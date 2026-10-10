@@ -1088,11 +1088,82 @@ impl OrchRegistry {
         let Some(g) = self.group(group) else { return Ok(false) };
         match crate::git::in_work_tree(&g.repo) {
             Ok(inside) => Ok(!inside),
-            Err(e) => Err(format!(
-                "orrerix could not tell whether this quick run's folder ({}) is a git repository, \
-                 so it opened nothing there: {e}",
-                g.repo
+            // "There is no git to ask" arrives as the git layer's sentinel,
+            // which is a token its other callers compare against and never a
+            // sentence — so it is worded, and every other failure is quoted.
+            Err(e) => Err(quick_folder_unknown_refusal(
+                &g.repo,
+                (e != crate::git::GIT_NOT_FOUND).then_some(e.as_str()),
             )),
+        }
+    }
+
+    /// **Where a quick run's plain folder puts a helper of `role`, and the
+    /// line it is opened with** — `Some((cwd, note))` when the helper opens in
+    /// the folder itself, `None` when the folder is a repository (or the group
+    /// is not a quick run, or `role` is not a worker or a reviewer) and the
+    /// spawn cuts a worktree as it always did.
+    ///
+    /// One function for both halves on purpose. The workspace and the note
+    /// that describes it are one fact, and `spawn_agent_full` takes them from
+    /// here together, so a pane cannot be put in the folder and told it has a
+    /// worktree. It is also the only form a test can read the choice in: a
+    /// test process has no pane to type a kickoff into, so "which note does a
+    /// plain-folder worker get" is asked of this function with a real group.
+    #[doc(hidden)] // pub for integration tests
+    pub fn qd_plain_workspace(
+        &self,
+        group: &GroupId,
+        role: Role,
+    ) -> Result<Option<(String, String)>, String> {
+        if !matches!(role, Role::Worker | Role::Reviewer) || !self.qd_plain_folder(group)? {
+            return Ok(None);
+        }
+        let Some(g) = self.group(group) else { return Ok(None) };
+        let note = quick_plain_folder_note(role, &g.repo);
+        Ok(Some((g.repo, note)))
+    }
+
+    /// The workspace line a quick run's ROOT is opened with: where its helpers
+    /// will work, read off the same predicate their spawns read.
+    ///
+    /// A git that cannot answer gets the repository's wording and does not
+    /// stop the root from opening — a root never needed git, and the helper
+    /// spawn that follows is where that failure is reported, in words.
+    #[doc(hidden)] // pub for integration tests
+    pub fn qd_root_workspace_note(&self, group: &GroupId) -> &'static str {
+        if self.qd_plain_folder(group).unwrap_or(false) {
+            QUICK_ROOT_PLAIN_FOLDER_NOTE
+        } else {
+            QUICK_ROOT_WORKSPACE_NOTE
+        }
+    }
+
+    /// **Is this run's work in the folder itself?** — what a steps run's work
+    /// and review briefs are worded by.
+    ///
+    /// Read off the RECORD once the worker has been opened, and off the
+    /// predicate only before that. A brief describes the pane it is typed
+    /// into, and that pane's workspace was settled at its spawn: a human who
+    /// runs `git init` in the folder halfway through has made a repository,
+    /// but has not given the worker a worktree or a branch. Asking git again
+    /// at every brief told a resumed worker to "commit as you go" on a branch
+    /// it was never cut, and its reviewer to diff against one.
+    ///
+    /// The signature is the worker's recorded workspace being the group's own
+    /// folder. In a repository a quick worker is always cut a worktree beside
+    /// it, so the two are the same path only when the spawn opened it in
+    /// place. A steps run opens its worker once and its reviewer in the
+    /// worker's workspace, so this cannot change during a run.
+    pub(in crate::orchestration) fn qd_work_in_place(
+        &self,
+        group: &GroupId,
+        rec: &QuickDriveRecord,
+    ) -> bool {
+        let recorded = rec.worker_cwd.trim();
+        match self.group(group) {
+            Some(g) if !recorded.is_empty() => same_path_key(recorded, &g.repo),
+            _ => self.qd_plain_folder(group).unwrap_or(false),
         }
     }
 

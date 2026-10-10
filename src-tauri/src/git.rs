@@ -113,6 +113,14 @@ where
     }
 }
 
+/// What [`run_git`] answers when there is no `git` to run. A SENTINEL, not a
+/// sentence: the git view, the issues view and the launcher each compare an
+/// error against this exact string and word it themselves, so it must never
+/// be shown as it is. Named so that a caller on the backend which words it
+/// (#3878, a quick run's helper spawn) reads the spelling `run_git` writes
+/// rather than a second copy of it.
+pub(crate) const GIT_NOT_FOUND: &str = "git-not-found";
+
 /// Run git in `repo` and capture stdout. Non-zero exit → Err(stderr).
 fn run_git(repo: &str, args: &[&str]) -> Result<String, String> {
     if !Path::new(repo).is_dir() {
@@ -130,7 +138,7 @@ fn run_git(repo: &str, args: &[&str]) -> Result<String, String> {
     }
     let out = cmd.output().map_err(|e| {
         if e.kind() == std::io::ErrorKind::NotFound {
-            "git-not-found".to_string()
+            GIT_NOT_FOUND.to_string()
         } else {
             e.to_string()
         }

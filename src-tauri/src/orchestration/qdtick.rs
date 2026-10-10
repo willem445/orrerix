@@ -66,11 +66,16 @@ pub const QUICK_ROOT_TPL: &str = include_str!("templates/quick-root.md");
 /// before that, to the byte: the golden in tests/quickdrive/briefs.rs did not
 /// move.
 const QD_WORKSPACE_REPO: &str = "Work in your worktree on the branch you were given, and commit as you go. A pull request is optional — open one only if the task asks for it, and name it in your report's ref.";
-/// The same for a folder that is not a git repository: no worktree was cut and
-/// no branch exists, so "commit as you go" would be an instruction nothing can
-/// carry out. The reviewer has no diff to read there either, which is why the
-/// worker is asked to name the files.
-const QD_WORKSPACE_PLAIN: &str = "Work in the folder you were opened in. It is not a git repository, so you have no worktree and no branch, and there is nothing to commit, push or open a pull request from: change the files in place, and name the files you changed in your report's note.";
+/// The same for a worker opened in the folder itself: no worktree was cut and
+/// no branch was made, so "commit as you go" would be an instruction about a
+/// branch that does not exist. The reviewer has no diff of this work to read
+/// either, which is why the worker is asked to name the files.
+///
+/// Worded by what the SPAWN did, not by what the folder is now: this brief is
+/// typed again on a resume, and a human may have run `git init` in the folder
+/// since. "It is not a git repository" would then be false; "you were given no
+/// worktree and no branch" stays true.
+const QD_WORKSPACE_PLAIN: &str = "Work in the folder you were opened in. You were given no worktree and no branch, because that folder was not a git repository when this run began work in it: change the files in place, do not commit, push or open a pull request, and name the files you changed in your report's note.";
 
 /// The marker file that says a group was minted for a quick run.
 ///
@@ -1443,13 +1448,22 @@ impl OrchRegistry {
         let plan_path = self.qd_plan_path(group);
         let plan_at = qd_fact(&plan_path.to_string_lossy());
         let has_plan = rec.plan_step && plan_path.is_file();
-        // #3878: whether this run's folder is not a git repository — the same
-        // question the spawn asks, from the same place, so a brief names a
-        // branch only where the pane it is typed into has one. Asked by the
-        // arms that word a workspace and by no other. A git that cannot answer
-        // gets the repository's wording: a brief cannot refuse, and the spawn
-        // beside it is where that failure is reported, in words.
+        // #3878: a brief names a branch only where the pane it is typed into
+        // has one, and there are two questions behind that, asked lazily by
+        // the arms that word a workspace and by no other.
+        //
+        // `plain` is the spawn's own question, of git, now: what the NEXT
+        // pane will be given. The plan brief and a described root's resume
+        // message are about panes not yet opened, so they ask it. A git that
+        // cannot answer gets the repository's wording — a brief cannot
+        // refuse, and the spawn beside it reports that failure in words.
+        //
+        // `in_place` is what the worker WAS given, read off the record once
+        // it has been opened (`qd_work_in_place`). The work and review briefs
+        // describe that pane, and a `git init` in the folder since does not
+        // give it a worktree.
         let plain = || self.qd_plain_folder(group).unwrap_or(false);
+        let in_place = || self.qd_work_in_place(group, rec);
         let body = match rec.state() {
             QuickState::PlanWait => {
                 let whence = if plain() {
@@ -1481,7 +1495,7 @@ impl OrchRegistry {
                 } else {
                     "When the work is finished"
                 };
-                let workspace = if plain() { QD_WORKSPACE_PLAIN } else { QD_WORKSPACE_REPO };
+                let workspace = if in_place() { QD_WORKSPACE_PLAIN } else { QD_WORKSPACE_REPO };
                 render_template(
                     QUICK_WORK_TPL,
                     &[
@@ -1498,15 +1512,20 @@ impl OrchRegistry {
                 // Where the work is and how to read it. In a repository that
                 // is the worker's worktree, its branch and three git commands
                 // — the text the review template carried inline before #3878,
-                // to the byte. In a plain folder there is no branch to name
-                // and no diff to ask for, and a brief that printed those
-                // commands there would hand the reviewer three that all fail.
-                let work = if plain() {
+                // to the byte. Where the worker was opened in the folder
+                // itself there is no branch to name and no diff of its work
+                // to ask for, and a brief that printed those commands would
+                // hand the reviewer three that fail or print nothing. Worded
+                // by what the worker was given, for `QD_WORKSPACE_PLAIN`'s
+                // reason: the folder may have become a repository since.
+                let work = if in_place() {
                     format!(
-                        "The work is in {cwd}. That folder is not a git repository, so there is \
-                         no branch and no diff to read: the worker changed the files in place, \
-                         and its note below should say which. You have been opened in the same \
-                         folder: read the files, and do not edit anything there."
+                        "The work is in {cwd}. The worker was given no worktree and no branch \
+                         there, because that folder was not a git repository when it began, so \
+                         there is no branch to name and no diff of its work to ask git for: it \
+                         changed the files in place, and its note below should say which. You \
+                         have been opened in the same folder: read the files, and do not edit \
+                         anything there."
                     )
                 } else {
                     let branch = if rec.worker_branch.trim().is_empty() {

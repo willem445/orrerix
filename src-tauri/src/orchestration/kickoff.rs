@@ -100,6 +100,31 @@ pub fn quick_plain_folder_disclosure(agent: &str, folder: &str, passed: &[&str])
     )
 }
 
+/// The refusal a quick run's helper spawn answers with when git could not say
+/// whether the run's folder is a repository (#3878).
+///
+/// `git_said` is git's own error, quoted — or `None` when there was no git to
+/// ask. That case is worded here rather than quoted because what the git
+/// layer answers for it is a sentinel its other callers compare against, not
+/// a sentence, and a human or an agent shown that token learns nothing they
+/// can act on. The sentence says the one thing that is not obvious: a quick
+/// run needs git even in a folder that is not a repository, because that is
+/// the question it has to ask before it opens anything.
+#[doc(hidden)] // pub for integration tests
+pub fn quick_folder_unknown_refusal(folder: &str, git_said: Option<&str>) -> String {
+    let why = match git_said {
+        Some(said) => said.to_string(),
+        None => "git is not installed, or is not on the PATH this app was started with. A \
+                 quick run asks git that question even in a plain folder, so install git or \
+                 start the app where git can be found"
+            .to_string(),
+    };
+    format!(
+        "orrerix could not tell whether this quick run's folder ({folder}) is a git repository, \
+         so it opened nothing there: {why}"
+    )
+}
+
 /// The CLIs whose launch has **no system-prompt seam** for the role contract:
 /// `persona_inject` has nowhere to put it, so the kickoff's pointer to the
 /// instructions file is the only way the agent learns its role.

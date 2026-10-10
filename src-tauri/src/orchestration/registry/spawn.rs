@@ -460,10 +460,17 @@ impl OrchRegistry {
         // `qd_plain_folder`, which is `false` for every group that is not a
         // quick run before git is asked anything. A git that could not answer
         // refuses the spawn here, in words, rather than being read as "plain".
-        let in_plain_folder = cwd_override.is_none()
-            && use_worktree
-            && matches!(role, Role::Worker | Role::Reviewer)
-            && self.qd_plain_folder(group_id)?;
+        //
+        // The folder and the note that describes it come back TOGETHER
+        // (`qd_plain_workspace`), so this function has no second place to
+        // choose a note in — and a test, which has no pane to read a kickoff
+        // off, can ask that function what a plain-folder helper is told.
+        let plain_workspace = if cwd_override.is_none() && use_worktree {
+            self.qd_plain_workspace(group_id, role)?
+        } else {
+            None
+        };
+        let in_plain_folder = plain_workspace.is_some();
         // The third element is the branch to PERSIST on the entry (#1, session
         // browser metadata): `Some` only where `branch_name` is an actual
         // commitment this agent is working against — a cut worktree, or a
@@ -490,7 +497,7 @@ impl OrchRegistry {
                 .filter(|_| resume)
                 .and_then(|s| self.resumed_session_branch(group_id, s, role));
             (c, String::new(), inherited)
-        } else if in_plain_folder {
+        } else if let Some((folder, note)) = plain_workspace {
             // The folder itself, and NO persisted branch — for the reason a
             // quick root's is `None`: a delegate may close only a pull request
             // whose head is its own recorded branch, and `agent/<id>` here
@@ -498,7 +505,7 @@ impl OrchRegistry {
             // reviewer-scratch reclaim away: that removes a worktree some
             // reviewer record carries a BRANCH for, and never the group's own
             // folder (`reviewer_scratch_verdict`, rules 1 and 2).
-            (group.repo.clone(), quick_plain_folder_note(role, &group.repo), None)
+            (folder, note, None)
         } else if use_worktree
             && role != Role::Orchestrator
             && role != Role::Planner
@@ -550,16 +557,9 @@ impl OrchRegistry {
             // its own recorded branch, so a root with none can close nothing.
             //
             // #3878: the note says where its helpers will work, so it reads
-            // the same predicate their spawns do. A git that cannot answer
-            // gets the repository's wording and does not stop the root from
-            // opening — it opened before this question existed, and the
-            // helper spawn that follows is where that failure is reported.
-            let note = if self.qd_plain_folder(group_id).unwrap_or(false) {
-                QUICK_ROOT_PLAIN_FOLDER_NOTE
-            } else {
-                QUICK_ROOT_WORKSPACE_NOTE
-            };
-            (group.repo.clone(), note.to_string(), None)
+            // the same predicate their spawns do — `qd_root_workspace_note`,
+            // which is also what a test asks.
+            (group.repo.clone(), self.qd_root_workspace_note(group_id).to_string(), None)
         } else if role == Role::Manager {
             // The repo root, like the orchestrator — and a note, unlike it,
             // because a manager's containment (`NoEdits`) leaves the shell

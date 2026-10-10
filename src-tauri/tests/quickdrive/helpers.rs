@@ -93,6 +93,29 @@ impl Repo {
         r
     }
 
+    /// Turn a [`Repo::plain`] folder into a repository with one commit, the
+    /// way a human would halfway through a run (#3878 review). Asserted: git
+    /// must now resolve a work tree here, or the test that calls this is not
+    /// about a folder that changed.
+    pub(crate) fn make_repository(&self) {
+        self.git(&["init", "-q", "-b", "main"]);
+        self.git(&["config", "user.email", "t@t"]);
+        self.git(&["config", "user.name", "t"]);
+        self.git(&["add", "-A"]);
+        self.git(&["commit", "-qm", "init"]);
+        let (ok, said) = self.git_try(&["rev-parse", "--show-toplevel"]);
+        assert!(ok, "the fixture's premise: the folder is a repository now: {said}");
+    }
+
+    /// What git itself says, on this machine, when asked for this folder's
+    /// work tree and it refuses — so a test can require that a refusal QUOTES
+    /// git without pinning one version's wording.
+    pub(crate) fn work_tree_refusal(&self) -> String {
+        let (ok, said) = self.git_try(&["rev-parse", "--show-toplevel"]);
+        assert!(!ok, "git resolved a work tree here, so there is no refusal to quote");
+        said.trim().to_string()
+    }
+
     fn git(&self, args: &[&str]) {
         let (ok, said) = self.git_try(args);
         assert!(ok, "git {args:?}: {said}");

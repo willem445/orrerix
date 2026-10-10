@@ -19,8 +19,8 @@ use super::described::{describing, open_helper};
 use super::*;
 
 use loomux_lib::orchestration::{
-    quick_plain_folder_disclosure, quick_plain_folder_note, QUICK_ROOT_PLAIN_FOLDER_NOTE,
-    QUICK_ROOT_WORKSPACE_NOTE,
+    quick_folder_unknown_refusal, quick_plain_folder_disclosure, quick_plain_folder_note,
+    QUICK_ROOT_PLAIN_FOLDER_NOTE, QUICK_ROOT_WORKSPACE_NOTE,
 };
 
 /// What the answer to a spawn carries when the helper opened in place.
@@ -238,7 +238,7 @@ fn a_steps_run_in_a_plain_folder_opens_its_worker_then_its_reviewer_in_the_folde
     // The work brief, as the pane was opened with it.
     let work = lf(&w.task);
     assert!(work.contains("Work in the folder you were opened in"), "{work}");
-    assert!(work.contains("It is not a git repository"), "{work}");
+    assert!(work.contains("You were given no worktree and no branch"), "{work}");
     assert!(work.contains("name the files you changed"), "the reviewer has no diff to read: {work}");
     for wrong in ["Work in your worktree", "commit as you go", "the branch you were given"] {
         assert!(!work.contains(wrong), "the brief told a plain-folder worker to {wrong:?}: {work}");
@@ -265,9 +265,9 @@ fn a_steps_run_in_a_plain_folder_opens_its_worker_then_its_reviewer_in_the_folde
     let review = lf(&r.task);
     let recorded = s["cwd"].as_str().expect("the run recorded the worker's folder");
     assert!(review.contains(&format!("The work is in {recorded}.")), "{review}");
-    assert!(review.contains("That folder is not a git repository"), "{review}");
+    assert!(review.contains("The worker was given no worktree and no branch there"), "{review}");
     assert!(review.contains("The worker's note: added the flag in list.rs"), "{review}");
-    for wrong in ["on branch", "worktree", "git status", "git diff", "git log"] {
+    for wrong in ["on branch", "the worker's own worktree", "git status", "git diff", "git log"] {
         assert!(!review.contains(wrong), "the brief named {wrong:?} in a plain folder: {review}");
     }
     assert!(review.contains("report(outcome=approved"), "the verdict's way out is unchanged: {review}");
@@ -387,6 +387,9 @@ fn a_folder_git_will_not_open_is_refused_and_never_read_as_a_plain_folder() {
             "the refusal says what was being asked: {answer}"
         );
         assert!(answer.contains("so it opened nothing there"), "{answer}");
+        // A failure that is not "no git" is QUOTED: git's own words, as this
+        // machine's git says them, are in the answer.
+        assert!(answer.contains(&bare.work_tree_refusal()), "{answer}");
         assert!(!answer.contains(IN_PLACE), "{answer}");
     }
     assert_eq!(live_agents(&reg, &group), vec![root.clone()], "no helper was opened");
@@ -402,6 +405,160 @@ fn a_folder_git_will_not_open_is_refused_and_never_read_as_a_plain_folder() {
     let note = s["held_note"].as_str().unwrap_or_default();
     assert!(note.contains("could not tell whether this quick run's folder"), "{s}");
     assert!(live_agents(&reg, &steps).is_empty());
+}
+
+/// **No git at all is worded, never shown as the git layer's sentinel.** What
+/// that layer answers when there is no `git` to run is a token its other
+/// callers compare against, and a refusal ending in it tells nobody what to
+/// do. Every other failure is quoted as git said it.
+///
+/// A pure function, because a test cannot uninstall git. The one line that
+/// turns the sentinel into `None` (`qd_plain_folder`) is therefore read, not
+/// run; the QUOTED half of the same line is run, by the bare-repository test
+/// above.
+#[test]
+fn a_missing_git_is_put_into_words_and_any_other_failure_is_quoted() {
+    const OPENS: &str = "orrerix could not tell whether this quick run's folder (/tmp/folder) is a \
+                         git repository, so it opened nothing there: ";
+    let missing = quick_folder_unknown_refusal("/tmp/folder", None);
+    assert!(missing.starts_with(OPENS), "{missing}");
+    assert!(missing.contains("git is not installed, or is not on the PATH"), "{missing}");
+    assert!(missing.contains("even in a plain folder"), "why a plain folder still needs it: {missing}");
+    assert!(!missing.contains("git-not-found"), "the sentinel reached a reader: {missing}");
+    assert!(is_one_paragraph(&missing), "{missing:?}");
+
+    let said = "fatal: this operation must be run in a work tree";
+    let other = quick_folder_unknown_refusal("/tmp/folder", Some(said));
+    assert_eq!(other, format!("{OPENS}{said}"), "git's own words, and nothing put in their place");
+    assert!(!other.contains("is not installed"), "{other}");
+}
+
+// ── which note a pane is opened with ────────────────────────────────────────
+
+/// **A plain-folder helper is opened with the plain folder's note**, and the
+/// note comes with the workspace it describes.
+///
+/// A test process has no pane to read a kickoff off, so the choice is asked of
+/// the function the spawn takes it from, with real groups. The half a test CAN
+/// see of that same answer — the folder — is checked against a real spawn, so
+/// the pair is not a second opinion beside what the spawn did.
+#[test]
+fn a_plain_folder_helper_is_given_the_plain_folders_note_with_its_workspace() {
+    let dir = tempfile::tempdir().unwrap();
+    let reg = relaunch_registry(dir.path());
+    let folder = Repo::plain();
+    let (group, root) = describing(&reg, &folder);
+
+    let mut notes = Vec::new();
+    for role in [Role::Worker, Role::Reviewer] {
+        let (cwd, note) = reg
+            .qd_plain_workspace(&group, role)
+            .expect("git answers for a plain folder")
+            .unwrap_or_else(|| panic!("a {} in a plain folder opens in place", role.as_str()));
+        assert_eq!(cwd.replace('\\', "/"), folder.path());
+        assert_eq!(note, quick_plain_folder_note(role, &cwd), "the note is this role's, for this folder");
+        assert!(!note.contains("dedicated git worktree"), "{note}");
+        notes.push(note);
+    }
+    assert_ne!(notes[0], notes[1], "a worker and a reviewer are not told the same thing");
+    // Only the two classes that would otherwise be cut a worktree.
+    for role in [Role::Planner, Role::Quick] {
+        assert_eq!(reg.qd_plain_workspace(&group, role), Ok(None), "{}", role.as_str());
+    }
+    // The spawn takes the folder from the same answer the note came in.
+    let worker = open_helper(&reg, &group, &root, "worker");
+    assert_eq!(cwd_of(&reg, &worker), folder.path());
+
+    // The controls. In a repository there is no in-place workspace and so no
+    // such note; an ordinary group in the same plain folder has none either;
+    // and a folder git will not open is an error, not an absent answer.
+    let repo = Repo::new();
+    let (in_repo, _root) = describing(&reg, &repo);
+    let ordinary = reg
+        .create_group(&folder.path(), Guardrails { agent_cli: "claude".into(), ..Guardrails::default() })
+        .unwrap()
+        .id;
+    let bare = Repo::bare();
+    let (in_bare, _root) = describing(&reg, &bare);
+    for role in [Role::Worker, Role::Reviewer] {
+        assert_eq!(reg.qd_plain_workspace(&in_repo, role), Ok(None), "a repository: {}", role.as_str());
+        assert_eq!(reg.qd_plain_workspace(&ordinary, role), Ok(None), "not a quick run: {}", role.as_str());
+        let err = reg.qd_plain_workspace(&in_bare, role).expect_err("a bare repository is not a plain folder");
+        assert!(err.contains("could not tell whether this quick run's folder"), "{err}");
+    }
+}
+
+/// **A quick root's workspace line follows the folder too**: in a plain
+/// folder it says its helpers share that folder, and everywhere else — a
+/// repository, and a folder git cannot answer for — it is the line it always
+/// was.
+#[test]
+fn a_quick_roots_workspace_note_follows_the_folder() {
+    let dir = tempfile::tempdir().unwrap();
+    let reg = relaunch_registry(dir.path());
+    let folder = Repo::plain();
+    let repo = Repo::new();
+    let bare = Repo::bare();
+    let (in_folder, _root) = describing(&reg, &folder);
+    let (in_repo, _root) = describing(&reg, &repo);
+    let (in_bare, _root) = describing(&reg, &bare);
+
+    assert_eq!(reg.qd_root_workspace_note(&in_folder), QUICK_ROOT_PLAIN_FOLDER_NOTE);
+    assert_eq!(reg.qd_root_workspace_note(&in_repo), QUICK_ROOT_WORKSPACE_NOTE);
+    assert_eq!(
+        reg.qd_root_workspace_note(&in_bare),
+        QUICK_ROOT_WORKSPACE_NOTE,
+        "a root opens whatever git says, with the repository's line"
+    );
+    assert_ne!(QUICK_ROOT_PLAIN_FOLDER_NOTE, QUICK_ROOT_WORKSPACE_NOTE, "the two are different lines");
+}
+
+// ── a folder that changes mid-run ───────────────────────────────────────────
+
+/// **A folder made a repository halfway through does not reword work that is
+/// already in place.** The human runs `git init` and commits after the worker
+/// opened: the worker still has no worktree and no branch, so its brief (typed
+/// again on a resume) and its reviewer's must not start naming them.
+///
+/// The control is that the folder really did change: the question a NEW pane
+/// would be asked now answers "a repository". Before the briefs were keyed on
+/// the run's record they asked that same question, and this run's reviewer
+/// was told its folder was "the worker's own worktree" and to `git diff`
+/// against a branch the work was never on.
+#[test]
+fn a_folder_made_a_repository_mid_run_does_not_reword_work_already_in_place() {
+    let dir = tempfile::tempdir().unwrap();
+    let reg = relaunch_registry(dir.path());
+    let folder = Repo::plain();
+    let (group, worker) = working(&reg, &folder);
+    assert_eq!(cwd_of(&reg, &worker), folder.path(), "the worker was opened in place");
+    assert!(reg.qd_plain_workspace(&group, Role::Worker).unwrap().is_some(), "and the folder is still plain");
+
+    folder.make_repository();
+    assert_eq!(
+        reg.qd_plain_workspace(&group, Role::Worker),
+        Ok(None),
+        "the control: the next pane's question now answers a repository"
+    );
+
+    // The work brief, as a resume would type it again.
+    let work = lf(&reg.qd_brief_for_test(&group));
+    assert!(work.contains("Work in the folder you were opened in"), "{work}");
+    assert!(work.contains("You were given no worktree and no branch"), "{work}");
+    for wrong in ["Work in your worktree", "commit as you go", "the branch you were given"] {
+        assert!(!work.contains(wrong), "the brief began telling an in-place worker to {wrong:?}: {work}");
+    }
+
+    report(&reg, &worker, json!({ "outcome": "done", "note": "changed list.rs" }));
+    let out = step(&reg, &group, T0 + 2);
+    let (side, reviewer, _how) = out.handed_to.clone().expect("the reviewer is opened");
+    assert_eq!(side, "reviewer");
+    assert_eq!(cwd_of(&reg, &reviewer), folder.path(), "where the work is");
+    let review = lf(&reg.agent(&reviewer).unwrap().task);
+    assert!(review.contains("The worker was given no worktree and no branch there"), "{review}");
+    for wrong in ["on branch", "the worker's own worktree", "git status", "git diff", "git log"] {
+        assert!(!review.contains(wrong), "the brief named {wrong:?} for work done in place: {review}");
+    }
 }
 
 // ── what the agents are told ────────────────────────────────────────────────

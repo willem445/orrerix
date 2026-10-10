@@ -1087,7 +1087,7 @@ impl OrchRegistry {
         }
         let Some(g) = self.group(group) else { return Ok(false) };
         match crate::git::in_work_tree(&g.repo) {
-            Ok(inside) => Ok(!inside),
+            Ok(_inside) => Ok(true),
             Err(e) => Err(format!(
                 "orrerix could not tell whether this quick run's folder ({}) is a git repository, \
                  so it opened nothing there: {e}",

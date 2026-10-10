@@ -94,6 +94,34 @@ Only one pane is working at any moment.
 A pull request is optional. If the worker opens one and names it when it
 reports, the reviewer is told about it and asked to post its review there too.
 
+## In a folder that is not a git repository
+
+A quick task works in a plain folder too, the way a single agent pane does.
+There is nothing to cut a worktree or a branch from, so:
+
+- **The worker and the reviewer open in the folder itself.** No worktree is
+  made beside it and no branch is created. The planner opens there as well, as
+  it always has.
+- **They share that one folder.** In Steps only one pane works at a time, so
+  nothing collides. In Describe it the agent is told to have one worker
+  changing the folder at a time.
+- **There is no branch, no commit and no pull request.** The worker changes the
+  files in place and says which ones in its report. The reviewer reads those
+  files where they are; it has no diff to ask for.
+- **Branch from** is not used. In Describe it, a `branch` or `base` the agent
+  passes when it opens a helper is ignored, and it is told so.
+
+Each pane is told this when it opens, and in Describe it the agent is told in
+the answer to every helper it opens.
+
+This applies to quick tasks only. A full orchestration group still needs a git
+repository: its workers and reviewers each get their own worktree, and one
+started in a plain folder is refused its first worker.
+
+If git is installed but cannot read the folder — a bare repository, or one whose
+ownership git refuses — no helper opens and the run says why. orrerix does not
+treat a folder git refused as a plain one.
+
 ## What you see
 
 Each pane of the run carries a chip in its header:
@@ -315,6 +343,12 @@ press Resume.
   not by spend.
 - **A pull request is found only if the worker names it.** orrerix does not
   look one up on GitHub.
+- **In a folder that is not a git repository, nothing is isolated and nothing
+  is recorded.** The panes share the folder, there is no branch to go back to,
+  and a change is only as reversible as your own backups make it.
+- **A repository with no commits is still a repository.** A quick task there is
+  refused its worker, as before: git has nothing to cut a branch from. Make a
+  first commit, or use a plain folder.
 - **The plan step's pane closes** once the plan is reported. The plan is in
   `plan.md`.
 - **Pausing the tab's group** holds back what orrerix would type into the panes,

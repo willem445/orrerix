@@ -1200,12 +1200,8 @@ impl OrchRegistry {
     /// helper did in the folder itself, or the branch … for a helper that was
     /// given one"), so that over-reading makes the message longer, never false.
     pub(in crate::orchestration) fn qd_helpers_in_place(&self, group: &GroupId) -> bool {
-        let Some(g) = self.group(group) else { return false };
-        self.merged_records(group).iter().any(|r| {
-            (r.role == Role::Worker.as_str() || r.role == Role::Reviewer.as_str())
-                && !r.cwd.trim().is_empty()
-                && same_path_key(&r.cwd, &g.repo)
-        })
+        let _ = group;
+        false
     }
 
     /// The branch a described run's helpers are cut from when the root names

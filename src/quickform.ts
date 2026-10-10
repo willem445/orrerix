@@ -140,7 +140,7 @@ export class QuickFormSection {
    *  from it: every write goes through the store, which re-reads the file. */
   private presets: QuickPreset[] = [];
   private presetsLoaded = false;
-  // #3876: open on the first QUICK_MODES entry, the mode that needs nothing typed.
+  // #3876: open on the first QUICK_MODES entry, the mode that needs no task.
   private mode: QuickMode = QUICK_MODES[0];
   private readonly modeBoxes = new Map<QuickMode, HTMLInputElement>();
   private readonly rootCli: HTMLSelectElement;

@@ -349,6 +349,9 @@ press Resume.
 - **A repository with no commits is still a repository.** A quick task there is
   refused its worker, as before: git has nothing to cut a branch from. Make a
   first commit, or use a plain folder.
+- **A folder inside another repository counts as that repository.** git looks
+  upward for one, so a folder under a checkout gets worktrees of the checkout
+  it sits in.
 - **The plan step's pane closes** once the plan is reported. The plan is in
   `plan.md`.
 - **Pausing the tab's group** holds back what orrerix would type into the panes,

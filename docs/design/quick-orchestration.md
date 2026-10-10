@@ -1279,6 +1279,10 @@ did not pass it.
   placement.
 - **A `.git` file that names a missing directory** is reported by git as not a
   repository, and is treated as a plain folder.
+- **A folder inside another repository's work tree is that repository.** git's
+  discovery walks upward, so a plain-looking folder under a checkout — or under
+  a home directory that is itself one — resolves to the enclosing work tree,
+  and its helpers are cut worktrees of that repository, as before #3878.
 - **A repository with no commits** is a repository. Its worker is still
   refused, by `git_worktree_add_sync`, which has no commit to cut from.
 - **Two helpers booting at once in one folder** can leave a session

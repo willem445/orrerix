@@ -1191,11 +1191,21 @@ It has three answers, and the third is not folded into the second:
 | --- | --- | --- |
 | `Ok(false)` | git resolved a work tree | cuts a worktree, as before |
 | `Ok(true)` | git's discovery found no repository | opens in the folder |
-| `Err` | git could not answer: not installed, a bare repository, an ownership it refuses | refuses, quoting git |
+| `Err` | git could not answer: not installed, a bare repository, an ownership it refuses | refuses: quoting git, or in words where there was no git to quote |
 
 "I could not look" is not "there is nothing there". Reading a failure as a
 plain folder would put a helper to work inside a repository git had just
 declined to open — in a bare one, among its objects.
+
+"Not installed" is the one failure that is not quoted. The git layer answers
+it with a sentinel, `git-not-found`, which the git view, the issues view and
+the launcher each compare against and word themselves; shown as it is, it
+tells nobody what to do. `quick_folder_unknown_refusal` words it, and says the
+part that is not obvious: a quick run needs git even in a plain folder,
+because that is the question it has to ask before it opens anything. Running
+without git was the alternative, and it would mean answering "is this a
+repository" by looking for a `.git` entry — a second, weaker definition of
+the thing git itself decides.
 
 Two callers read it:
 
@@ -1204,14 +1214,28 @@ Two callers read it:
   only for a spawn that would otherwise cut a worktree, so a resume (which
   carries its `cwd`) and a planner ask nothing. The root's spawn reads it too,
   for its workspace note alone, and opens whatever it answers.
-- `qd_brief`, so a brief names a branch only where there is one. A brief
-  cannot refuse, so an `Err` there renders the repository's wording; the spawn
-  beside it is where that failure is reported.
+- `qd_brief`, for the two briefs that are about a pane not yet opened: the
+  plan brief and a described root's resume message. A brief cannot refuse, so
+  an `Err` there renders the repository's wording; the spawn beside it is
+  where that failure is reported.
 
 Nothing records the answer. It is asked of git each time, so a folder the
 human runs `git init` and commits in is a repository from the next helper on.
 A persisted flag on the run's record was considered and not added: it would be
 a contract change to `quick_drive.json` for a fact git already holds.
+
+**From the next helper on, and not from the next brief on.** A pane that is
+already open in the folder was given no worktree, and `git init` does not
+give it one. So the work and review briefs of a steps run do not ask git:
+they read `qd_work_in_place`, which is the run's own record once the worker
+has been opened — its recorded workspace is the group's folder exactly when
+the spawn opened it in place — and the predicate only before that. Asking git
+at every brief told a resumed worker to "commit as you go" on a branch it was
+never cut, and its reviewer to diff against one. Their wording follows for
+the same reason: it says what the worker was given, not what the folder is,
+since the second can stop being true. A steps run opens its worker once and
+its reviewer in the worker's workspace, so the record's answer cannot change
+during a run.
 
 ### 18.4 What each agent is told
 
@@ -1221,7 +1245,11 @@ and each is corrected where it is made rather than by one sentence somewhere:
 - **The helper's own kickoff** carries `quick_plain_folder_note` in place of
   the "dedicated git worktree … on branch" line. A worker's and a reviewer's
   role instructions are written for a repository, and a described run's helper
-  has no quick brief to overrule them, so this line says that it does.
+  has no quick brief to overrule them, so this line says that it does. The
+  note and the folder come from one function, `qd_plain_workspace`, so a pane
+  cannot be put in the folder and told it has a worktree; the root's line is
+  `qd_root_workspace_note`. Both are what a test asks, because a test process
+  has no pane to read a kickoff off.
 - **The answer to the spawn** carries `quick_plain_folder_disclosure` as its
   `NOTE:`, through the channel a persona warning already travels by
   (`spawn_notices`), so `spawn_agent` and `fork_session` say it without either
@@ -1285,12 +1313,41 @@ did not pass it.
   and its helpers are cut worktrees of that repository, as before #3878.
 - **A repository with no commits** is a repository. Its worker is still
   refused, by `git_worktree_add_sync`, which has no commit to cut from.
-- **Two helpers booting at once in one folder** can leave a session
-  unrecorded on a CLI that mints its own session id: the watch finds two new
-  sessions in one directory and binds neither (§17.8). The consequence is
-  that resume opens that pane fresh. A steps run opens one pane at a time and
-  is not affected.
+- **Two panes whose sessions appear in one folder before either is recorded**
+  are told apart, on a CLI that mints its own session id, only by the search
+  of §17.8 — a repository separates helpers by their worktrees, and a plain
+  folder does not. What happens depends on the CLI:
+  - **codex and opencode** exclude a session another pane has claimed and
+    answer `Contested` for two candidates, so neither pane is recorded.
+    Resume then opens each fresh.
+  - **copilot's search has no such answer.** It takes the newest new session
+    in the directory, so one pane can be recorded under the OTHER pane's
+    session; the second pane is then recorded under the remaining one, or
+    not at all. What reads a pane's recorded session then follows the wrong
+    one, and the one that matters is resume: it re-opens the other pane's
+    conversation in this pane.
+  - **claude and pi** are handed their session id at launch and are not
+    affected. Gemini's sessions are not tracked.
+
+  The window is the seconds between a pane opening and its session being
+  recorded, so it takes two helpers opened back to back, or a helper opened
+  before the root's own session is recorded. A steps run opens one pane at
+  a time and is not affected. The copilot case is not new — an orchestrator
+  and a planner share the repository in every group — but a plain folder is
+  where helpers meet it. Closing it means giving copilot's search the claim
+  exclusion and the contested answer the other two have, which changes what
+  every group's copilot panes are recorded under and is not this change's
+  to make.
 - **A `worktree: false` argument** is still refused for a worker or reviewer
   with the dedicated-worktree sentence, in a plain folder too. The argument is
   not on a quick root's surface, and the refusal's remedy — omit it — is the
   right one.
+- **An in-place worker's session resumes in the folder, whoever resumes it.**
+  A resume inherits the roster's recorded workspace when it still exists, and
+  compares only a workspace found in a CLI's own store against the group's
+  folder. Before #3878 no worker record named the folder itself; now a quick
+  run's does, and a group's roster outlives the run. So an ordinary group
+  later started on the same group id, in a folder since made a repository,
+  that resumes that old worker's session opens it in the main clone. It is
+  the directory that conversation ran in, and it is also what #338/#359 says
+  a worker resume must never do.

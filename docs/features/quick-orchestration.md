@@ -118,9 +118,18 @@ This applies to quick tasks only. A full orchestration group still needs a git
 repository: its workers and reviewers each get their own worktree, and one
 started in a plain folder is refused its first worker.
 
+A quick task needs git installed even in a plain folder: asking git is how
+orrerix tells a plain folder from a repository. Without git on the PATH the app
+was started with, the agent's pane still opens, but no worker or reviewer does,
+and the run says that git was not found.
+
 If git is installed but cannot read the folder — a bare repository, or one whose
 ownership git refuses — no helper opens and the run says why. orrerix does not
 treat a folder git refused as a plain one.
+
+If you make the folder a repository while a run is in progress, the panes
+already open stay where they are, with no worktree and no branch, and are not
+told otherwise. The next helper a Describe it agent opens gets a worktree.
 
 ## What you see
 
@@ -352,6 +361,14 @@ press Resume.
 - **A folder inside another repository counts as that repository.** git looks
   upward for one, so a folder under a checkout gets worktrees of the checkout
   it sits in.
+- **On copilot, in a plain folder, two helpers opened seconds apart can be
+  recorded under each other's sessions.** orrerix finds a copilot pane's
+  session by looking for the newest new one in its folder, and in a plain
+  folder the helpers share one. Resuming such a pane then continues the other
+  pane's conversation. It takes two helpers opened within seconds of each
+  other; a worker followed later by its reviewer does not meet it. On codex
+  and opencode the two are left unrecorded instead, so resume opens them
+  fresh. Claude and pi are not affected.
 - **The plan step's pane closes** once the plan is reported. The plan is in
   `plan.md`.
 - **Pausing the tab's group** holds back what orrerix would type into the panes,

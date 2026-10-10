@@ -992,7 +992,12 @@ been an ending.
 
 - **The form** hides the task field in describe mode and sends no task,
   whatever the hidden box still holds. `planQuickStart` requires a task in
-  steps mode exactly as before. The time-bound field reads "per task".
+  steps mode exactly as before. The time-bound field reads "per task". The form
+  opens on describe mode (#3876), because it is the only mode that needs no
+  task, so submitting it untouched opens one idle agent. The order of
+  `QUICK_MODES` decides that, and the radio row follows it. Steps still
+  requires a task, because the engine relays it into the first pane with no
+  agent there to tell.
 - **The chip** reads `quick · idle`, untinted. Its tooltip says what the pane
   is for and when the limit starts, and — once a task has finished there —
   what the agent said. It claims no turn, and its menu is empty: closing the

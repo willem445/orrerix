@@ -48,14 +48,19 @@ export const QUICK_STEP_CLIS: Record<QuickStep, readonly string[]> = {
 
 /** The two ways to run a quick task (#3679).
  *
- *  - `steps`: orrerix relays between a planner, a worker and a reviewer itself.
  *  - `describe`: ONE agent opens idle and is given the task in its own pane
  *    (#3723); it decides for itself whether to plan, who works and who
  *    reviews, and the panes it opens are its helpers. The form asks for no
- *    task in this mode. */
+ *    task in this mode.
+ *  - `steps`: orrerix relays between a planner, a worker and a reviewer itself.
+ *
+ *  `QUICK_MODES` lists them in the order the form shows them under **How**,
+ *  and its FIRST entry is the mode the form opens on: `describe`, the one that
+ *  needs no task, so submitting the form untouched opens one waiting
+ *  agent (#3876). */
 export type QuickMode = "steps" | "describe";
 
-export const QUICK_MODES: readonly QuickMode[] = ["steps", "describe"];
+export const QUICK_MODES: readonly QuickMode[] = ["describe", "steps"];
 
 /** The CLIs that can host the agent a described run is given to. Every CLI:
  *  that pane is not clamped — it is a full working pane, like an
@@ -192,7 +197,7 @@ export function planQuickStart(values: QuickFormValues): QuickPlan {
   // nothing is sent — whatever the hidden box may still be holding.
   const task = described ? "" : values.task.trim();
   if (!described && !task) {
-    return { ok: false, error: "Describe the task — that is the one thing a quick task needs.", focus: "task" };
+    return { ok: false, error: "Steps needs a task — type one, or pick Describe it under How to start with no task.", focus: "task" };
   }
   if (described && !QUICK_ROOT_CLIS.includes(values.root.cli)) {
     return {

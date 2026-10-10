@@ -24,13 +24,15 @@ hand orrerix one task and it is planned, done and reviewed for you, until the
 work is approved or a limit is reached. There is no orchestrator pane, no task
 board and no issue queue, and you do not need a `.orrerix/workflow.yml`.
 
-There are two ways to run one, and you pick under **How**:
+There are two ways to run one, and you pick under **How**. The form opens on
+**Describe it**, so pressing **Create** with no task typed opens one agent
+that waits:
 
-- **Steps.** You say which steps you want — **plan**, **work**, **review** — and
-  orrerix passes the work between them itself. Most of this page describes it.
 - **Describe it.** One agent opens and waits. You tell it the task in its pane,
   and it decides whether to plan and review and opens its own helpers. See
   [Describe it](#describe-it).
+- **Steps.** You say which steps you want — **plan**, **work**, **review** — and
+  orrerix passes the work between them itself. Most of this page describes it.
 
 It never merges, tags, closes or labels anything, and it needs no GitHub issue or
 pull request. When the task ends, its panes stay open for you to read, and
@@ -43,7 +45,7 @@ Open a new pane and pick **Quick task** under **Kind**.
 | Field | What it does |
 | --- | --- |
 | **Repository** | Where the work happens. Required. |
-| **How** | **Steps** or **Describe it**. The rest of this table is the Steps form. |
+| **How** | **Describe it** (the form opens on this) or **Steps**. The rest of this table is the Steps form. |
 | **Task** | What you want done, in your own words. Required in Steps; Describe it has no task field. |
 | **Plan first** | Off by default. A read-only planner writes a plan, and the worker follows it. |
 | **Review the work** | On by default. A reviewer reads the work and approves it or asks for changes. |
@@ -55,12 +57,12 @@ Open a new pane and pick **Quick task** under **Kind**.
 | **Max live agents / Idle-kill / Max spawns per hour** | The same limits an orchestration has. |
 | **Permissions** | Whether the panes pre-approve git, `gh` and their own tools. |
 
-Leave an instructions box empty and that step runs on its role's own
-instructions. What you type is *added* to them; it does not replace them.
+In **Steps**, leave an instructions box empty and that step runs on its role's
+own instructions. What you type is *added* to them; it does not replace them.
 
-Press **Create**. The first pane opens in the tab you are in — the planner if
-you asked for a plan, otherwise the worker. If it cannot be opened, the form
-comes back with the reason and the run is stopped.
+In **Steps**, press **Create**. The first pane opens in the tab you are in — the
+planner if you asked for a plan, otherwise the worker. If it cannot be opened,
+the form comes back with the reason and the run is stopped.
 
 ### Which CLI can run which step
 
@@ -170,9 +172,10 @@ and offered in every repository. Nothing in a repository can add or change one.
 
 ## Describe it
 
-Pick **Describe it** under **How** when you would rather say what you want than
-decide the steps yourself. The form does not ask for the task. One agent opens
-and waits, and you tell it in its pane, as you would any agent.
+**Describe it** is the form's default under **How**. Keep it when you would
+rather say what you want than decide the steps yourself. The form does not ask
+for the task. One agent opens and waits, and you tell it in its pane, as you
+would any agent.
 
 | Field | What it does |
 | --- | --- |

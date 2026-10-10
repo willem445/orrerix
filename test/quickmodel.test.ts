@@ -8,6 +8,7 @@ import { readFileSync } from "node:fs";
 
 import {
   QUICK_MINUTES,
+  QUICK_MODES,
   QUICK_ROOT_CLIS,
   QUICK_ROUNDS,
   QUICK_STEPS,
@@ -118,7 +119,28 @@ test("an empty repository or task is refused, naming the field", () => {
   assert.deepEqual([noRepo.ok, !noRepo.ok && noRepo.focus], [false, "repo"]);
   const noTask = planQuickStart(form({ task: " \n " }));
   assert.deepEqual([noTask.ok, !noTask.ok && noTask.focus], [false, "task"]);
-  assert.match(!noTask.ok ? noTask.error : "", /Describe the task/);
+  assert.match(!noTask.ok ? noTask.error : "", /Steps needs a task/);
+  // The sentence this replaced told the human to describe the task, which is
+  // now the mode the form opens on — so it must not come back as the refusal.
+  assert.doesNotMatch(!noTask.ok ? noTask.error : "", /Describe the task/);
+});
+
+test("an untouched form starts: the opening mode needs nothing typed (#3876)", () => {
+  // quickform.ts opens the form on QUICK_MODES[0] with every box empty. That
+  // is the mode that needs no task, so a blank Start is accepted and sends none.
+  const untouched = form({
+    mode: QUICK_MODES[0],
+    task: "",
+    steps: {
+      plan: { cli: "claude", model: "", instructions: "" },
+      work: { cli: "codex", model: "", instructions: "" },
+      review: { cli: "pi", model: "", instructions: "" },
+    },
+  });
+  const plan = planQuickStart(untouched);
+  assert.ok(plan.ok, plan.ok ? "" : plan.error);
+  assert.equal(plan.ok && plan.request.mode, "describe");
+  assert.equal(plan.ok && plan.request.task, "");
 });
 
 test("a number out of range is refused by name, never clamped", () => {

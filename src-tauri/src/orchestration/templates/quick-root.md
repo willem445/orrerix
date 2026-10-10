@@ -1,6 +1,6 @@
 {{TASK}}{{NOTES}}A task is in progress in this pane, and it is still yours to see through. Carry on from where you are: your helpers and their work are where you left them, and list_agents shows which are still alive. Do not do the work in this pane.
 
-- Branch helpers from: {{BASE}}.
+- {{HELPERS}}
 - Review rounds: at most {{MAX_ROUNDS}} for a task. After that many requests for changes, stop and report what is still open.
 - Time bound: {{MINUTES}} minutes for a task, counted again from this resume. When it is reached the run is held for the human.
 

@@ -54,13 +54,59 @@ impl Repo {
         r
     }
 
+    /// A folder that is NOT a git repository (#3878): the same nesting as
+    /// [`Repo::new`], one file in it, and no `git init`.
+    ///
+    /// The premise is asserted where it is made. A machine whose temp
+    /// directory sits inside somebody's work tree would otherwise run every
+    /// plain-folder test against a repository and report on the wrong thing.
+    pub(crate) fn plain() -> Repo {
+        let root = tempfile::tempdir().unwrap();
+        let repo = root.path().join("folder");
+        std::fs::create_dir_all(&repo).unwrap();
+        std::fs::write(repo.join("f.txt"), "hi").unwrap();
+        let r = Repo { _root: root, repo };
+        let (ok, said) = r.git_try(&["rev-parse", "--show-toplevel"]);
+        assert!(
+            !ok && said.contains("not a git repository"),
+            "the fixture's premise: {} must be outside every git work tree, and git said: {said}",
+            r.repo.display()
+        );
+        r
+    }
+
+    /// A BARE repository (#3878): a folder git knows about and will not cut a
+    /// worktree in, which is the failure that must never be read as "this is a
+    /// plain folder". Asserted the same way: git must refuse it in its own
+    /// words, and those words must not be the plain folder's.
+    pub(crate) fn bare() -> Repo {
+        let root = tempfile::tempdir().unwrap();
+        let repo = root.path().join("bare");
+        std::fs::create_dir_all(&repo).unwrap();
+        let r = Repo { _root: root, repo };
+        r.git(&["init", "-q", "--bare"]);
+        let (ok, said) = r.git_try(&["rev-parse", "--show-toplevel"]);
+        assert!(
+            !ok && !said.contains("not a git repository"),
+            "the fixture's premise: git must refuse a bare repository for a reason of its own: {said}"
+        );
+        r
+    }
+
     fn git(&self, args: &[&str]) {
+        let (ok, said) = self.git_try(args);
+        assert!(ok, "git {args:?}: {said}");
+    }
+
+    /// Run git in the folder and answer whether it succeeded, with what it
+    /// wrote to stderr.
+    fn git_try(&self, args: &[&str]) -> (bool, String) {
         let out = std::process::Command::new("git")
             .current_dir(&self.repo)
             .args(args)
             .output()
             .expect("git must be installed for this test");
-        assert!(out.status.success(), "git {args:?}: {}", String::from_utf8_lossy(&out.stderr));
+        (out.status.success(), String::from_utf8_lossy(&out.stderr).into_owned())
     }
 
     pub(crate) fn path(&self) -> String {

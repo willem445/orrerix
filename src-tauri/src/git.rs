@@ -221,6 +221,30 @@ fn git_repo_root_sync(cwd: String) -> Result<Option<String>, String> {
     }
 }
 
+/// **Is `dir` inside a git work tree?** — asked of git itself, with three
+/// answers that must not be folded into two (#3878):
+///
+/// - `Ok(true)`: git resolved a work tree containing `dir`.
+/// - `Ok(false)`: git's own discovery found NO repository at or above `dir`.
+///   A plain folder.
+/// - `Err`: git could not answer, or answered something else — it is not
+///   installed, the directory is gone, the repository is bare or its
+///   ownership is refused. None of those says "this is a plain folder", and a
+///   caller that read them that way would work in place inside a repository
+///   git had just declined to open.
+///
+/// The same `rev-parse --show-toplevel` [`git_worktree_add_sync`] opens with,
+/// read through [`git_repo_root_sync`]'s one classification of its failure —
+/// so "there is a work tree here" means one thing to the code that cuts a
+/// worktree and to the code that decides whether to.
+///
+/// Residual: that classification matches git's own English message. A git
+/// that words it otherwise answers `Err` here, which refuses rather than
+/// guesses — the direction a wrong answer is allowed to fail in.
+pub fn in_work_tree(dir: &str) -> Result<bool, String> {
+    git_repo_root_sync(dir.to_string()).map(|root| root.is_some())
+}
+
 #[tauri::command]
 pub async fn git_repo_root(cwd: String) -> Result<Option<String>, String> {
     run_blocking(move || git_repo_root_sync(cwd)).await

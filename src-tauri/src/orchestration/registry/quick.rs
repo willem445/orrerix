@@ -1044,6 +1044,58 @@ impl OrchRegistry {
         self.qd_defer_session_watch(group, agent_id, cwd, baseline);
     }
 
+    /// **Is this a quick run in a folder that is not a git repository?** —
+    /// the ONE place that decides a worker or a reviewer opens in the folder
+    /// itself, with no worktree and no branch (#3878).
+    ///
+    /// # Why the worktree guarantee is relaxed here, and only here
+    ///
+    /// #338/#359 gives every worker and reviewer a workspace of its own so that
+    /// none of them works in the human's checkout. That rule has a premise — a
+    /// repository to cut a worktree from — and a plain folder does not meet it:
+    /// `spawn_agent` was refused with git's own `fatal: not a git repository`,
+    /// and a quick run started there could do nothing at all. A single agent
+    /// pane already works in such a folder, and a quick run is the feature
+    /// that promises "the way a pane does, with a second pair of eyes".
+    ///
+    /// **Scoped to a quick group**, by its marker: a full orchestration group
+    /// and a lead group answer `false` before git is asked anything, so their
+    /// guarantee stands exactly as it was — a worker there still fails loudly
+    /// in a folder with no repository, which is the honest answer for a
+    /// workflow built on branches, pull requests and a merge gate.
+    ///
+    /// # Who reads it
+    ///
+    /// `spawn_agent_full`, which every way of opening a helper ends in — a
+    /// described run's `spawn_agent` and `fork_session`, and a steps run's own
+    /// worker — and `qd_brief`, so a brief names a branch only where there is
+    /// one. Nothing else decides this, and nothing records it: it is asked of
+    /// git each time, so a folder the human runs `git init` in is a repository
+    /// from the next helper on.
+    ///
+    /// # The three answers
+    ///
+    /// `Ok(true)` only when git's own discovery found no repository
+    /// ([`crate::git::in_work_tree`]). A git that could not answer — not
+    /// installed, a bare repository, an ownership it refuses — is `Err`, never
+    /// `true`: "I could not look" is not "there is nothing there", and reading
+    /// it that way would put a helper to work inside a repository git had just
+    /// declined to open.
+    pub(in crate::orchestration) fn qd_plain_folder(&self, group: &GroupId) -> Result<bool, String> {
+        if !self.is_quick_group(group) {
+            return Ok(false);
+        }
+        let Some(g) = self.group(group) else { return Ok(false) };
+        match crate::git::in_work_tree(&g.repo) {
+            Ok(inside) => Ok(!inside),
+            Err(e) => Err(format!(
+                "orrerix could not tell whether this quick run's folder ({}) is a git repository, \
+                 so it opened nothing there: {e}",
+                g.repo
+            )),
+        }
+    }
+
     /// The branch a described run's helpers are cut from when the root names
     /// none — the one the human set on the form (#3723).
     ///

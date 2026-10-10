@@ -60,6 +60,18 @@ pub const QUICK_FIX_TPL: &str = include_str!("templates/quick-fix.md");
 /// takes its task from the human.
 pub const QUICK_ROOT_TPL: &str = include_str!("templates/quick-root.md");
 
+/// The one sentence pair of the work brief that is about WHERE the work
+/// happens — the half that differs between a repository and a plain folder
+/// (#3878). The repository's is the text the work template carried inline
+/// before that, to the byte: the golden in tests/quickdrive/briefs.rs did not
+/// move.
+const QD_WORKSPACE_REPO: &str = "Work in your worktree on the branch you were given, and commit as you go. A pull request is optional — open one only if the task asks for it, and name it in your report's ref.";
+/// The same for a folder that is not a git repository: no worktree was cut and
+/// no branch exists, so "commit as you go" would be an instruction nothing can
+/// carry out. The reviewer has no diff to read there either, which is why the
+/// worker is asked to name the files.
+const QD_WORKSPACE_PLAIN: &str = "Work in the folder you were opened in. It is not a git repository, so you have no worktree and no branch, and there is nothing to commit, push or open a pull request from: change the files in place, and name the files you changed in your report's note.";
+
 /// The marker file that says a group was minted for a quick run.
 ///
 /// A FILE rather than the roster, for `LEAD_MARKER`'s reason one level over:
@@ -1431,16 +1443,27 @@ impl OrchRegistry {
         let plan_path = self.qd_plan_path(group);
         let plan_at = qd_fact(&plan_path.to_string_lossy());
         let has_plan = rec.plan_step && plan_path.is_file();
+        // #3878: whether this run's folder is not a git repository — the same
+        // question the spawn asks, from the same place, so a brief names a
+        // branch only where the pane it is typed into has one. Asked by the
+        // arms that word a workspace and by no other. A git that cannot answer
+        // gets the repository's wording: a brief cannot refuse, and the spawn
+        // beside it is where that failure is reported, in words.
+        let plain = || self.qd_plain_folder(group).unwrap_or(false);
         let body = match rec.state() {
             QuickState::PlanWait => {
-                let base = if rec.base.trim().is_empty() {
-                    "the repository's default branch".to_string()
+                let whence = if plain() {
+                    "The work will be done in the folder itself, which is not a git repository: \
+                     there is no branch, so plan no commit and no pull request."
+                        .to_string()
+                } else if rec.base.trim().is_empty() {
+                    "The work will be cut from the repository's default branch.".to_string()
                 } else {
-                    qd_fact(&rec.base)
+                    format!("The work will be cut from {}.", qd_fact(&rec.base))
                 };
                 render_template(
                     QUICK_PLAN_TPL,
-                    &[("TASK", &task), ("NOTES", &notes), ("BASE", &base)],
+                    &[("TASK", &task), ("NOTES", &notes), ("WHERE", &whence)],
                 )
             }
             QuickState::WorkWait => {
@@ -1458,33 +1481,62 @@ impl OrchRegistry {
                 } else {
                     "When the work is finished"
                 };
+                let workspace = if plain() { QD_WORKSPACE_PLAIN } else { QD_WORKSPACE_REPO };
                 render_template(
                     QUICK_WORK_TPL,
-                    &[("TASK", &task), ("PLAN", &plan), ("NOTES", &notes), ("WHEN_DONE", when)],
+                    &[
+                        ("TASK", &task),
+                        ("PLAN", &plan),
+                        ("NOTES", &notes),
+                        ("WORKSPACE", workspace),
+                        ("WHEN_DONE", when),
+                    ],
                 )
             }
             QuickState::ReviewWait => {
                 let cwd = qd_fact(&rec.worker_cwd);
-                let branch = if rec.worker_branch.trim().is_empty() {
-                    "the branch checked out there".to_string()
+                // Where the work is and how to read it. In a repository that
+                // is the worker's worktree, its branch and three git commands
+                // — the text the review template carried inline before #3878,
+                // to the byte. In a plain folder there is no branch to name
+                // and no diff to ask for, and a brief that printed those
+                // commands there would hand the reviewer three that all fail.
+                let work = if plain() {
+                    format!(
+                        "The work is in {cwd}. That folder is not a git repository, so there is \
+                         no branch and no diff to read: the worker changed the files in place, \
+                         and its note below should say which. You have been opened in the same \
+                         folder: read the files, and do not edit anything there."
+                    )
                 } else {
-                    qd_fact(&rec.worker_branch)
-                };
-                // The ref to diff against: the one the human named, else the
-                // repository's default branch as git reports it now. Where git
-                // cannot say, the brief asks for the log rather than naming a
-                // branch that may not exist.
-                let base = if rec.base.trim().is_empty() {
-                    self.group(group)
-                        .and_then(|g| crate::git::default_branch_name(&g.repo))
-                        .unwrap_or_default()
-                } else {
-                    rec.base.trim().to_string()
-                };
-                let diff = if base.is_empty() {
-                    "git log --oneline -20".to_string()
-                } else {
-                    format!("git diff {}...HEAD", qd_fact(&base))
+                    let branch = if rec.worker_branch.trim().is_empty() {
+                        "the branch checked out there".to_string()
+                    } else {
+                        qd_fact(&rec.worker_branch)
+                    };
+                    // The ref to diff against: the one the human named, else
+                    // the repository's default branch as git reports it now.
+                    // Where git cannot say, the brief asks for the log rather
+                    // than naming a branch that may not exist.
+                    let base = if rec.base.trim().is_empty() {
+                        self.group(group)
+                            .and_then(|g| crate::git::default_branch_name(&g.repo))
+                            .unwrap_or_default()
+                    } else {
+                        rec.base.trim().to_string()
+                    };
+                    let diff = if base.is_empty() {
+                        "git log --oneline -20".to_string()
+                    } else {
+                        format!("git diff {}...HEAD", qd_fact(&base))
+                    };
+                    format!(
+                        "The work is in {cwd} on branch {branch}. That is the worker's own \
+                         worktree and you have been opened in it, so it may hold uncommitted \
+                         changes: read it, and do not edit, stage, commit or push anything \
+                         there. To see everything the worker changed:\n\n    git status\n    \
+                         {diff}\n    git diff"
+                    )
                 };
                 let plan = if has_plan {
                     format!(
@@ -1515,9 +1567,7 @@ impl OrchRegistry {
                         ("ROUND", &round),
                         ("MAX_ROUNDS", &max),
                         ("TASK", &task),
-                        ("CWD", &cwd),
-                        ("BRANCH", &branch),
-                        ("DIFF", &diff),
+                        ("WORK", &work),
                         ("PLAN", &plan),
                         ("PR", &pr),
                         ("WORKER_NOTE", &worker_note),
@@ -1568,10 +1618,14 @@ impl OrchRegistry {
             // human, so this template is what a Resume types, and never a
             // first message.
             QuickState::RootWait => {
-                let base = if rec.base.trim().is_empty() {
-                    "the repository's default branch".to_string()
+                let helpers = if plain() {
+                    "This folder is not a git repository: helpers open in the folder itself, \
+                     with no worktree and no branch, so have one worker changing it at a time."
+                        .to_string()
+                } else if rec.base.trim().is_empty() {
+                    "Branch helpers from: the repository's default branch.".to_string()
                 } else {
-                    qd_fact(&rec.base)
+                    format!("Branch helpers from: {}.", qd_fact(&rec.base))
                 };
                 let minutes = rec.drive_timeout_minutes.to_string();
                 // Only a record written before #3723 holds a task: that build
@@ -1589,7 +1643,7 @@ impl OrchRegistry {
                     &[
                         ("TASK", &recorded),
                         ("NOTES", &notes),
-                        ("BASE", &base),
+                        ("HELPERS", &helpers),
                         ("MAX_ROUNDS", &max),
                         ("MINUTES", &minutes),
                     ],

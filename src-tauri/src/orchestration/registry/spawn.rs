@@ -456,7 +456,7 @@ impl OrchRegistry {
         // its worker and its reviewer IN that folder — there is nothing to cut
         // a worktree from. Asked only for a spawn that would otherwise cut
         // one (so a resume, which carries its `cwd`, and every class that
-        // never gets a worktree ask nothing), and decided in one place:
+        // never gets a worktree ask nothing). Git is asked in one place,
         // `qd_plain_folder`, which is `false` for every group that is not a
         // quick run before git is asked anything. A git that could not answer
         // refuses the spawn here, in words, rather than being read as "plain".

@@ -1071,7 +1071,9 @@ fn fork_session_tool() -> Value {
          against the live-agent cap, reports to you like any other, and its first turn tells it that it \
          is a fork and what its task is. A worker or reviewer fork gets its OWN worktree cut from the \
          source's branch (worktree:false is refused — two agents in one checkout is the conflict that \
-         rule exists for). REFUSED, with the reason: an orchestrator, manager or lead source; a source a \
+         rule exists for). The one exception is a quick run whose folder is not a git repository: \
+         there is no worktree to cut there, so the fork opens in that folder beside its source, and \
+         the answer says so. REFUSED, with the reason: an orchestrator, manager or lead source; a source a \
          review or plan drive owns (the driver routes its panes by agent id and never briefed the \
          fork); a CLI with no command-line fork (copilot, gemini); a structured-driver block; a source \
          with no recorded session yet. As a LEAD, forking your OWN pane (agent = your id) opens a \

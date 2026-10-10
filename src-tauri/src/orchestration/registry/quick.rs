@@ -1045,8 +1045,9 @@ impl OrchRegistry {
     }
 
     /// **Is this a quick run in a folder that is not a git repository?** —
-    /// the ONE place that decides a worker or a reviewer opens in the folder
-    /// itself, with no worktree and no branch (#3878).
+    /// the one place GIT IS ASKED that question (#3878). A worker or a
+    /// reviewer opens in the folder itself, with no worktree and no branch,
+    /// when it answers `true`.
     ///
     /// # Why the worktree guarantee is relaxed here, and only here
     ///
@@ -1064,14 +1065,30 @@ impl OrchRegistry {
     /// in a folder with no repository, which is the honest answer for a
     /// workflow built on branches, pull requests and a merge gate.
     ///
-    /// # Who reads it
+    /// # Who reads it, and what does not
     ///
-    /// `spawn_agent_full`, which every way of opening a helper ends in — a
-    /// described run's `spawn_agent` and `fork_session`, and a steps run's own
-    /// worker — and `qd_brief`, so a brief names a branch only where there is
-    /// one. Nothing else decides this, and nothing records it: it is asked of
-    /// git each time, so a folder the human runs `git init` in is a repository
-    /// from the next helper on.
+    /// Four readers, and every one of them is about a pane that is not open
+    /// yet:
+    ///
+    /// - [`qd_plain_workspace`](Self::qd_plain_workspace), which is how
+    ///   `spawn_agent_full` asks — where every way of opening a helper ends:
+    ///   a described run's `spawn_agent` and `fork_session`, and a steps
+    ///   run's own worker;
+    /// - [`qd_root_workspace_note`](Self::qd_root_workspace_note), for the
+    ///   line a root is opened with;
+    /// - `qd_brief`, for the plan brief and for a described root's resume
+    ///   message, which say where the NEXT pane will work;
+    /// - [`qd_work_in_place`](Self::qd_work_in_place), only until the worker
+    ///   has been opened.
+    ///
+    /// It is asked of git each time and its answer is stored nowhere, so a
+    /// folder the human runs `git init` in is a repository from the next
+    /// helper on. **What a pane was GIVEN is a different question, and that one
+    /// is read off records**: a steps run's work and review briefs read the
+    /// run's own (`qd_work_in_place`), and a described root's resume message
+    /// reads the roster (`qd_helpers_in_place`). A pane already open in the
+    /// folder keeps no worktree whatever git says later, so those two never
+    /// ask it once there is a record to read.
     ///
     /// # The three answers
     ///
@@ -1165,6 +1182,30 @@ impl OrchRegistry {
             Some(g) if !recorded.is_empty() => same_path_key(recorded, &g.repo),
             _ => self.qd_plain_folder(group).unwrap_or(false),
         }
+    }
+
+    /// **Did a helper of this run work in the folder itself?** — read off the
+    /// group's roster, for the one message that describes helpers' work after
+    /// the fact: the closing line of a described root's resume message.
+    ///
+    /// A described run's helpers are not sides of the run, so its record names
+    /// none of them. The roster does, live or not, and across a restart —
+    /// which is when a resume message is typed. In a repository a quick run's
+    /// worker and reviewer are each cut a worktree BESIDE the folder, so a
+    /// roster row for either AT the folder is a helper the spawn opened in
+    /// place, whatever the folder has become since.
+    ///
+    /// A roster outlives a run, so on a group id used before, an earlier run's
+    /// rows count too. The sentence this selects is conditional ("for work a
+    /// helper did in the folder itself, or the branch … for a helper that was
+    /// given one"), so that over-reading makes the message longer, never false.
+    pub(in crate::orchestration) fn qd_helpers_in_place(&self, group: &GroupId) -> bool {
+        let Some(g) = self.group(group) else { return false };
+        self.merged_records(group).iter().any(|r| {
+            (r.role == Role::Worker.as_str() || r.role == Role::Reviewer.as_str())
+                && !r.cwd.trim().is_empty()
+                && same_path_key(&r.cwd, &g.repo)
+        })
     }
 
     /// The branch a described run's helpers are cut from when the root names

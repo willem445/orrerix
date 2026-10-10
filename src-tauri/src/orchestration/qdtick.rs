@@ -77,6 +77,17 @@ const QD_WORKSPACE_REPO: &str = "Work in your worktree on the branch you were gi
 /// worktree and no branch" stays true.
 const QD_WORKSPACE_PLAIN: &str = "Work in the folder you were opened in. You were given no worktree and no branch, because that folder was not a git repository when this run began work in it: change the files in place, do not commit, push or open a pull request, and name the files you changed in your report's note.";
 
+/// Where a described run's root is told its finished work is, in the closing
+/// line of its resume message. The repository's is the text the template
+/// carried inline before, to the byte: the golden in
+/// tests/quickdrive/described.rs did not move.
+const QD_ROOT_WORK_REPO: &str = "the branch, and the pull request if one was opened";
+/// The same where a helper of this run worked in the folder itself. A message
+/// that had just said "there is no branch" went on to ask for "the branch".
+/// Conditional on purpose: a folder made a repository halfway through a task
+/// has helpers of both kinds, and this is true of each of them.
+const QD_ROOT_WORK_IN_PLACE: &str = "the files that changed, for work a helper did in the folder itself, or the branch and any pull request for a helper that was given one";
+
 /// The marker file that says a group was minted for a quick run.
 ///
 /// A FILE rather than the roster, for `LEAD_MARKER`'s reason one level over:
@@ -1646,6 +1657,15 @@ impl OrchRegistry {
                 } else {
                     format!("Branch helpers from: {}.", qd_fact(&rec.base))
                 };
+                // The closing line asks where the FINISHED work is, which is a
+                // question about helpers already opened — so it is not `plain`
+                // alone. A helper that worked in the folder is on the roster
+                // whatever the folder has become since (`qd_helpers_in_place`).
+                let where_work = if plain() || self.qd_helpers_in_place(group) {
+                    QD_ROOT_WORK_IN_PLACE
+                } else {
+                    QD_ROOT_WORK_REPO
+                };
                 let minutes = rec.drive_timeout_minutes.to_string();
                 // Only a record written before #3723 holds a task: that build
                 // took it on the form. It is quoted so a root re-opened cold —
@@ -1663,6 +1683,7 @@ impl OrchRegistry {
                         ("TASK", &recorded),
                         ("NOTES", &notes),
                         ("HELPERS", &helpers),
+                        ("WHERE_WORK", where_work),
                         ("MAX_ROUNDS", &max),
                         ("MINUTES", &minutes),
                     ],

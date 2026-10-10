@@ -176,8 +176,8 @@ fn spawn_agent_tool() -> Value {
             "name": { "type": "string", "description": "Short display name for the pane" },
             "kind": { "type": "string", "enum": ["worker", "reviewer", "planner"], "description": "Capability class. One of the three; anything else is refused with the reason. REQUIRED." },
             "task": { "type": "string", "description": "Full task brief; empty = an idle pane awaiting send_prompt." },
-            "branch": { "type": "string", "description": "Branch name for a worker's worktree (default agent/<id>)" },
-            "base": { "type": "string", "description": "Start-point for the worktree branch (default: the branch the human set for this quick run, else the repo's default branch, fetched fresh from origin)." },
+            "branch": { "type": "string", "description": "Branch name for a worker's worktree (default agent/<id>). Ignored where the run's folder is not a git repository." },
+            "base": { "type": "string", "description": "Start-point for the worktree branch (default: the branch the human set for this quick run, else the repo's default branch, fetched fresh from origin). Ignored where the run's folder is not a git repository." },
         }),
         &["task", "kind"])
 }
@@ -189,8 +189,9 @@ fn report_tool() -> Value {
         "END THE TASK. You are the agent the human gives this quick run's tasks to, so your \
          report is not typed into any pane: orrerix reads it as the end of the task in \
          progress and tells the human. outcome=done when the task is finished — put in `note` \
-         where the work is (the branch, and the pull request if one was opened) and anything \
-         left open. outcome=blocked when you cannot go on — put in `note` the one thing the \
+         where the work is (the branch, and the pull request if one was opened; or the files \
+         that changed, for work a helper did in a folder that is not a git repository) and \
+         anything left open. outcome=blocked when you cannot go on — put in `note` the one thing the \
          human has to decide or fix; the run is then held and they can resume it. Report once \
          per task. A report(progress) moves nothing, and a report made while no task is in \
          progress ends nothing. After a done report your helpers' panes and yours stay open: \

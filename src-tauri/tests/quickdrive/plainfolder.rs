@@ -3,8 +3,9 @@
 //! Every worker and reviewer used to be cut a git worktree, so a run started
 //! in a plain folder was refused its first helper with git's own
 //! `fatal: not a git repository`. It now opens them in the folder itself —
-//! and only there: the decision is one predicate (`qd_plain_folder`), scoped to
-//! a quick group, and four things below hold it in place.
+//! and only there: git is asked in one predicate (`qd_plain_folder`), scoped
+//! to a quick group, and four things below hold it in place. What a pane was
+//! GIVEN is read off records instead, and the last section pins that.
 //!
 //! 1. The behaviour, in both modes: a described run's `spawn_agent` and
 //!    `fork_session`, and a steps run's own worker and reviewer.
@@ -15,7 +16,7 @@
 //! 4. The refusal that it is not "any git failure": a folder git knows and
 //!    will not open is an error, never read as a plain folder.
 
-use super::described::{describing, open_helper};
+use super::described::{describing, open_helper, tasked, ROOT_BODY};
 use super::*;
 
 use loomux_lib::orchestration::{
@@ -637,4 +638,102 @@ fn the_roots_instructions_cover_a_plain_folder_and_forbid_cli_subagents() {
     let said = spawn["description"].as_str().unwrap_or_default();
     assert!(said.contains("NOT a git repository"), "{said}");
     assert!(said.contains("`branch` and `base` are ignored"), "{said}");
+    // …and so does every other line of its surface that names a branch or a
+    // worktree: the two arguments, `report`'s note, and `fork_session`.
+    let tool = |name: &str| -> Value {
+        listing["tools"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|t| t["name"] == json!(name))
+            .unwrap_or_else(|| panic!("{name} is on its surface"))
+            .clone()
+    };
+    for arg in ["branch", "base"] {
+        let said = spawn["inputSchema"]["properties"][arg]["description"].as_str().unwrap_or_default();
+        assert!(said.contains("Ignored where the run's folder is not a git repository"), "{arg}: {said}");
+    }
+    let report = tool("report");
+    let said = report["description"].as_str().unwrap_or_default();
+    assert!(
+        said.contains("or the files that changed, for work a helper did in a folder that is not a git repository"),
+        "{said}"
+    );
+    let fork = tool("fork_session");
+    let said = fork["description"].as_str().unwrap_or_default();
+    assert!(said.contains("a quick run whose folder is not a git repository"), "{said}");
+    assert!(said.contains("the fork opens in that folder beside its source"), "{said}");
+}
+
+// ── the resume message of a described run ───────────────────────────────────
+
+/// The two fragments of the resume message that name a branch in a
+/// repository, and what stands in their place where a helper works in the
+/// folder itself.
+const RESUME_HELPERS_REPO: &str = "Branch helpers from: main.";
+const RESUME_WORK_REPO: &str = "the branch, and the pull request if one was opened";
+const RESUME_HELPERS_PLAIN: &str = "This folder is not a git repository: helpers open in the folder itself, with no worktree and no branch, so have one worker changing it at a time.";
+const RESUME_WORK_IN_PLACE: &str = "the files that changed, for work a helper did in the folder itself, or the branch and any pull request for a helper that was given one";
+
+/// **A described run resumed in a plain folder is not asked for a branch.**
+/// Its resume message is the repository's, byte for byte, with exactly the two
+/// branch fragments exchanged — so it is pinned as a golden without a second
+/// copy of the whole text to keep in step.
+///
+/// Before this, the message told the agent "there is no branch" in one bullet
+/// and then to report "the branch, and the pull request if one was opened",
+/// and no test rendered it in a plain folder at all.
+#[test]
+fn a_resumed_described_run_in_a_plain_folder_is_not_asked_for_a_branch() {
+    let dir = tempfile::tempdir().unwrap();
+    let reg = relaunch_registry(dir.path());
+    let folder = Repo::plain();
+    let (group, root, _worker) = tasked(&reg, &folder);
+
+    // The control on the golden's construction: the repository's text really
+    // does carry both fragments, once each, so exchanging them changes it.
+    for fragment in [RESUME_HELPERS_REPO, RESUME_WORK_REPO] {
+        assert_eq!(ROOT_BODY.matches(fragment).count(), 1, "{fragment:?} in the repository's message");
+    }
+    let expected = ROOT_BODY
+        .replace(RESUME_HELPERS_REPO, RESUME_HELPERS_PLAIN)
+        .replace(RESUME_WORK_REPO, RESUME_WORK_IN_PLACE);
+    let message = lf(&reg.qd_brief_for_test(&group));
+    assert_eq!(message, expected, "the plain-folder resume message moved");
+    assert!(!message.contains(RESUME_WORK_REPO), "it asks for a branch there is not: {message}");
+    assert!(!message.contains("Branch helpers from"), "{message}");
+    assert!(!message.contains("{{"), "a placeholder survived: {message}");
+
+    // And as typed: the hold, the resume, and the message in the root's pane.
+    make_deliverable(&reg, &group, &root, 7841);
+    report(&reg, &root, json!({ "outcome": "blocked", "note": "which of the two files?" }));
+    step(&reg, &group, T0 + 5);
+    reg.quick_resume_at(&group, T0 + 6).expect("the run resumes");
+    let typed = texts_to(&reg, &group, &root);
+    let last = typed.last().map(|t| lf(t)).unwrap_or_default();
+    assert!(last.contains("the human resumed this quick run"), "{typed:?}");
+    assert!(last.ends_with(&expected), "the pane was typed the plain-folder message: {last}");
+}
+
+/// **The closing line follows what the helpers were GIVEN, not what the folder
+/// is now.** The human makes the folder a repository halfway through a task:
+/// the next helper will be cut a branch, and the message says so — but the
+/// worker already open did its work in the folder, has no branch, and is
+/// still asked for by its files. That is read off the roster.
+///
+/// The control is the first assertion: the folder really did change, so the
+/// "next helper" bullet now names a branch.
+#[test]
+fn a_resume_after_the_folder_became_a_repository_still_asks_for_in_place_work_by_its_files() {
+    let dir = tempfile::tempdir().unwrap();
+    let reg = relaunch_registry(dir.path());
+    let folder = Repo::plain();
+    let (group, _root, worker) = tasked(&reg, &folder);
+    assert_eq!(cwd_of(&reg, &worker), folder.path(), "the worker was opened in place");
+
+    folder.make_repository();
+    let message = lf(&reg.qd_brief_for_test(&group));
+    assert!(message.contains(RESUME_HELPERS_REPO), "the next helper is cut a branch: {message}");
+    assert!(message.contains(RESUME_WORK_IN_PLACE), "the work already done in place is named by its files: {message}");
+    assert!(!message.contains(RESUME_WORK_REPO), "{message}");
 }

@@ -57,12 +57,12 @@ Open a new pane and pick **Quick task** under **Kind**.
 | **Max live agents / Idle-kill / Max spawns per hour** | The same limits an orchestration has. |
 | **Permissions** | Whether the panes pre-approve git, `gh` and their own tools. |
 
-Leave an instructions box empty and that step runs on its role's own
-instructions. What you type is *added* to them; it does not replace them.
+In **Steps**, leave an instructions box empty and that step runs on its role's
+own instructions. What you type is *added* to them; it does not replace them.
 
-Press **Create**. The first pane opens in the tab you are in — the planner if
-you asked for a plan, otherwise the worker. If it cannot be opened, the form
-comes back with the reason and the run is stopped.
+In **Steps**, press **Create**. The first pane opens in the tab you are in — the
+planner if you asked for a plan, otherwise the worker. If it cannot be opened,
+the form comes back with the reason and the run is stopped.
 
 ### Which CLI can run which step
 

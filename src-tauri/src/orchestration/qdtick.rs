@@ -1648,7 +1648,7 @@ impl OrchRegistry {
             // human, so this template is what a Resume types, and never a
             // first message.
             QuickState::RootWait => {
-                let helpers = if plain() {
+                let helpers = if false {
                     "This folder is not a git repository: helpers open in the folder itself, \
                      with no worktree and no branch, so have one worker changing it at a time."
                         .to_string()

@@ -3,11 +3,7 @@ Review the work on this task. This is review round {{ROUND}} of at most {{MAX_RO
 Task:
 {{TASK}}
 
-The work is in {{CWD}} on branch {{BRANCH}}. That is the worker's own worktree and you have been opened in it, so it may hold uncommitted changes: read it, and do not edit, stage, commit or push anything there. To see everything the worker changed:
-
-    git status
-    {{DIFF}}
-    git diff
+{{WORK}}
 
 {{PLAN}}{{PR}}The worker's note: {{WORKER_NOTE}}
 

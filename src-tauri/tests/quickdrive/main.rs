@@ -44,5 +44,6 @@ mod controls;
 mod restart;
 mod described;
 mod idle;
+mod plainfolder;
 
 use helpers::*;

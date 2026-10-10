@@ -109,7 +109,9 @@ pub(super) fn gate(name: &str) -> Result<(), String> {
 ///
 /// `cwd` and `task_id` are refused for a quick caller as well. A helper's
 /// workspace is orrerix's to choose — a worker and a reviewer each in a
-/// worktree of their own, a planner in the repository. A fresh worker's or
+/// worktree of their own, a planner in the repository, and every one of them
+/// in the folder itself where that folder is not a git repository (#3878:
+/// `OrchRegistry::qd_plain_folder` decides it, at the spawn, not here). A fresh worker's or
 /// reviewer's `cwd` is already refused for EVERY caller by the
 /// dedicated-workspace guardrail (#338/#359), which runs before this; what
 /// this adds is the two cases that guardrail leaves to an orchestrator's
@@ -130,7 +132,8 @@ pub(super) fn spawn_rule(effective: Option<Role>, args: &Value) -> Result<(), St
     let given = |key: &str| args.get(key).and_then(Value::as_str).is_some_and(|s| !s.trim().is_empty());
     if given("cwd") {
         return Err("a quick run's helpers are placed by orrerix — a worker and a reviewer each \
-                    in a worktree of their own, a planner in the repository — so cwd is not \
+                    in a worktree of their own, a planner in the repository, and all of them \
+                    in the folder itself where it is not a git repository — so cwd is not \
                     yours to set. Drop it."
             .to_string());
     }
@@ -157,6 +160,11 @@ fn spawn_agent_tool() -> Value {
          A helper's worktree shares this repository, so a reviewer can read a worker's work as \
          soon as the worker has COMMITTED it on its branch — no push and no pull request is \
          needed. Tell the reviewer the branch name. \
+         \
+         If this run's folder is NOT a git repository there is nothing to cut a worktree from: a \
+         worker and a reviewer then open in the folder itself, sharing it, with no branch — \
+         `branch` and `base` are ignored, and this call's answer says so. Do not have two workers \
+         changing that folder at once, and name files, not a branch, in your briefs. \
          \
          Guardrails apply: the live-agent cap and spawn-rate limit the human set for this run. \
          To send a helper back to work, use send_prompt on the pane it already has rather than \

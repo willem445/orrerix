@@ -429,6 +429,14 @@ impl OrchRegistry {
         let session_baseline =
             (!resume).then(|| self.capture_session_baseline(&cli, group_id)).flatten();
 
+        // #3878: which of `branch` and `base` THIS CALL carried, read before
+        // either is defaulted below — a helper opened in a plain folder
+        // ignores both, and its caller is told which ones it passed.
+        let passed_branch_args: Vec<&str> = [("branch", &branch), ("base", &base)]
+            .into_iter()
+            .filter(|(_, v)| v.as_deref().is_some_and(|s| !s.trim().is_empty()))
+            .map(|(k, _)| k)
+            .collect();
         let branch_name = branch
             .map(|b| b.trim().to_string())
             .filter(|b| !b.is_empty())
@@ -444,6 +452,18 @@ impl OrchRegistry {
             // be told it in. `None` everywhere else.
             .or_else(|| self.qd_helper_base(group_id));
         let cwd_override = cwd_override.map(|c| c.trim().to_string()).filter(|c| !c.is_empty());
+        // #3878: a quick run in a folder that is not a git repository opens
+        // its worker and its reviewer IN that folder — there is nothing to cut
+        // a worktree from. Asked only for a spawn that would otherwise cut
+        // one (so a resume, which carries its `cwd`, and every class that
+        // never gets a worktree ask nothing), and decided in one place:
+        // `qd_plain_folder`, which is `false` for every group that is not a
+        // quick run before git is asked anything. A git that could not answer
+        // refuses the spawn here, in words, rather than being read as "plain".
+        let in_plain_folder = cwd_override.is_none()
+            && use_worktree
+            && matches!(role, Role::Worker | Role::Reviewer)
+            && self.qd_plain_folder(group_id)?;
         // The third element is the branch to PERSIST on the entry (#1, session
         // browser metadata): `Some` only where `branch_name` is an actual
         // commitment this agent is working against — a cut worktree, or a
@@ -470,6 +490,15 @@ impl OrchRegistry {
                 .filter(|_| resume)
                 .and_then(|s| self.resumed_session_branch(group_id, s, role));
             (c, String::new(), inherited)
+        } else if in_plain_folder {
+            // The folder itself, and NO persisted branch — for the reason a
+            // quick root's is `None`: a delegate may close only a pull request
+            // whose head is its own recorded branch, and `agent/<id>` here
+            // would be a branch that was never cut. It is also what keeps the
+            // reviewer-scratch reclaim away: that removes a worktree some
+            // reviewer record carries a BRANCH for, and never the group's own
+            // folder (`reviewer_scratch_verdict`, rules 1 and 2).
+            (group.repo.clone(), quick_plain_folder_note(role, &group.repo), None)
         } else if use_worktree
             && role != Role::Orchestrator
             && role != Role::Planner
@@ -519,7 +548,18 @@ impl OrchRegistry {
             // The repository, no branch. `None` here is load-bearing beyond
             // tidiness: a delegate may close only a pull request whose head is
             // its own recorded branch, so a root with none can close nothing.
-            (group.repo.clone(), QUICK_ROOT_WORKSPACE_NOTE.to_string(), None)
+            //
+            // #3878: the note says where its helpers will work, so it reads
+            // the same predicate their spawns do. A git that cannot answer
+            // gets the repository's wording and does not stop the root from
+            // opening — it opened before this question existed, and the
+            // helper spawn that follows is where that failure is reported.
+            let note = if self.qd_plain_folder(group_id).unwrap_or(false) {
+                QUICK_ROOT_PLAIN_FOLDER_NOTE
+            } else {
+                QUICK_ROOT_WORKSPACE_NOTE
+            };
+            (group.repo.clone(), note.to_string(), None)
         } else if role == Role::Manager {
             // The repo root, like the orchestrator — and a note, unlike it,
             // because a manager's containment (`NoEdits`) leaves the shell
@@ -837,7 +877,16 @@ impl OrchRegistry {
         // never came to exist, and nothing would ever take it. Pruning
         // already-gone ids on the way in bounds it the rest of the way, for the
         // spawn paths that don't go through the MCP tool and so never read it.
-        if !inject.warnings.is_empty() {
+        //
+        // #3878: a helper opened in a plain folder says so through the same
+        // channel, for the same reason — whoever asked for the spawn writes
+        // its next brief from this answer, and "name the worker's branch" is
+        // wrong where there is none.
+        let mut told = inject.warnings.clone();
+        if in_plain_folder {
+            told.push(quick_plain_folder_disclosure(&agent_id, &group.repo, &passed_branch_args));
+        }
+        if !told.is_empty() {
             // The live set is snapshotted and the `agents` lock RELEASED before
             // `spawn_notices` is taken: no site anywhere takes these two in the
             // other order today, and not nesting them is what keeps that a
@@ -845,10 +894,15 @@ impl OrchRegistry {
             let live: Vec<String> = self.agents.lock_safe().keys().cloned().collect();
             let mut notices = self.spawn_notices.lock_safe();
             notices.retain(|id, _| live.iter().any(|l| l == id));
-            notices.insert(agent_id.clone(), inject.warnings.clone());
+            notices.insert(agent_id.clone(), told);
         }
         self.audit(group_id, brand::AUDIT_ACTOR, "agent-spawn", json!({
             "agent": agent_id, "role": role, "name": display, "cwd": cwd,
+            // #3878: `worktree` and `branch` are what the spawn ASKED for;
+            // `in_place` is true where a quick run's plain folder meant
+            // neither was made, so the row can be read without inferring that
+            // from `cwd` being the repository.
+            "in_place": in_plain_folder,
             "cli": cli, "model": model, "worktree": use_worktree, "branch": branch_name, "task": task,
             "base": base, "session": session_id, "resume": resume,
             // #1273: WHICH board row this agent was told to read. The binding

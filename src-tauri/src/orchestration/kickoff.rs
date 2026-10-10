@@ -114,10 +114,7 @@ pub fn quick_plain_folder_disclosure(agent: &str, folder: &str, passed: &[&str])
 pub fn quick_folder_unknown_refusal(folder: &str, git_said: Option<&str>) -> String {
     let why = match git_said {
         Some(said) => said.to_string(),
-        None => "git is not installed, or is not on the PATH this app was started with. A \
-                 quick run asks git that question even in a plain folder, so install git or \
-                 start the app where git can be found"
-            .to_string(),
+        None => "git-not-found".to_string(),
     };
     format!(
         "orrerix could not tell whether this quick run's folder ({folder}) is a git repository, \

@@ -1044,6 +1044,170 @@ impl OrchRegistry {
         self.qd_defer_session_watch(group, agent_id, cwd, baseline);
     }
 
+    /// **Is this a quick run in a folder that is not a git repository?** —
+    /// the one place GIT IS ASKED that question (#3878). A worker or a
+    /// reviewer opens in the folder itself, with no worktree and no branch,
+    /// when it answers `true`.
+    ///
+    /// # Why the worktree guarantee is relaxed here, and only here
+    ///
+    /// #338/#359 gives every worker and reviewer a workspace of its own so that
+    /// none of them works in the human's checkout. That rule has a premise — a
+    /// repository to cut a worktree from — and a plain folder does not meet it:
+    /// `spawn_agent` was refused with git's own `fatal: not a git repository`,
+    /// and a quick run started there could do nothing at all. A single agent
+    /// pane already works in such a folder, and a quick run is the feature
+    /// that promises "the way a pane does, with a second pair of eyes".
+    ///
+    /// **Scoped to a quick group**, by its marker: a full orchestration group
+    /// and a lead group answer `false` before git is asked anything, so their
+    /// guarantee stands exactly as it was — a worker there still fails loudly
+    /// in a folder with no repository, which is the honest answer for a
+    /// workflow built on branches, pull requests and a merge gate.
+    ///
+    /// # Who reads it, and what does not
+    ///
+    /// Four readers, and every one of them is about a pane that is not open
+    /// yet:
+    ///
+    /// - [`qd_plain_workspace`](Self::qd_plain_workspace), which is how
+    ///   `spawn_agent_full` asks — where every way of opening a helper ends:
+    ///   a described run's `spawn_agent` and `fork_session`, and a steps
+    ///   run's own worker;
+    /// - [`qd_root_workspace_note`](Self::qd_root_workspace_note), for the
+    ///   line a root is opened with;
+    /// - `qd_brief`, for the plan brief and for a described root's resume
+    ///   message, which say where the NEXT pane will work;
+    /// - [`qd_work_in_place`](Self::qd_work_in_place), only until the worker
+    ///   has been opened.
+    ///
+    /// It is asked of git each time and its answer is stored nowhere, so a
+    /// folder the human runs `git init` in is a repository from the next
+    /// helper on. **What a pane was GIVEN is a different question, and that one
+    /// is read off records**: a steps run's work and review briefs read the
+    /// run's own (`qd_work_in_place`), and a described root's resume message
+    /// reads the roster (`qd_helpers_in_place`). A pane already open in the
+    /// folder keeps no worktree whatever git says later, so those two never
+    /// ask it once there is a record to read.
+    ///
+    /// # The three answers
+    ///
+    /// `Ok(true)` only when git's own discovery found no repository
+    /// ([`crate::git::in_work_tree`]). A git that could not answer — not
+    /// installed, a bare repository, an ownership it refuses — is `Err`, never
+    /// `true`: "I could not look" is not "there is nothing there", and reading
+    /// it that way would put a helper to work inside a repository git had just
+    /// declined to open.
+    pub(in crate::orchestration) fn qd_plain_folder(&self, group: &GroupId) -> Result<bool, String> {
+        if !self.is_quick_group(group) {
+            return Ok(false);
+        }
+        let Some(g) = self.group(group) else { return Ok(false) };
+        match crate::git::in_work_tree(&g.repo) {
+            Ok(inside) => Ok(!inside),
+            // "There is no git to ask" arrives as the git layer's sentinel,
+            // which is a token its other callers compare against and never a
+            // sentence — so it is worded, and every other failure is quoted.
+            Err(e) => Err(quick_folder_unknown_refusal(
+                &g.repo,
+                (e != crate::git::GIT_NOT_FOUND).then_some(e.as_str()),
+            )),
+        }
+    }
+
+    /// **Where a quick run's plain folder puts a helper of `role`, and the
+    /// line it is opened with** — `Some((cwd, note))` when the helper opens in
+    /// the folder itself, `None` when the folder is a repository (or the group
+    /// is not a quick run, or `role` is not a worker or a reviewer) and the
+    /// spawn cuts a worktree as it always did.
+    ///
+    /// One function for both halves on purpose. The workspace and the note
+    /// that describes it are one fact, and `spawn_agent_full` takes them from
+    /// here together, so a pane cannot be put in the folder and told it has a
+    /// worktree. It is also the only form a test can read the choice in: a
+    /// test process has no pane to type a kickoff into, so "which note does a
+    /// plain-folder worker get" is asked of this function with a real group.
+    #[doc(hidden)] // pub for integration tests
+    pub fn qd_plain_workspace(
+        &self,
+        group: &GroupId,
+        role: Role,
+    ) -> Result<Option<(String, String)>, String> {
+        if !matches!(role, Role::Worker | Role::Reviewer) || !self.qd_plain_folder(group)? {
+            return Ok(None);
+        }
+        let Some(g) = self.group(group) else { return Ok(None) };
+        let note = quick_plain_folder_note(role, &g.repo);
+        Ok(Some((g.repo, note)))
+    }
+
+    /// The workspace line a quick run's ROOT is opened with: where its helpers
+    /// will work, read off the same predicate their spawns read.
+    ///
+    /// A git that cannot answer gets the repository's wording and does not
+    /// stop the root from opening — a root never needed git, and the helper
+    /// spawn that follows is where that failure is reported, in words.
+    #[doc(hidden)] // pub for integration tests
+    pub fn qd_root_workspace_note(&self, group: &GroupId) -> &'static str {
+        if self.qd_plain_folder(group).unwrap_or(false) {
+            QUICK_ROOT_PLAIN_FOLDER_NOTE
+        } else {
+            QUICK_ROOT_WORKSPACE_NOTE
+        }
+    }
+
+    /// **Is this run's work in the folder itself?** — what a steps run's work
+    /// and review briefs are worded by.
+    ///
+    /// Read off the RECORD once the worker has been opened, and off the
+    /// predicate only before that. A brief describes the pane it is typed
+    /// into, and that pane's workspace was settled at its spawn: a human who
+    /// runs `git init` in the folder halfway through has made a repository,
+    /// but has not given the worker a worktree or a branch. Asking git again
+    /// at every brief told a resumed worker to "commit as you go" on a branch
+    /// it was never cut, and its reviewer to diff against one.
+    ///
+    /// The signature is the worker's recorded workspace being the group's own
+    /// folder. In a repository a quick worker is always cut a worktree beside
+    /// it, so the two are the same path only when the spawn opened it in
+    /// place. A steps run opens its worker once and its reviewer in the
+    /// worker's workspace, so this cannot change during a run.
+    pub(in crate::orchestration) fn qd_work_in_place(
+        &self,
+        group: &GroupId,
+        rec: &QuickDriveRecord,
+    ) -> bool {
+        let recorded = rec.worker_cwd.trim();
+        match self.group(group) {
+            Some(g) if !recorded.is_empty() => same_path_key(recorded, &g.repo),
+            _ => self.qd_plain_folder(group).unwrap_or(false),
+        }
+    }
+
+    /// **Did a helper of this run work in the folder itself?** — read off the
+    /// group's roster, for the one message that describes helpers' work after
+    /// the fact: the closing line of a described root's resume message.
+    ///
+    /// A described run's helpers are not sides of the run, so its record names
+    /// none of them. The roster does, live or not, and across a restart —
+    /// which is when a resume message is typed. In a repository a quick run's
+    /// worker and reviewer are each cut a worktree BESIDE the folder, so a
+    /// roster row for either AT the folder is a helper the spawn opened in
+    /// place, whatever the folder has become since.
+    ///
+    /// A roster outlives a run, so on a group id used before, an earlier run's
+    /// rows count too. The sentence this selects is conditional ("for work a
+    /// helper did in the folder itself, or the branch … for a helper that was
+    /// given one"), so that over-reading makes the message longer, never false.
+    pub(in crate::orchestration) fn qd_helpers_in_place(&self, group: &GroupId) -> bool {
+        let Some(g) = self.group(group) else { return false };
+        self.merged_records(group).iter().any(|r| {
+            (r.role == Role::Worker.as_str() || r.role == Role::Reviewer.as_str())
+                && !r.cwd.trim().is_empty()
+                && same_path_key(&r.cwd, &g.repo)
+        })
+    }
+
     /// The branch a described run's helpers are cut from when the root names
     /// none — the one the human set on the form (#3723).
     ///

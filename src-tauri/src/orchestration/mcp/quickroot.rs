@@ -109,7 +109,9 @@ pub(super) fn gate(name: &str) -> Result<(), String> {
 ///
 /// `cwd` and `task_id` are refused for a quick caller as well. A helper's
 /// workspace is orrerix's to choose — a worker and a reviewer each in a
-/// worktree of their own, a planner in the repository. A fresh worker's or
+/// worktree of their own, a planner in the repository, and every one of them
+/// in the folder itself where that folder is not a git repository (#3878:
+/// `OrchRegistry::qd_plain_folder` decides it, at the spawn, not here). A fresh worker's or
 /// reviewer's `cwd` is already refused for EVERY caller by the
 /// dedicated-workspace guardrail (#338/#359), which runs before this; what
 /// this adds is the two cases that guardrail leaves to an orchestrator's
@@ -130,7 +132,8 @@ pub(super) fn spawn_rule(effective: Option<Role>, args: &Value) -> Result<(), St
     let given = |key: &str| args.get(key).and_then(Value::as_str).is_some_and(|s| !s.trim().is_empty());
     if given("cwd") {
         return Err("a quick run's helpers are placed by orrerix — a worker and a reviewer each \
-                    in a worktree of their own, a planner in the repository — so cwd is not \
+                    in a worktree of their own, a planner in the repository, and all of them \
+                    in the folder itself where it is not a git repository — so cwd is not \
                     yours to set. Drop it."
             .to_string());
     }
@@ -158,6 +161,11 @@ fn spawn_agent_tool() -> Value {
          soon as the worker has COMMITTED it on its branch — no push and no pull request is \
          needed. Tell the reviewer the branch name. \
          \
+         If this run's folder is NOT a git repository there is nothing to cut a worktree from: a \
+         worker and a reviewer then open in the folder itself, sharing it, with no branch — \
+         `branch` and `base` are ignored, and this call's answer says so. Do not have two workers \
+         changing that folder at once, and name files, not a branch, in your briefs. \
+         \
          Guardrails apply: the live-agent cap and spawn-rate limit the human set for this run. \
          To send a helper back to work, use send_prompt on the pane it already has rather than \
          opening another. \
@@ -168,8 +176,8 @@ fn spawn_agent_tool() -> Value {
             "name": { "type": "string", "description": "Short display name for the pane" },
             "kind": { "type": "string", "enum": ["worker", "reviewer", "planner"], "description": "Capability class. One of the three; anything else is refused with the reason. REQUIRED." },
             "task": { "type": "string", "description": "Full task brief; empty = an idle pane awaiting send_prompt." },
-            "branch": { "type": "string", "description": "Branch name for a worker's worktree (default agent/<id>)" },
-            "base": { "type": "string", "description": "Start-point for the worktree branch (default: the branch the human set for this quick run, else the repo's default branch, fetched fresh from origin)." },
+            "branch": { "type": "string", "description": "Branch name for a worker's worktree (default agent/<id>). Ignored where the run's folder is not a git repository." },
+            "base": { "type": "string", "description": "Start-point for the worktree branch (default: the branch the human set for this quick run, else the repo's default branch, fetched fresh from origin). Ignored where the run's folder is not a git repository." },
         }),
         &["task", "kind"])
 }
@@ -181,8 +189,9 @@ fn report_tool() -> Value {
         "END THE TASK. You are the agent the human gives this quick run's tasks to, so your \
          report is not typed into any pane: orrerix reads it as the end of the task in \
          progress and tells the human. outcome=done when the task is finished — put in `note` \
-         where the work is (the branch, and the pull request if one was opened) and anything \
-         left open. outcome=blocked when you cannot go on — put in `note` the one thing the \
+         where the work is (the branch, and the pull request if one was opened; or the files \
+         that changed, for work a helper did in a folder that is not a git repository) and \
+         anything left open. outcome=blocked when you cannot go on — put in `note` the one thing the \
          human has to decide or fix; the run is then held and they can resume it. Report once \
          per task. A report(progress) moves nothing, and a report made while no task is in \
          progress ends nothing. After a done report your helpers' panes and yours stay open: \

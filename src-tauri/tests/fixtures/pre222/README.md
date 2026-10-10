@@ -1777,3 +1777,31 @@ comparison is honest either way. If it still says MISMATCH, that is a real one.
   it is now the message a RESUMED task's root is typed, pinned by
   `the_resume_message_is_byte_for_byte_what_a_resumed_root_is_typed` in
   `tests/quickdrive/described.rs`, which replaces the test the #3679 entry above names.
+- **#3878, `quick.md` is re-blessed** — two additions and one line reworded.
+  A quick run now works in a folder that is not a git repository: a worker and a reviewer
+  open in the folder itself, with no worktree and no branch
+  (`OrchRegistry::qd_plain_folder`). The root's instructions had to say what that changes
+  and did not say one rule they always should have:
+
+  - a new **When the folder is not a git repository** section, placed after the steps it
+    amends — the helpers share the one folder, so one worker changes it at a time; there
+    is no branch, commit or pull request to name, so briefs and the final report name
+    files; and `branch` and `base` are ignored by `spawn_agent`, which says so;
+  - a new line under **What you never do** — never use the CLI's own subagents for a
+    helper's work. A helper is an orrerix pane the human can watch and type into, on the
+    CLI and model they chose, counted against the run's limits;
+  - the line above it, **Never do the work in this pane**, no longer says the root is in
+    "the human's own checkout" and that the work "happens in a worker's worktree". In a
+    plain folder it is neither, so it says the human's own folder, and that the work is a
+    worker's to do in the workspace it was opened in — which is true in both.
+
+  The golden is a byte copy of the live template (`cmp` on the two files is silent), and its
+  `LIVE` key list is still empty: the edit adds no placeholder, only a second use of
+  `{{REPO}}`, a per-group value variable the golden keeps literal.
+
+  `mechanics_core`'s `Role::Quick` arm (`kickoff.rs`) is the template's lockstep twin and
+  moves with it. Four quick BRIEF templates change too and are still outside this
+  directory: `quick-work.md`, `quick-review.md`, `quick-plan.md` and `quick-root.md` each
+  trade the passages that named a worktree or a branch — one each, two in `quick-root.md`
+  — for placeholders that `qd_brief` fills with that same text in a repository, so their
+  goldens in `tests/quickdrive/briefs.rs` and `tests/quickdrive/described.rs` did not move.

@@ -113,6 +113,14 @@ where
     }
 }
 
+/// What [`run_git`] answers when there is no `git` to run. A SENTINEL, not a
+/// sentence: the git view, the issues view and the launcher each compare an
+/// error against this exact string and word it themselves, so it must never
+/// be shown as it is. Named so that a caller on the backend which words it
+/// (#3878, a quick run's helper spawn) reads the spelling `run_git` writes
+/// rather than a second copy of it.
+pub(crate) const GIT_NOT_FOUND: &str = "git-not-found";
+
 /// Run git in `repo` and capture stdout. Non-zero exit → Err(stderr).
 fn run_git(repo: &str, args: &[&str]) -> Result<String, String> {
     if !Path::new(repo).is_dir() {
@@ -130,7 +138,7 @@ fn run_git(repo: &str, args: &[&str]) -> Result<String, String> {
     }
     let out = cmd.output().map_err(|e| {
         if e.kind() == std::io::ErrorKind::NotFound {
-            "git-not-found".to_string()
+            GIT_NOT_FOUND.to_string()
         } else {
             e.to_string()
         }
@@ -219,6 +227,30 @@ fn git_repo_root_sync(cwd: String) -> Result<Option<String>, String> {
         Err(e) if e.contains("not a git repository") => Ok(None),
         Err(e) => Err(e),
     }
+}
+
+/// **Is `dir` inside a git work tree?** — asked of git itself, with three
+/// answers that must not be folded into two (#3878):
+///
+/// - `Ok(true)`: git resolved a work tree containing `dir`.
+/// - `Ok(false)`: git's own discovery found NO repository at or above `dir`.
+///   A plain folder.
+/// - `Err`: git could not answer, or answered something else — it is not
+///   installed, the directory is gone, the repository is bare or its
+///   ownership is refused. None of those says "this is a plain folder", and a
+///   caller that read them that way would work in place inside a repository
+///   git had just declined to open.
+///
+/// The same `rev-parse --show-toplevel` [`git_worktree_add_sync`] opens with,
+/// read through [`git_repo_root_sync`]'s one classification of its failure —
+/// so "there is a work tree here" means one thing to the code that cuts a
+/// worktree and to the code that decides whether to.
+///
+/// Residual: that classification matches git's own English message. A git
+/// that words it otherwise answers `Err` here, which refuses rather than
+/// guesses — the direction a wrong answer is allowed to fail in.
+pub fn in_work_tree(dir: &str) -> Result<bool, String> {
+    git_repo_root_sync(dir.to_string()).map(|root| root.is_some())
 }
 
 #[tauri::command]

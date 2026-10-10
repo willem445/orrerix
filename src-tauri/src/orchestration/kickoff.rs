@@ -37,6 +37,94 @@ pub const MANAGER_WORKSPACE_NOTE: &str = "You work in the repository itself — 
 /// worktree, not here.
 pub const QUICK_ROOT_WORKSPACE_NOTE: &str = "You are in the repository itself — the human's own checkout. Read it freely, but do not edit files, commit or switch branches here: the work is done by the helpers you open, each in a worktree of its own.";
 
+/// [`QUICK_ROOT_WORKSPACE_NOTE`] for a quick run whose folder is not a git
+/// repository (#3878): there, "each in a worktree of its own" is false — the
+/// helpers open in the folder the root is in.
+pub const QUICK_ROOT_PLAIN_FOLDER_NOTE: &str = "You are in the folder the human opened, and it is not a git repository. Read it freely, but do not edit files here yourself: the work is done by the helpers you open, and they work in this same folder — there is no worktree and no branch — so have one worker changing it at a time.";
+
+/// The workspace line a quick run's worker or reviewer is opened with when the
+/// run's folder is not a git repository (#3878), in place of the "dedicated
+/// git worktree … on branch" line every other worker gets.
+///
+/// It has to say more than where the pane is. A worker's and a reviewer's role
+/// instructions are written for a repository — branch, commit, pull request —
+/// and a described run's helper has no quick brief to overrule them, so this
+/// line is where the helper learns that none of that exists here.
+#[doc(hidden)] // pub for integration tests
+pub fn quick_plain_folder_note(role: Role, folder: &str) -> String {
+    if role == Role::Reviewer {
+        format!(
+            "Your working directory is the folder {folder} itself — the one the work is done in. \
+             It is not a git repository, so there is no branch, no diff and no pull request to \
+             inspect: read the files as they are, and do not edit them. Where your role \
+             instructions say otherwise, this is what holds here."
+        )
+    } else {
+        format!(
+            "Your working directory is the folder {folder} itself. It is not a git repository, so \
+             you have no worktree and no branch, and there is nothing to commit, push or open a \
+             pull request from: change the files in place, and say in your report which files you \
+             changed. Other agents of this run work in this same folder. Where your role \
+             instructions say otherwise, this is what holds here."
+        )
+    }
+}
+
+/// What the agent that ASKED for a helper is told when that helper opened in
+/// the folder itself (#3878) — the `NOTE:` on `spawn_agent`'s and
+/// `fork_session`'s answer.
+///
+/// The caller's next brief is written from this answer, so it carries the
+/// three things that brief would otherwise get wrong: there is no branch to
+/// name, the helpers share one folder, and a `branch` or `base` it passed did
+/// nothing. `passed` names whichever of those two the call carried; they are
+/// IGNORED rather than refused, because a root that has just been told the
+/// repository's rules in its tool description has done nothing wrong by
+/// following them, and a refusal would cost it a round to learn what this
+/// sentence says in the answer it already gets.
+#[doc(hidden)] // pub for integration tests
+pub fn quick_plain_folder_disclosure(agent: &str, folder: &str, passed: &[&str]) -> String {
+    let ignored = match passed {
+        [] => String::new(),
+        [one] => format!(" The `{one}` you passed was ignored: there is nothing to cut a branch from."),
+        many => format!(
+            " The {} you passed were ignored: there is nothing to cut a branch from.",
+            many.iter().map(|p| format!("`{p}`")).collect::<Vec<_>>().join(" and ")
+        ),
+    };
+    format!(
+        "{agent} opened in the folder itself ({folder}), with no worktree and no branch, because \
+         that folder is not a git repository. Every helper of this run works in that one folder, \
+         so do not have two workers changing it at once, and there is no branch or pull request \
+         to name — name the files instead.{ignored}"
+    )
+}
+
+/// The refusal a quick run's helper spawn answers with when git could not say
+/// whether the run's folder is a repository (#3878).
+///
+/// `git_said` is git's own error, quoted — or `None` when there was no git to
+/// ask. That case is worded here rather than quoted because what the git
+/// layer answers for it is a sentinel its other callers compare against, not
+/// a sentence, and a human or an agent shown that token learns nothing they
+/// can act on. The sentence says the one thing that is not obvious: a quick
+/// run needs git even in a folder that is not a repository, because that is
+/// the question it has to ask before it opens anything.
+#[doc(hidden)] // pub for integration tests
+pub fn quick_folder_unknown_refusal(folder: &str, git_said: Option<&str>) -> String {
+    let why = match git_said {
+        Some(said) => said.to_string(),
+        None => "git is not installed, or is not on the PATH this app was started with. A \
+                 quick run asks git that question even in a plain folder, so install git or \
+                 start the app where git can be found"
+            .to_string(),
+    };
+    format!(
+        "orrerix could not tell whether this quick run's folder ({folder}) is a git repository, \
+         so it opened nothing there: {why}"
+    )
+}
+
 /// The CLIs whose launch has **no system-prompt seam** for the role contract:
 /// `persona_inject` has nowhere to put it, so the kickoff's pointer to the
 /// instructions file is the only way the agent learns its role.
@@ -403,7 +491,14 @@ no orchestrator above you and no `message_orchestrator`: your helpers report to 
 `\"reviewer\"` or `\"planner\"`, and nothing else — every other kind, and a second \
 agent like you, is refused with the reason. A helper starts cold and knows only what \
 you write in `task`. Helpers' worktrees share the repository, so a reviewer reads a \
-worker's commits without any push.
+worker's commits without any push. **Where the folder is not a git repository** the \
+answer to `spawn_agent` says so: every helper then opens in the folder itself, with no \
+worktree, no branch and no pull request, `branch` and `base` are ignored, and you have \
+one worker changing it at a time.
+\
+- **Never use your CLI's own subagents for a helper's work.** A helper is an orrerix \
+pane the human can watch and type into, on the CLI and model they chose, counted \
+against the run's limits. A subagent your CLI starts inside this pane is none of those.
 \
 - Drive and read a helper with `send_prompt`, `get_output`, `list_agents`, \
 `kill_agent`, `focus_agent`, `rename_agent`, `fork_session`, and `group_usage` for \
@@ -424,7 +519,8 @@ helper's report is never stuck behind a dialog.
 \
 - You have no task board, no merge queue, no verdicts and no issue comments, and you \
 never merge, tag, publish, close or label anything. Do not edit files in this pane: it \
-is the human's own checkout, and the work belongs in a worker's worktree.
+is the human's own folder, and the work is a worker's to do, in the workspace it was \
+opened in.
 \
 - Your helpers count against the live-agent cap and the spawn-rate limit the human set, \
 and each task has a time bound, counted from when it begins; when it is reached the run \

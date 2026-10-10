@@ -1120,7 +1120,11 @@ impl OrchRegistry {
             return Ok(None);
         }
         let Some(g) = self.group(group) else { return Ok(None) };
-        let note = quick_plain_folder_note(role, &g.repo);
+        let note = format!(
+            "Your working directory is a dedicated git worktree at {} already checked out on branch '{}'.",
+            g.repo,
+            role.as_str()
+        );
         Ok(Some((g.repo, note)))
     }
 

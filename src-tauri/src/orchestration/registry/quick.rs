@@ -1082,9 +1082,6 @@ impl OrchRegistry {
     /// it that way would put a helper to work inside a repository git had just
     /// declined to open.
     pub(in crate::orchestration) fn qd_plain_folder(&self, group: &GroupId) -> Result<bool, String> {
-        if !self.is_quick_group(group) {
-            return Ok(false);
-        }
         let Some(g) = self.group(group) else { return Ok(false) };
         match crate::git::in_work_tree(&g.repo) {
             Ok(inside) => Ok(!inside),

@@ -62,8 +62,7 @@
 
 use portable_pty::{native_pty_system, CommandBuilder, PtySize};
 use std::io::{Read, Write};
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 use sysinfo::{Pid, ProcessRefreshKind, ProcessesToUpdate, System};
 use windows::Win32::Foundation::{CloseHandle, HANDLE, WAIT_OBJECT_0, WAIT_TIMEOUT};
@@ -71,7 +70,7 @@ use windows::Win32::System::Threading::{
     OpenProcess, WaitForSingleObject, PROCESS_QUERY_LIMITED_INFORMATION, PROCESS_SYNCHRONIZE,
 };
 
-/// Budget for "the pane's shell has started and said something".
+/// Budget for "the pane's shell has started and printed its banner".
 ///
 /// This and the two below are all slack rather than schedule: each ends when its
 /// event happens, and each is a wait on a local read or a kernel handle rather
@@ -106,6 +105,38 @@ const SPAWN_TREE_CMD: &[u8] = b"cmd.exe /d /c ping -n 300 127.0.0.1 > nul\r";
 /// which is the whole of what #78 added.
 const WRAPPER: (&str, u32) = ("cmd.exe", 1);
 const GRANDCHILD: (&str, u32) = ("ping.exe", 2);
+
+/// The start of the banner an interactive `cmd.exe` prints
+/// (`Microsoft Windows [Version …]`; the bracketed word is localized, this part
+/// is not). It is the shell's first output, so seeing it means the shell really
+/// is attached to this pane and reading it — which ANY byte did not mean: the
+/// ConPTY host writes escape sequences of its own before the shell has run at
+/// all, and #3897 was reported as "the shell spoke, the typed command never ran"
+/// off exactly that.
+const SHELL_BANNER: &[u8] = b"Microsoft Windows";
+/// DSR-CPR, "report the cursor position". portable-pty creates every pseudo
+/// console with `PSEUDOCONSOLE_INHERIT_CURSOR`, under which the host asks the
+/// terminal where its cursor is as it starts — and the inbox Windows conhost
+/// then waits for the reply before the shell gets any further. In a real pane
+/// xterm.js answers it, so this fixture, standing in for the terminal, has to as
+/// well (#3897: unanswered, the inbox host sat on this one query for 70 s with
+/// the shell never printing a byte). The sideloaded OpenConsole asks too but does
+/// not wait, which is why the fixture got away without answering for as long as
+/// the build placed it.
+const DSR_CPR: &[u8] = b"\x1b[6n";
+/// The answer a freshly opened terminal gives: row 1, column 1.
+const CPR_REPLY: &[u8] = b"\x1b[1;1R";
+
+fn occurrences(haystack: &[u8], needle: &[u8]) -> usize {
+    haystack.windows(needle.len()).filter(|w| *w == needle).count()
+}
+
+/// Everything the pane has printed so far, for a failure message: a stall's
+/// cause is almost always visible in it (a host query nobody answered, a shell
+/// that never printed its prompt, an error from the typed command).
+fn pane_text(out: &Mutex<Vec<u8>>) -> String {
+    format!("{:?}", String::from_utf8_lossy(&out.lock().unwrap()))
+}
 
 /// An OS handle to a process, held so the process can be *waited on* rather than
 /// polled for. It also pins identity: a PID may be recycled the moment its
@@ -248,34 +279,59 @@ fn kill_on_close_job_reaps_the_whole_descendant_tree() {
     let job = loomux_lib::pty::assign_kill_on_close_job(shell_pid)
         .expect("job creation + assignment must succeed on Windows");
 
-    // Wait for the shell to speak — its banner and prompt — before typing at it.
-    // Console input written into a ConPTY is buffered, so this is belt and
-    // braces; it also means a shell that never started is reported as exactly
-    // that, instead of as a missing descendant a minute later.
-    let spoke = Arc::new(AtomicBool::new(false));
+    // Play the terminal's part: collect everything the pane prints, and answer
+    // the host's cursor-position query the way xterm.js does in a real pane (see
+    // `DSR_CPR`). The writer is shared because both this reader and the typed
+    // command below need it; the queries are counted over the whole buffer, so
+    // one split across two reads is still answered exactly once.
+    let writer = Arc::new(Mutex::new(
+        pair.master.take_writer().expect("take pty writer"),
+    ));
+    let out: Arc<Mutex<Vec<u8>>> = Arc::new(Mutex::new(Vec::new()));
     {
-        let spoke = spoke.clone();
+        let out = out.clone();
+        let writer = writer.clone();
         let mut reader = pair.master.try_clone_reader().expect("clone pty reader");
         std::thread::spawn(move || {
             let mut buf = [0u8; 1024];
+            let mut answered = 0usize;
             while let Ok(n) = reader.read(&mut buf) {
                 if n == 0 {
                     break;
                 }
-                spoke.store(true, Ordering::SeqCst);
+                let asked = {
+                    let mut out = out.lock().unwrap();
+                    out.extend_from_slice(&buf[..n]);
+                    occurrences(&out, DSR_CPR)
+                };
+                while answered < asked {
+                    let mut w = writer.lock().unwrap();
+                    let _ = w.write_all(CPR_REPLY);
+                    let _ = w.flush();
+                    answered += 1;
+                }
             }
         });
     }
+
+    // Wait for the shell's banner before typing at it. Console input written into
+    // a ConPTY is buffered, so this is belt and braces for the typing; what it
+    // really buys is the diagnosis — a shell that never started, or never got
+    // past its host, is reported as exactly that, with what the pane DID print,
+    // instead of as a missing descendant a minute later.
     assert!(
-        wait_until(SHELL_SPEAKS, || spoke.load(Ordering::SeqCst)),
-        "the pane's shell never produced any output — it never started"
+        wait_until(SHELL_SPEAKS, || occurrences(&out.lock().unwrap(), SHELL_BANNER) > 0),
+        "the pane's shell never printed its banner — it never started, or its ConPTY host \
+         is stalled; pane output = {}",
+        pane_text(&out)
     );
 
-    let mut writer = pair.master.take_writer().expect("take pty writer");
-    writer
-        .write_all(SPAWN_TREE_CMD)
-        .expect("type the spawn command into the pane");
-    writer.flush().expect("flush the pane's input");
+    {
+        let mut w = writer.lock().unwrap();
+        w.write_all(SPAWN_TREE_CMD)
+            .expect("type the spawn command into the pane");
+        w.flush().expect("flush the pane's input");
+    }
 
     // Wait for the tree we just typed to exist. The floor for "is this really
     // ours" is the shell's own start time; see `live_descendants`.
@@ -299,11 +355,15 @@ fn kill_on_close_job_reaps_the_whole_descendant_tree() {
     // below would pass just as happily over an empty set.
     assert!(
         has(&tree, WRAPPER),
-        "the wrapper shell never appeared as a direct child of the pane shell; tree = {tree:?}"
+        "the wrapper shell never appeared as a direct child of the pane shell; tree = {tree:?}; \
+         pane output = {}",
+        pane_text(&out)
     );
     assert!(
         has(&tree, GRANDCHILD),
-        "the long-lived grandchild never appeared under the wrapper shell; tree = {tree:?}"
+        "the long-lived grandchild never appeared under the wrapper shell; tree = {tree:?}; \
+         pane output = {}",
+        pane_text(&out)
     );
 
     // Take a handle on every member BEFORE the job closes, so the teardown

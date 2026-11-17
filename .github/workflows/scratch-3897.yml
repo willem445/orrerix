@@ -25,4 +25,4 @@ jobs:
       - name: where build.rs put the sideloaded host
         if: always()
         shell: bash
-        run: find target -maxdepth 4 ( -iname conpty.dll -o -iname OpenConsole.exe )
+        run: find target -maxdepth 4 '(' -iname conpty.dll -o -iname OpenConsole.exe ')'

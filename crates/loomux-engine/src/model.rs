@@ -1268,7 +1268,10 @@ pub const CLI_CAPS: &[CliCaps] = &[
         // Copilot routes to several providers, each with its own cache rule,
         // so there is no single TTL to assume (#3407).
         cache_ttl_minutes: None,
-        fork: ForkSeam::Slash("/fork"),
+        fork: ForkSeam::None(
+            "copilot's /fork is an interactive slash command with no documented argv equivalent, \r
+             and per the issue lead it moves the current pane into the fork rather than opening a new one",
+        ),
     },
     CliCaps {
         cli: "gemini",

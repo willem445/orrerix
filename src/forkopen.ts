@@ -17,15 +17,17 @@ import { showToast } from "./toast";
  *  check, submit confirm) rather than a raw pty write. The backend builds the
  *  text from its own row and refuses anything but a bound Solo pane on a
  *  typed-fork CLI and a marker in `forkMarker`'s grammar. Resolves once the
- *  delivery is QUEUED; the queue's own badge reports one that never lands. */
-export const orchSoloForkDeliver = (agentId: string, parentSession: string, marker: string): Promise<void> =>
+ *  delivery is QUEUED; the queue's own badge reports one that never lands.
+ *  Module-private: `typeForkInto` is its only caller. */
+const orchSoloForkDeliver = (agentId: string, parentSession: string, marker: string): Promise<void> =>
   invoke("orch_solo_fork_deliver", { agentId, parentSession, marker });
 
 /** Type `/fork <marker>` into THIS pane — never the source — once it is open.
  *
- *  The order is the contract: the solo bind is AWAITED (the remint's own `bind`
- *  thunk is fire-and-forget, and the backend refuses to type into an agent with
- *  no pty); the copilot autopilot watcher starts for an autopilot line exactly
+ *  The order is the contract: the solo bind is AWAITED here, and is the typed
+ *  fork's only bind (`openForkedPane` skips the remint's fire-and-forget `bind`
+ *  thunk for a typed fork, since the backend refuses to type into an agent with
+ *  no pty and a race with that thunk would be a second, unordered bind); the copilot autopilot watcher starts for an autopilot line exactly
  *  as a restored pane's does (the consent dialog opens on the first submit, and
  *  this `/fork` is that submit); and `noteTypedFork` stamps the marker and the
  *  reconciler's eligibility clock BEFORE the delivery is queued — the child

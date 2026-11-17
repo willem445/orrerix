@@ -954,7 +954,7 @@ const orchWiring: OrchWiring = {
       "row",
       source
     );
-    if (pane.ptyId !== null) remint.bind(pane.ptyId);
+    if (pane.ptyId !== null && !opts.typedFork) remint.bind(pane.ptyId); // a typed fork's bind is typeForkInto's, awaited
     if (opts.typedFork && !(await typeForkInto(pane, remint, opts.forkOf, opts.typedFork.marker, () => ws.grid.closePane(pane)))) return false;
     if (pane.agentCli !== null) await adoptIfEligible(pane);
     reportHumanSession(pane);

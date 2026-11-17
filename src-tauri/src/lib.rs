@@ -1,4 +1,5 @@
 mod blocking; // the shared P1 delegation helper for the #746 gesture commands
+pub mod buildpaths; // pub: shared with build.rs via include!; tests/buildpaths.rs pins it (#3897)
 mod cliprobe;
 pub mod command_manifest; // pub: the ACL coherence integration test links APP_COMMANDS (#363)
 mod editor;

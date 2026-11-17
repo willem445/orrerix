@@ -5,6 +5,8 @@
 // `build.rs` can't depend on the compiled lib, so it's pulled in with
 // `include!` instead of `use loomux::command_manifest`.
 include!("src/command_manifest.rs");
+// Where the sideloaded conhost goes — shared with the lib so a test can pin it (#3897).
+include!("src/buildpaths.rs");
 
 fn main() {
     copy_sideloaded_conhost();
@@ -59,10 +61,10 @@ fn copy_sideloaded_conhost() {
     }
     let manifest = PathBuf::from(std::env::var("CARGO_MANIFEST_DIR").unwrap());
     let src = manifest.join("resources").join("conhost");
-    // OUT_DIR is <target>/<profile>/build/<pkg>-<hash>/out; the executable
-    // lands three levels up in <target>/<profile>.
+    // The executable lands in <target>/<profile>, and how far above OUT_DIR
+    // that is depends on cargo's build-dir layout — see buildpaths.rs (#3897).
     let out = PathBuf::from(std::env::var("OUT_DIR").unwrap());
-    let Some(profile_dir) = out.ancestors().nth(3) else {
+    let Some(profile_dir) = profile_dir_from_out_dir(&out) else {
         return;
     };
     for name in ["conpty.dll", "OpenConsole.exe"] {

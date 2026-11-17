@@ -72,7 +72,7 @@ pub const APP_COMMANDS: &[&str] = &[
     // gitwatch (2)
     "git_watch",
     "git_unwatch",
-    // orchestration (97 — COUNTED, by `scripts/command-roster.cjs`, which
+    // orchestration (98 — COUNTED, by `scripts/command-roster.cjs`, which
     // compares this number with the entries under it and with the protocol
     // note's roster table; `test/commandroster.test.ts` runs it. The
     // parenthetical was hand-kept before that and read 94 over 95 entries.)
@@ -176,6 +176,8 @@ pub const APP_COMMANDS: &[&str] = &[
     "orch_fork_agent",
     // #3318 F2 review round 1: the frontend's ack for a lead's self-fork.
     "orch_fork_solo_result",
+    // #3898: type copilot's `/fork <marker>` into a just-opened Solo fork pane.
+    "orch_solo_fork_deliver",
     // #3263 S3: the To-Do store's two commands. Orchestration-module
     // commands like the rest, but not `orch_`-prefixed — the store is the
     // human's, not a group's, and survives every group that reads it.

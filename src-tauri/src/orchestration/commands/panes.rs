@@ -1561,3 +1561,19 @@ pub async fn orch_fork_solo_result(
     let group_id = command_group(&group_id)?;
     run_blocking(move || reg.record_solo_fork_outcome(&group_id, &agent_id, opened, &detail)).await
 }
+
+/// Type copilot's `/fork <marker>` into a just-opened Solo fork pane (#3898).
+/// See [`OrchRegistry::deliver_solo_fork`]. `async` through [`run_blocking`]:
+/// the body appends the audit log and persists the delivery queue, and disk
+/// I/O stays off the webview thread — the same reason `orch_steer` gives for
+/// the same `deliver_prompt` call.
+#[tauri::command]
+pub async fn orch_solo_fork_deliver(
+    app: AppHandle,
+    agent_id: String,
+    parent_session: String,
+    marker: String,
+) -> Result<(), String> {
+    let reg = reg_of(&app);
+    run_blocking(move || reg.deliver_solo_fork(&agent_id, &parent_session, &marker)).await
+}

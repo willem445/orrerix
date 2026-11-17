@@ -1080,7 +1080,10 @@ impl OrchRegistry {
             )
         })?;
         let cli = workflow::cli_of(&block, &group.guardrails.agent_cli);
-        if let Some(refusal) = fork_refusal(cli) {
+        // #3898: the DELEGATE predicate — `fork_refusal` plus copilot's typed
+        // `/fork`, which only a Solo pane (the pane menu, a lead's self-fork)
+        // can take; see `fork_delegate_refusal` for why a delegate cannot.
+        if let Some(refusal) = fork_delegate_refusal(cli) {
             return Err(refusal);
         }
         if workflow::structured_harness_for(block.driver.as_deref(), cli).ok().flatten().is_some() {
@@ -1269,5 +1272,54 @@ impl OrchRegistry {
             }));
         }
         Ok(())
+    }
+
+    /// **Type a [`ForkSeam::Slash`] fork into a just-opened Solo fork pane**
+    /// (#3898) — copilot's `/fork <marker>`, delivered into the NEW pane the
+    /// frontend opened on copilot's plain resume of `parent_session`.
+    ///
+    /// That route is why copilot can fork at all: its `/fork` moves the pane
+    /// that types it into the new session while "the source session keeps
+    /// working in the background", so typed into the SOURCE it would invert
+    /// the roster. Typed here, the source pane is never written to, and this
+    /// pane becomes the child.
+    ///
+    /// Through `deliver_prompt`, never a raw pty write: the delivery pipeline is
+    /// what waits for the resumed CLI to paint and go quiet, prefixes copilot's
+    /// focus-in (#98), checks the echo and confirms the submit — the same path
+    /// copilot's `/compact` already takes. `ResumeKickoff` buys the readiness
+    /// wait, and it is NOT re-delivered by the lost-kickoff monitor
+    /// (`recovers_lost_kickoff` is `FreshKickoff`-only), so one gesture can
+    /// type at most one fork: a second would mint a second child nobody asked
+    /// for.
+    ///
+    /// Refused unless the agent is a bound Solo pane whose CLI's seam is
+    /// `Slash`, and unless the marker passes [`slash_fork_text`]'s grammar —
+    /// this is a door for exactly one command, never a way to type arbitrary
+    /// text into a pane. Audited as `solo-fork-typed` beside the delivery's own
+    /// rows, naming the parent and the marker, so the log says which session
+    /// this pane was asked to branch off.
+    pub fn deliver_solo_fork(&self, agent_id: &str, parent_session: &str, marker: &str) -> Result<(), String> {
+        let (cli, pty) = {
+            let agents = self.agents.lock_safe();
+            let a = agents.get(agent_id).ok_or("unknown agent")?;
+            if a.role != Role::Solo || &a.group != solo_group_id() {
+                return Err("a typed fork is only for a standalone pane".into());
+            }
+            (a.solo_cli.clone().unwrap_or_default(), a.pty_id)
+        };
+        if pty.is_none() {
+            return Err(format!("{agent_id} is not bound to a pane yet, so there is nowhere to type the fork"));
+        }
+        let parent = sanitize_session(parent_session)
+            .ok_or_else(|| format!("{parent_session:?} is not a session id"))?;
+        let text = slash_fork_text(&cli, marker)?;
+        self.audit(solo_group_id(), "human", "solo-fork-typed", json!({
+            "agent": agent_id,
+            "cli": cli,
+            "parent_session": parent,
+            "marker": marker,
+        }));
+        self.deliver_prompt(agent_id, &text, "human", Delivery::ResumeKickoff)
     }
 }

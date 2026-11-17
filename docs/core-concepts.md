@@ -86,6 +86,27 @@ can also name **Gemini CLI** for a reviewer lane (see
 [cross-model reviewers](orchestration.html#setting-up-a-cross-model-reviewer))
 — it just isn't one of the launcher's own dropdown options.
 
+### When moving the mouse types escape codes
+
+A full-screen program can switch on **mouse reporting**: the terminal then sends
+every mouse movement to the program instead of selecting text. The program is
+meant to switch it off when it exits. If it never does — typically a program
+running over `ssh` whose connection closed first — the terminal keeps
+reporting, and your local shell receives the reports as typed text: moving the
+mouse fills the prompt with codes such as `[<35;42;17M`. Focus reporting and
+bracketed paste can be left on the same way.
+
+To get the pane back, **right-click the pane's header → Reset terminal modes**.
+It switches off mouse reporting, focus reporting and bracketed paste in that
+pane's terminal, and a toast says which of them were on. It keeps the screen and
+the scrollback, does not change the pane's size, and sends nothing to the
+program running in the pane.
+
+Use it only after the program that switched the modes on has exited. A
+full-screen program that is still running loses its mouse input until it
+switches mouse reporting on again. Orrerix does not reset these modes
+automatically yet ([#3894](https://github.com/willem445/orrerix/issues/3894)).
+
 ### Notes on an agent pane
 
 With a wall of agents open it is easy to lose track of what each one is for.

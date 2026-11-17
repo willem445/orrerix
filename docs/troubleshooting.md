@@ -184,6 +184,12 @@ logs live under the data folder below, not in the browser profile.
   that grant is keyed on the bundle identifier too. The old
   `~/Library/WebKit/dev.loomux.app` is left alone and can be deleted by hand.
 
+## Moving the mouse types `[<35;42;17M` into a pane
+
+A program (often one over `ssh`) exited without switching mouse reporting off.
+Right-click the pane's header → **Reset terminal modes**. See
+[When moving the mouse types escape codes](core-concepts.html#when-moving-the-mouse-types-escape-codes).
+
 ## Disk & data locations
 
 Orrerix keeps durable state and logs under your platform data dir

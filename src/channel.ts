@@ -33,7 +33,8 @@ export type ConnectEffect =
  *  already-live channel, orthogonal to the connect gesture. */
 /** The pane-menu actions this reducer is about — every one EXCEPT the watch
  *  toggle (#3319), which is a local mark on one pane with no channel meaning
- *  at all.
+ *  at all, the quick-run controls (#3679), and the terminal-mode reset
+ *  (#3894), which acts on one pane's xterm instance and nothing else.
  *
  *  Subtracted from `PaneMenuAction` rather than listed, so a NEW connect action
  *  is covered here the moment it is declared and only a deliberate second
@@ -41,7 +42,10 @@ export type ConnectEffect =
  *  switch below is exhaustive with no `default`, so adding `toggle-watch` to
  *  the union without this made `reduceConnect` fail to compile — which is how
  *  the exclusion was found rather than assumed. */
-export type ConnectAction = Exclude<PaneMenuAction, { kind: "toggle-watch" } | { kind: "quick-control" }>;
+export type ConnectAction = Exclude<
+  PaneMenuAction,
+  { kind: "toggle-watch" } | { kind: "quick-control" } | { kind: "reset-terminal-modes" }
+>;
 
 export function reduceConnect(
   action: ConnectAction,

@@ -80,6 +80,7 @@ import { PaneBadges } from "./panebadges";
 import { PaneCompose } from "./panecompose";
 import { PaneLifecycle } from "./panelifecycle";
 import { capturePane } from "./panecapture";
+import { resetToastMessage, terminalModeResetSequence } from "./termmodes";
 
 // The header's icons, from the registry (#879 slice K). They were hand-drawn
 // inline here — inline so the toolbar renders identically regardless of
@@ -2228,6 +2229,22 @@ export class Pane implements VoiceTargetPane {
   get watched(): boolean { return this.badges.watched; }
   setWatched(watched: boolean): boolean { return this.badges.setWatched(watched); }
   toggleWatched(): boolean { return this.badges.toggleWatched(); }
+
+  /** Turn off the mouse reporting, focus reporting and bracketed paste a
+   *  program left switched on (#3894) — the pane menu's "Reset terminal
+   *  modes". Written into THIS xterm instance with `term.write`, never sent to
+   *  the PTY: the modes are the terminal's own state, and a DECRST draws
+   *  nothing and answers nothing (test/termmodes.test.ts pins both). Not
+   *  `term.reset()`, which would wipe the screen and scrollback, and no resize
+   *  (CLAUDE.md hard constraint 1). The modes are read BEFORE the write,
+   *  because the toast reports what was on. `term.write` queues behind the
+   *  output already handed to xterm, so a mode set in that output is reset
+   *  too rather than surviving the click. Returns the toast text. */
+  resetTerminalModes(): string {
+    const message = resetToastMessage(this.term.modes);
+    this.term.write(terminalModeResetSequence());
+    return message;
+  }
   setHeld(reason: string | null, detail?: string): void { this.badges.setHeld(reason, detail); }
   setQueueDepth(reading: QueueDepthReading | null): void { this.badges.setQueueDepth(reading); }
   get queueDepth(): QueueDepthReading | null { return this.badges.queueDepth; }

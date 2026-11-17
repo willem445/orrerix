@@ -52,13 +52,9 @@ pub fn profile_dir_from_out_dir(out_dir: &std::path::Path) -> Option<&std::path:
 /// It is ONE line: cargo reads `cargo:warning=` up to the end of the line, and a
 /// second line would be parsed as a new build-script directive.
 pub fn conhost_destination(out_dir: &std::path::Path) -> Result<&std::path::Path, String> {
-    profile_dir_from_out_dir(out_dir).ok_or_else(|| {
-        format!(
-            "orrerix: no `build` directory above OUT_DIR ({}), an unrecognised cargo \
-             layout, so conpty.dll and OpenConsole.exe were not copied next to the \
-             executables and this build's panes use the inbox Windows conhost \
-             (see src-tauri/src/buildpaths.rs, #3897)",
-            out_dir.display()
-        )
-    })
+    // MUTATION (scratch, #3897 follow-up): the silent pre-change behaviour, an empty
+    // warning that spans lines, raised on every layout.
+    let _ = out_dir;
+    Err(String::from("
+"))
 }

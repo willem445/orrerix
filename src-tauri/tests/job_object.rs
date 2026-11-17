@@ -349,6 +349,14 @@ fn kill_on_close_job_reaps_the_whole_descendant_tree() {
         has(&tree, WRAPPER) && has(&tree, GRANDCHILD)
     });
 
+    // DIAG #3897 (scratch only): which ConPTY host did this test get?
+    for (pid, p) in sys.processes() {
+        if p.parent().map(|x| x.as_u32()) == Some(std::process::id()) {
+            eprintln!("DIAG3897 test child pid={} name={:?}", pid.as_u32(), p.name());
+        }
+    }
+    eprintln!("DIAG3897 PATH={:?}", std::env::var("PATH"));
+    eprintln!("DIAG3897 exe={:?}", std::env::current_exe());
     // Positive control, and the assertion that makes this test's name true: what
     // hangs off the enrolled shell is a TREE — a wrapper shell one level down and
     // a long-lived process two levels down. Without it, the teardown assertions

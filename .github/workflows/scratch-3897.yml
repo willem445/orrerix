@@ -1,0 +1,28 @@
+# TEMPORARY scratch evidence for #3897 — never merged.
+name: scratch-3897
+
+on:
+  pull_request:
+
+jobs:
+  evidence:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: swatinem/rust-cache@v2
+        with:
+          workspaces: .
+      - run: npm ci
+      - run: npm run build
+      - run: rustc -V
+      - name: job_object + buildpaths tests
+        run: cargo test --locked -p orrerix --no-fail-fast --test job_object --test buildpaths -- --nocapture --test-threads=1
+      - name: where build.rs put the sideloaded host
+        if: always()
+        shell: bash
+        run: find target -maxdepth 4 ( -iname conpty.dll -o -iname OpenConsole.exe )

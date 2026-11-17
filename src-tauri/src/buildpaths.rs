@@ -31,8 +31,5 @@
 /// checkout without the binaries gets. `None` when `out_dir` has no `build`
 /// ancestor at all, and the caller then copies nothing.
 pub fn profile_dir_from_out_dir(out_dir: &std::path::Path) -> Option<&std::path::Path> {
-    out_dir
-        .ancestors()
-        .find(|dir| dir.file_name().is_some_and(|name| name == "build"))
-        .and_then(|build| build.parent())
+    out_dir.ancestors().nth(3) // MUTATION #3897: the pre-fix derivation
 }

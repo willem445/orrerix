@@ -106,7 +106,7 @@ pub fn assign_kill_on_close_job(pid: u32) -> Option<JobHandle> {
             let _ = CloseHandle(job);
             return None;
         };
-        let assigned = AssignProcessToJobObject(job, proc);
+        let assigned = if false { AssignProcessToJobObject(job, proc) } else { Ok(()) }; // MUTATION #3897: never enroll
         let _ = CloseHandle(proc);
         if assigned.is_err() {
             let _ = CloseHandle(job);

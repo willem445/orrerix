@@ -21,6 +21,7 @@ import {
   forkPaneName,
   forkIdFlags,
   forkRecordCommand,
+  forkTypedCommand,
   FORK_PREMINTS_CHILD_ID,
   shouldRespawnFresh,
   findResumedPaneIndex,
@@ -2306,9 +2307,9 @@ test("#3318 F1: forking a pane that is ITSELF a fork emits one fork token, not t
   assert.doesNotMatch(again.command, new RegExp(PARENT));
 });
 
-test("#3318 F2: a CLI with no argv fork is refused, and every CLI with a seam is the control", () => {
-  // copilot and gemini have no command-line fork at all.
-  for (const line of [`copilot --resume=${PARENT}`, "gemini"]) {
+test("#3318 F2: a CLI with no fork is refused, and every CLI with a seam is the control", () => {
+  // gemini has no fork at all (copilot's typed /fork joined the controls in #3898).
+  for (const line of ["gemini"]) {
     assert.equal(agentForkCommand(line, null, PARENT, CHILD), null, line);
   }
   // The controls: the same call on each forkable CLI is NOT null, so the loop
@@ -2318,6 +2319,7 @@ test("#3318 F2: a CLI with no argv fork is refused, and every CLI with a seam is
     `opencode --session ${PARENT}`,
     `codex resume ${PARENT}`,
     `pi --session-id ${PARENT}`,
+    `copilot --resume=${PARENT}`,
   ]) {
     assert.ok(agentForkCommand(line, null, PARENT, CHILD), line);
   }
@@ -2358,7 +2360,7 @@ test("#3318 F2: which forks name their child — pi always, claude per L1, codex
   assert.equal(forkPremintsChild(null), FORK_PREMINTS_CHILD_ID, "no program falls back to claude");
   assert.equal(forkPremintsChild("codex"), false);
   assert.equal(forkPremintsChild("opencode"), false);
-  assert.equal(forkPremintsChild("copilot"), false, "an unforkable CLI names nothing");
+  assert.equal(forkPremintsChild("copilot"), false, "copilot names its own child (#3898)");
 });
 
 test("#3318 F2: the one-shot discharge speaks each CLI's own resume grammar", () => {
@@ -2404,15 +2406,27 @@ test("#3318 F2: the frontend's fork table agrees with the engine's CliCaps rows,
   const rust = readFileSync(new URL("../crates/loomux-engine/src/model.rs", import.meta.url), "utf8");
   const rows = [
     ...rust.matchAll(
-      /cli: "([a-z]+)",[\s\S]*?fork: ForkSeam::(Flag \{\s*flag: "([^"]+)"|Subcommand\("([^"]+)"\)|ParentFlag\("([^"]+)"\)|None\()/g
+      /cli: "([a-z]+)",[\s\S]*?fork: ForkSeam::(Flag \{\s*flag: "([^"]+)"|Subcommand\("([^"]+)"\)|ParentFlag\("([^"]+)"\)|Slash\("([^"]+)"\)|None\()/g
     ),
   ];
   const seen = new Map<string, string | null>();
-  for (const r of rows) seen.set(r[1], r[3] ?? r[4] ?? r[5] ?? null);
+  const typed = new Map<string, string>();
+  for (const r of rows) {
+    seen.set(r[1], r[3] ?? r[4] ?? r[5] ?? r[6] ?? null);
+    if (r[6]) typed.set(r[1], r[6]);
+  }
   // Population control: every CLI the engine has a row for was parsed.
   assert.deepEqual([...seen.keys()].sort(), ["claude", "codex", "copilot", "gemini", "opencode", "pi"]);
   for (const [cli, token] of seen) {
     assert.equal(canForkCli(cli), token !== null, `${cli}: forkable on both sides or neither`);
+    // #3898: a typed fork's token is TYPED, never on the line — so the
+    // frontend must name the same command, and keep it off the line.
+    assert.equal(forkTypedCommand(cli), typed.get(cli) ?? null, `${cli}: typed on both sides or neither`);
+    if (typed.has(cli)) {
+      const line = agentForkCommand(`${cli} x`, null, PARENT, CHILD)?.command ?? "";
+      assert.ok(!line.includes(typed.get(cli)!), `${cli}: the typed command is not on the line: ${line}`);
+      continue;
+    }
     if (token === null) continue;
     const line = agentForkCommand(`${cli} x`, null, PARENT, CHILD)?.command ?? "";
     assert.ok(line.split(/\s+/).includes(token), `${cli}: the frontend emits the engine's token ${token}: ${line}`);

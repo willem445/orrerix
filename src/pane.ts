@@ -568,6 +568,15 @@ export class Pane implements VoiceTargetPane {
    *  from `PaneOptions.forkOf` on every path that starts a pane, and read only
    *  by `capture()`. */
   forkOf: string | null = null;
+  /** #3898 — the name a TYPED fork (copilot's `/fork <marker>`) gave its
+   *  child, or null. The reconciler matches only a session carrying exactly
+   *  this title, which is how this pane's child id is learned without
+   *  guessing among other copilot sessions in the same folder (#3888).
+   *  In-memory on purpose: it is needed only until the child is adopted, and a
+   *  restart before that discharges the line to a fresh session anyway
+   *  (`forkRecordCommand`), which has no marker to match. Set by
+   *  `noteTypedFork`. */
+  forkMarker: string | null = null;
   /** Wall-clock time the HUMAN's first input (keystroke/paste) reached this
    *  pane's current process — not when the process was spawned (#440; review
    *  round 2, B2). The session-reconciler needs a boundary before which a
@@ -2480,6 +2489,20 @@ export class Pane implements VoiceTargetPane {
    *  stays under B3's exclusion. */
   get forkedFrom(): string | null {
     return this.forkOf;
+  }
+
+  /** Record that orrerix is about to TYPE `/fork <marker>` into this pane
+   *  (#3898), so the reconciler can learn the child: `marker` becomes the title
+   *  its session must carry, and `firstInputMs` is stamped now if nothing has
+   *  stamped it yet — the child cannot exist before this instant, which is the
+   *  fact that field gates on (#440 B2).
+   *
+   *  Deliberately NOT `markFirstInput`: that also opens a HUMAN-origin turn
+   *  (#518) and clears the at-prompt latch, and this input is orrerix's, not
+   *  the human's. Only the eligibility clock is moved. */
+  noteTypedFork(marker: string): void {
+    this.forkMarker = marker;
+    this.firstInputMs ??= Date.now();
   }
 
   /** This pane's recorded agent session id, or null when none has been minted,

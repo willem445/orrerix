@@ -19,9 +19,11 @@ import {
   agentForkCommand,
   forkPaneName,
   forkPremintsChild,
+  forkTypedCommand,
   programFromRestore,
   sessionIdFromCommand,
 } from "./panerestore";
+import { forkMarker, forkMarkerNonce } from "./typedfork";
 import type { AutonomyState } from "./autonomy";
 import type { NeedsYouView, OrchQuestion } from "./decisions";
 import type { WorkflowEntry, WorkflowListing, WorkflowPreview } from "./roster";
@@ -717,6 +719,9 @@ export interface OrchWiring {
      *  identity (and its `--disallowedTools Agent` marker), which the child
      *  sheds before it is re-minted as a plain Solo pane — never a lead. */
     sourceWasLead?: boolean;
+    /** #3898: a TYPED fork (copilot) — `/fork <marker>` is typed into the
+     *  pane once it opens (`typeForkInto`). */
+    typedFork?: { marker: string };
   }): Promise<boolean>;
 }
 
@@ -1499,13 +1504,17 @@ async function forkPaneSession(
       showToast(`Can't fork this pane: loomux has no fork for ${action.cli}.`, "error");
       return { opened: false, why: `no fork for ${action.cli}` };
     }
+    // The name goes in as the pane's own name — the one the header's rename
+    // edits and `tabs.json`/`sessionlog.json` record — never a second store.
+    // Through `sanitizePaneName` whichever way it arrived (the prompt, a
+    // lead's `fork_session(name)`, or the derived default off a long source
+    // name): one rule for every input, the backend's own.
+    const paneName = sanitizePaneName(name ?? "") || sanitizePaneName(forkPaneName(action.sourceName));
+    // #3898: a TYPED fork (copilot) names its child, and is learned, by a marker.
+    const typed = forkTypedCommand(programFromRestore(now.command, now.argv)) !== null;
+    const typedFork = typed ? { marker: forkMarker(paneName, forkMarkerNonce()) } : undefined;
     const opened = (await orchWiring?.openForkedPane(pane, {
-      // The name goes in as the pane's own name — the one the header's rename
-      // edits and `tabs.json`/`sessionlog.json` record — never a second store.
-      // Through `sanitizePaneName` whichever way it arrived (the prompt, a
-      // lead's `fork_session(name)`, or the derived default off a long source
-      // name): one rule for every input, the backend's own.
-      name: sanitizePaneName(name ?? "") || sanitizePaneName(forkPaneName(action.sourceName)),
+      name: paneName,
       cwd: action.workdir,
       command: line.command,
       argv: line.argv,
@@ -1516,6 +1525,7 @@ async function forkPaneSession(
       sessionId: forkPremintsChild(programFromRestore(now.command, now.argv)) ? childId : undefined,
       forkOf: action.sessionId,
       sourceWasLead: action.sourceWasLead,
+      typedFork,
     })) ?? false;
     return { opened, why: opened ? "" : "the pane could not be opened" };
   } catch (err) {

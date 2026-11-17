@@ -30,7 +30,7 @@
 
 import type { MenuItem } from "./contextmenu";
 import { watchMenuLabel } from "./watchedpanes.ts";
-import { canForkCli } from "./panerestore.ts";
+import { canForkCli, canForkDelegateCli } from "./panerestore.ts";
 import type { QuickMenuEntry } from "./quickchip.ts";
 
 /** One pane's orchestration identity, as a connect action needs it — bound at
@@ -283,7 +283,9 @@ function promoteItem(p: PaneConnectState): PaneMenuItem | null {
 
 const FORK_LABEL = "Fork session…";
 const FORK_CLI_REASON =
-  "This CLI has no command-line fork, and a fork here runs the CLI's own — copilot's /fork is interactive-only and gemini has none (#3318).";
+  "This CLI has no fork orrerix can run — a fork here runs the CLI's own, and gemini has none (#3318).";
+const FORK_DELEGATE_TYPED_REASON =
+  "copilot's fork is the interactive /fork, which orrerix types into a new Solo pane — a delegate fork opens in a new worktree, where copilot's reference does not say whether a resumed session stays there or returns to the original's checkout (#3898).";
 const FORK_NO_SESSION_REASON =
   "orrerix doesn't know this pane's conversation yet — a fork copies the session it already has, so send this agent a prompt first.";
 const FORK_NO_WORKDIR_REASON =
@@ -333,6 +335,9 @@ function forkItem(p: PaneConnectState): PaneMenuItem | null {
     // falling through to the SOLO route below and forking a group agent as a
     // standalone pane nobody's roster knows.
     if (p.group === null || p.agentId === null) return null;
+    // #3898: the backend refuses a typed-fork CLI's delegate
+    // (`fork_delegate_refusal`), so the menu says why instead of offering it.
+    if (!canForkDelegateCli(p.agentCli)) return refuse(FORK_DELEGATE_TYPED_REASON);
     return {
       label: FORK_LABEL,
       action: { kind: "fork-delegate", group: p.group, agentId: p.agentId, sourceName: p.name },

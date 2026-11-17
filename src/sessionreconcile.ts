@@ -93,6 +93,15 @@ export interface ReconcilePane {
    *  in flight (making a collision CONTESTED, and therefore refused — see
    *  the design note's accepted-residual section). */
   eligibleSinceMs: number;
+  /** The exact title this pane's session must carry, or absent for no title
+   *  rule (#3898). Set only for a TYPED fork (copilot's `/fork <marker>`),
+   *  whose child is named by orrerix and is therefore the one session in its
+   *  folder that can carry this name — so the match is by identity rather than
+   *  by "the only new session here", and a sibling copilot pane's new session
+   *  in the same folder can never be adopted in its place (#3888). A session
+   *  that does not carry it is not a candidate at all: when copilot did not
+   *  record the name, the pane stays unrecorded rather than guessing. */
+  title?: string;
 }
 
 export interface SessionAdoption {
@@ -155,7 +164,9 @@ export function planSessionAdoption(
         normalizeCwd(s.cwd) !== "" &&
         normalizeCwd(s.cwd) === normalizeCwd(pane.cwd) &&
         s.modifiedMs >= pane.eligibleSinceMs &&
-        !claimed.has(s.id)
+        !claimed.has(s.id) &&
+        // #3898: a typed fork names its child, and only that name matches.
+        (pane.title === undefined || s.title === pane.title)
     );
 
   const perPane = panes.map((pane) => ({ pane, candidates: candidatesFor(pane) }));

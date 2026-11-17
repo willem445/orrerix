@@ -219,11 +219,16 @@ fn every_fork_line_tokenizes_to_its_argv_form() {
 /// anything else about the CLI. `hermes` is an unrecognized CLI and is in the
 /// list on purpose — it falls through to claude's arm, and that arm must not
 /// fork on its behalf.
+///
+/// copilot (#3898) is refused by the builder for a DIFFERENT reason than the
+/// other two: it can fork, but only by a typed `/fork` in a Solo pane, so a
+/// builder line — always a delegate's — is refused with
+/// `fork_delegate_refusal`'s sentence, not with a "no fork" one.
 #[test]
 fn a_cli_with_no_fork_seam_is_refused_by_the_builder_in_its_own_words() {
     let (reg, _d) = test_registry();
     for cli in ["copilot", "gemini", "hermes"] {
-        let want = fork_refusal(cli).unwrap_or_else(|| panic!("{cli} has no seam"));
+        let want = fork_delegate_refusal(cli).unwrap_or_else(|| panic!("{cli} has no line fork"));
         let line = fork_test_line(&reg, cli, Some(FORK_PARENT), true, Some(FORK_PARENT));
         assert_eq!(line, Err(want.clone()), "{cli}: the string builder refuses with the row's note");
         let argv = fork_test_argv(&reg, cli, Some(FORK_PARENT), true, Some(FORK_PARENT));
@@ -241,13 +246,13 @@ fn a_cli_with_no_fork_seam_is_refused_by_the_builder_in_its_own_words() {
 /// own note so a rejected fork says what is missing rather than "unsupported".
 #[test]
 fn a_cli_with_no_fork_seam_is_refused_with_its_own_note() {
-    // The four CLIs that can fork are the positive controls and they come
+    // The five CLIs that can fork are the positive controls and they come
     // FIRST: a refusal test whose subject refuses everything passes just as
-    // well broken.
-    for cli in ["claude", "codex", "opencode", "pi"] {
-        assert_eq!(fork_refusal(cli), None, "{cli} has a fork seam (#3318 F2)");
+    // well broken. copilot joined them in #3898 (a typed `/fork`, Solo only).
+    for cli in ["claude", "codex", "copilot", "opencode", "pi"] {
+        assert_eq!(fork_refusal(cli), None, "{cli} has a fork seam (#3318 F2, #3898)");
     }
-    for cli in ["copilot", "gemini"] {
+    for cli in ["gemini"] {
         let refusal = fork_refusal(cli).unwrap_or_else(|| panic!("{cli} must be refused"));
         assert!(refusal.contains(cli), "the refusal names the CLI: {refusal}");
         let ForkSeam::None(note) = cli_caps(cli).expect("row").fork else {
@@ -276,6 +281,11 @@ fn every_cli_row_states_its_fork_position() {
                 "{}: a fork subcommand is a word, not a flag",
                 caps.cli
             ),
+            ForkSeam::Slash(command) => assert!(
+                command.starts_with('/') && command.len() > 1 && !command.contains(' '),
+                "{}: a typed fork is one slash command",
+                caps.cli
+            ),
             ForkSeam::None(note) => assert!(
                 note.len() > 20,
                 "{}: a None fork row must explain itself",
@@ -284,13 +294,15 @@ fn every_cli_row_states_its_fork_position() {
         }
     }
     // The set F2 wires, stated rather than left to be noticed in review: a
-    // widened or narrowed table changes this list WITH the row.
+    // widened or narrowed table changes this list WITH the row. copilot since
+    // #3898, as a typed fork.
     let mut wired: Vec<&str> = CLI_CAPS.iter().filter(|c| c.fork.token().is_some()).map(|c| c.cli).collect();
     wired.sort();
-    assert_eq!(wired, vec!["claude", "codex", "opencode", "pi"]);
+    assert_eq!(wired, vec!["claude", "codex", "copilot", "opencode", "pi"]);
+    assert_eq!(cli_caps("copilot").unwrap().fork, ForkSeam::Slash("/fork"), "copilot's fork is its typed /fork");
     // …and exactly the CLIs that can name the child up front pre-mint one: pi
-    // always, claude per L1. codex and opencode never can.
-    for (cli, premints) in [("pi", true), ("codex", false), ("opencode", false)] {
+    // always, claude per L1. codex, opencode and copilot never can.
+    for (cli, premints) in [("pi", true), ("codex", false), ("opencode", false), ("copilot", false)] {
         assert_eq!(cli_caps(cli).unwrap().fork.premints_child(), premints, "{cli}");
     }
 }
@@ -425,21 +437,116 @@ fn fork_session_refuses_each_source_it_cannot_fork_and_says_why() {
     assert_eq!(audit_count(&reg, &gid, "agent-fork"), 1);
 }
 
-/// A CLI with no fork seam is refused at the SOURCE, in the row's own words —
-/// before any worktree is cut or config minted. copilot is the case #3331
-/// names: its `--resume=` line needs `resume`, which a fork does not pass, so
-/// F1's silent drop would have opened a FRESH copilot session and called it a
-/// fork.
+/// A copilot DELEGATE is refused at the source, before any worktree is cut or
+/// config minted (#3898) — and with the typed-fork sentence, not a "no fork"
+/// one. copilot CAN fork now, but only by a `/fork` typed into a Solo pane
+/// opened in the source's own directory; a delegate fork opens in a NEW
+/// worktree, where copilot's reference does not say whether a resumed session
+/// keeps the launch directory (`fork_delegate_refusal`). The gesture predicate
+/// admitting copilot is asserted beside it, so this cannot pass by copilot
+/// simply being unforkable again.
 #[test]
-fn a_fork_of_a_copilot_source_is_refused_with_its_rows_note() {
+fn a_fork_of_a_copilot_delegate_is_refused_with_the_typed_fork_reason() {
     let (reg, _d) = test_registry();
     let g = reg.create_group("C:/tmp/repo", Guardrails { agent_cli: "copilot".into(), ..rails() }).unwrap();
     let orch = reg.spawn_agent(&g.id, Role::Orchestrator, "orch", "", false, None).unwrap();
     let w = reg.spawn_agent(&g.id, Role::Worker, "w", "", false, None).unwrap();
     reg.set_session_for_test(&w.id, "copilot-session-1");
-    let err = reg.fork_agent(&g.id, &orch.id, &w.id, "", None, None, "").expect_err("copilot cannot fork");
-    assert_eq!(err, fork_refusal("copilot").unwrap(), "the refusal IS the row's note, verbatim");
+    assert_eq!(fork_refusal("copilot"), None, "the Solo gesture admits copilot");
+    let err = reg.fork_agent(&g.id, &orch.id, &w.id, "", None, None, "").expect_err("a copilot delegate cannot fork");
+    assert_eq!(err, fork_delegate_refusal("copilot").unwrap(), "the refusal IS the delegate sentence, verbatim");
+    for needle in ["/fork", "new worktree", "Solo"] {
+        assert!(err.contains(needle), "the refusal says why and what to do instead ({needle}): {err}");
+    }
     assert_eq!(reg.list_agents(&g.id).as_array().unwrap().len(), 2, "nothing was spawned");
+    assert_eq!(audit_count(&reg, &g.id, "agent-fork"), 0, "nothing was forked");
+}
+
+/// The one text a Solo fork pane may be TYPED (#3898): copilot's row command
+/// and a marker held to one token of `[a-z0-9-]`, never `worktree`. The
+/// positive control comes first — a grammar that refused everything would pass
+/// every refusal below.
+#[test]
+fn the_typed_fork_text_is_the_rows_command_and_one_safe_marker() {
+    assert_eq!(slash_fork_text("copilot", "my-pane-fork-3f9a2c"), Ok("/fork my-pane-fork-3f9a2c".to_string()));
+    assert_eq!(slash_fork_text("copilot", "a"), Ok("/fork a".to_string()), "the shortest marker");
+    let long = "a".repeat(64);
+    assert_eq!(slash_fork_text("copilot", &long), Ok(format!("/fork {long}")), "64 is the cap, inclusive");
+    for bad in [
+        "",                     // nothing to name the child by
+        "worktree",             // `/fork worktree` is a fork into a new git worktree
+        "-x",                   // could read as an option
+        "two words",            // NAME's parsing is undocumented — one token only
+        "Upper",                // the frontend slugs to lowercase; anything else is not its marker
+        "a/b",                  // a path-ish or command-ish character
+        "x\r/fork y",           // a second line, i.e. a second command
+        "@file",                // copilot's file-mention marker
+    ] {
+        assert!(slash_fork_text("copilot", bad).is_err(), "{bad:?} must be refused");
+    }
+    assert!(slash_fork_text("copilot", &"a".repeat(65)).is_err(), "65 is over the cap");
+    // Only a typed-fork CLI may be typed a fork: this is not a door for
+    // arbitrary text into a claude or gemini pane.
+    for cli in ["claude", "codex", "opencode", "pi", "gemini", "hermes"] {
+        assert!(slash_fork_text(cli, "ok").is_err(), "{cli} has no typed fork");
+    }
+}
+
+/// `deliver_solo_fork` is the backend door the Solo gesture types `/fork`
+/// through (#3898). Each refusal fires on exactly its own fact, and the
+/// admitted call reaches the delivery queue: in a bare test registry there is
+/// no app handle, so the admission is withdrawn with `no app handle` — which
+/// is only reachable AFTER every refusal here has passed, and after the
+/// `solo-fork-typed` row naming the parent and the marker is written.
+#[test]
+fn a_typed_fork_is_delivered_only_into_a_bound_copilot_solo_pane() {
+    let (reg, _d) = test_registry();
+    let parent = "11111111-2222-3333-4444-555555555555";
+    let solo = |cli: &str, pty: Option<u32>| -> String {
+        let p = reg.solo_prepare(cli, "C:/tmp/solo", "fork").unwrap();
+        let id = p["agent_id"].as_str().unwrap().to_string();
+        if let Some(pty) = pty {
+            reg.solo_bind(&id, pty).unwrap();
+        }
+        id
+    };
+    let copilot = solo("copilot", Some(7101));
+    // The admitted call first — the control every refusal below is measured
+    // against.
+    let err = reg.deliver_solo_fork(&copilot, parent, "fork-3f9a2c").expect_err("no app handle in a test");
+    assert!(err.contains("no app handle"), "the call reached the delivery queue: {err}");
+    let typed: Vec<_> =
+        reg.audit_log(solo_group_id()).into_iter().filter(|e| e.action == "solo-fork-typed").collect();
+    assert_eq!(typed.len(), 1, "one audited typed fork");
+    assert_eq!(typed[0].detail["parent_session"], json!(parent));
+    assert_eq!(typed[0].detail["marker"], json!("fork-3f9a2c"));
+    assert_eq!(typed[0].detail["agent"], json!(copilot));
+
+    let refusals: Vec<(String, String, &str, &str)> = vec![
+        ("an unknown agent".into(), "solo-404".into(), "fork-1", "unknown agent"),
+        ("a claude Solo pane".into(), solo("claude", Some(7102)), "fork-1", "no typed fork"),
+        ("an unbound copilot Solo pane".into(), solo("copilot", None), "fork-1", "not bound"),
+        ("a bad marker".into(), copilot.clone(), "worktree", "worktree"),
+    ];
+    for (what, agent, marker, needle) in refusals {
+        let err = reg.deliver_solo_fork(&agent, parent, marker).expect_err(&what);
+        assert!(err.contains(needle), "{what}: {err}");
+        assert!(!err.contains("no app handle"), "{what}: refused before the queue: {err}");
+    }
+    // A parent that is not a session id never reaches a delivery either.
+    let err = reg.deliver_solo_fork(&copilot, "../x", "fork-1").expect_err("bad parent");
+    assert!(err.contains("not a session id"), "{err}");
+    // A DELEGATE is not a Solo pane, whatever its CLI.
+    let g = reg.create_group("C:/tmp/repo", Guardrails { agent_cli: "copilot".into(), ..rails() }).unwrap();
+    let w = reg.spawn_agent(&g.id, Role::Worker, "w", "", false, None).unwrap();
+    reg.set_pty_for_test(&w.id, 7103);
+    let err = reg.deliver_solo_fork(&w.id, parent, "fork-1").expect_err("a delegate");
+    assert!(err.contains("standalone pane"), "{err}");
+    assert_eq!(
+        reg.audit_log(solo_group_id()).into_iter().filter(|e| e.action == "solo-fork-typed").count(),
+        1,
+        "no refused call was audited as typed"
+    );
 }
 
 /// A codex fork's child is the vendor's to mint: the roster records NO session

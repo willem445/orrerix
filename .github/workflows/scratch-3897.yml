@@ -1,0 +1,42 @@
+# TEMPORARY scratch bisect for #3897 — never merged.
+name: scratch-3897
+
+on:
+  pull_request:
+
+jobs:
+  bisect:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            rust: "1.99.1"
+          - os: windows-latest
+            rust: stable
+          - os: windows-2022
+            rust: stable
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ matrix.rust }}
+      - uses: swatinem/rust-cache@v2
+        with:
+          workspaces: .
+          key: ${{ matrix.os }}-${{ matrix.rust }}
+      - run: npm ci
+      - run: npm run build
+      - name: OS build
+        shell: pwsh
+        run: |
+          [System.Environment]::OSVersion.Version
+          (Get-ItemProperty 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion').UBR
+          rustc -Vv
+      - name: job_object test
+        run: cargo test --locked -p orrerix --test job_object -- --nocapture --test-threads=1

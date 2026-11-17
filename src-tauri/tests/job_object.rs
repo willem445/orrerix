@@ -222,6 +222,52 @@ fn refresh(sys: &mut System) {
     sys.refresh_processes_specifics(ProcessesToUpdate::All, true, ProcessRefreshKind::nothing());
 }
 
+/// DIAG #3897 — temporary.
+fn diag_dump(
+    label: &str,
+    sys: &System,
+    shell_pid: u32,
+    shell_born: u64,
+    tree: &[Descendant],
+    out: &Arc<std::sync::Mutex<Vec<u8>>>,
+) {
+    eprintln!("DIAG3897 ==== {label}: shell_pid={shell_pid} shell_born={shell_born} tree={tree:?}");
+    if let Some(p) = sys.process(Pid::from_u32(shell_pid)) {
+        eprintln!(
+            "DIAG3897 shell entry: name={:?} parent={:?} start={} ",
+            p.name(),
+            p.parent(),
+            p.start_time()
+        );
+    } else {
+        eprintln!("DIAG3897 shell entry MISSING from process table");
+    }
+    let me = std::process::id();
+    for (pid, p) in sys.processes() {
+        let name = p.name().to_string_lossy().to_ascii_lowercase();
+        let parent = p.parent().map(|x| x.as_u32());
+        let interesting = parent == Some(shell_pid)
+            || parent == Some(me)
+            || pid.as_u32() == me
+            || matches!(
+                name.as_str(),
+                "cmd.exe" | "ping.exe" | "conhost.exe" | "openconsole.exe"
+            );
+        if interesting {
+            eprintln!(
+                "DIAG3897 proc pid={} parent={:?} name={} start={}",
+                pid.as_u32(),
+                parent,
+                name,
+                p.start_time()
+            );
+        }
+    }
+    let bytes = out.lock().unwrap().clone();
+    let text = String::from_utf8_lossy(&bytes);
+    eprintln!("DIAG3897 pane output ({} bytes): {:?}", bytes.len(), text);
+}
+
 #[test]
 fn kill_on_close_job_reaps_the_whole_descendant_tree() {
     // Open a real ConPTY exactly like spawn_pty, running an interactive cmd.exe:
@@ -253,8 +299,10 @@ fn kill_on_close_job_reaps_the_whole_descendant_tree() {
     // braces; it also means a shell that never started is reported as exactly
     // that, instead of as a missing descendant a minute later.
     let spoke = Arc::new(AtomicBool::new(false));
+    let out: Arc<std::sync::Mutex<Vec<u8>>> = Arc::new(std::sync::Mutex::new(Vec::new()));
     {
         let spoke = spoke.clone();
+        let out = out.clone();
         let mut reader = pair.master.try_clone_reader().expect("clone pty reader");
         std::thread::spawn(move || {
             let mut buf = [0u8; 1024];
@@ -262,10 +310,12 @@ fn kill_on_close_job_reaps_the_whole_descendant_tree() {
                 if n == 0 {
                     break;
                 }
+                out.lock().unwrap().extend_from_slice(&buf[..n]);
                 spoke.store(true, Ordering::SeqCst);
             }
         });
     }
+    eprintln!("DIAG3897 test pid {} shell pid {}", std::process::id(), shell_pid);
     assert!(
         wait_until(SHELL_SPEAKS, || spoke.load(Ordering::SeqCst)),
         "the pane's shell never produced any output — it never started"
@@ -292,6 +342,21 @@ fn kill_on_close_job_reaps_the_whole_descendant_tree() {
         tree = live_descendants(&sys, shell_pid, shell_born);
         has(&tree, WRAPPER) && has(&tree, GRANDCHILD)
     });
+    diag_dump("after TREE_APPEARS", &sys, shell_pid, shell_born, &tree, &out);
+    if !(has(&tree, WRAPPER) && has(&tree, GRANDCHILD)) {
+        // Probe: does typed input reach the shell at all? Try an echo with \r,
+        // then with \r\n, and dump what the pane printed after each.
+        let _ = writer.write_all(b"echo DIAG_PROBE_CR\r");
+        let _ = writer.flush();
+        std::thread::sleep(Duration::from_secs(5));
+        refresh(&mut sys);
+        diag_dump("after probe CR", &sys, shell_pid, shell_born, &tree, &out);
+        let _ = writer.write_all(b"echo DIAG_PROBE_CRLF\r\n");
+        let _ = writer.flush();
+        std::thread::sleep(Duration::from_secs(5));
+        refresh(&mut sys);
+        diag_dump("after probe CRLF", &sys, shell_pid, shell_born, &tree, &out);
+    }
 
     // Positive control, and the assertion that makes this test's name true: what
     // hangs off the enrolled shell is a TREE — a wrapper shell one level down and

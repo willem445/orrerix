@@ -27,10 +27,12 @@ export type RejoinPlan<T> = { kind: "root" } | { kind: "beside"; anchor: T };
 
 /** Decide where `joining` enters the split tree.
  *
- *  `preferred` is the caller's choice of neighbour — the active pane, or an
- *  explicit `relativeTo` — and is honoured only when it is genuinely in the
- *  tree and is not the joining pane itself. Otherwise the first visible pane
- *  anchors it (the same "first visible" `minimize` picks as the next active).
+ *  `preferred` is the caller's choices of neighbour, best first — an explicit
+ *  `relativeTo`, then the active pane — and the first one genuinely in the
+ *  tree (and not the joining pane itself) wins. So a docked `relativeTo` falls
+ *  back to a visible active pane, where the human is, before anything else.
+ *  Only when none qualifies does the first visible pane anchor it (the same
+ *  "first visible" `minimize` picks as the next active).
  *
  *  `inTree` is every pane currently in the split tree, in the grid's order. The
  *  joining pane is excluded from it here rather than trusted to be absent,
@@ -41,13 +43,13 @@ export type RejoinPlan<T> = { kind: "root" } | { kind: "beside"; anchor: T };
  *  tree is never replaced. */
 export function rejoinAnchor<T>(
   joining: T,
-  preferred: T | null | undefined,
+  preferred: readonly (T | null | undefined)[],
   inTree: readonly T[]
 ): RejoinPlan<T> {
   const others = inTree.filter((p) => p !== joining);
   if (others.length === 0) return { kind: "root" };
-  if (preferred != null && preferred !== joining && others.includes(preferred)) {
-    return { kind: "beside", anchor: preferred };
+  for (const p of preferred) {
+    if (p != null && p !== joining && others.includes(p)) return { kind: "beside", anchor: p };
   }
   return { kind: "beside", anchor: others[0] };
 }

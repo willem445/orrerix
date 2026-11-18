@@ -499,8 +499,9 @@ export class Grid {
     // Anchor decided by the tree, before the new leaf is registered (#3912,
     // `rejoinanchor.ts`): an active or `relativeTo` pane that is docked has no
     // leaf, which the old `!target` test read as an empty grid (re-rooting over
-    // the live tree) or handed to `insertBeside` as `undefined` (a throw).
-    const plan = rejoinAnchor(pane, relativeTo ?? this.active, this.panes());
+    // the live tree) or handed to `insertBeside` as `undefined` (a throw). A
+    // docked `relativeTo` falls back to the active pane before any other.
+    const plan = rejoinAnchor(pane, [relativeTo, this.active], this.panes());
     const leaf: LeafNode = { kind: "leaf", pane, parent: null };
     this.leaves.set(pane, leaf);
 
@@ -972,7 +973,7 @@ export class Grid {
     // reveal sets it without restoring), and treating that as an empty grid
     // replaced the whole tree — the orchestrator included — with this pane
     // (#3912, `rejoinanchor.ts`).
-    const plan = rejoinAnchor(pane, this.active, this.panes());
+    const plan = rejoinAnchor(pane, [this.active], this.panes());
     const leaf: LeafNode = { kind: "leaf", pane, parent: null };
     this.leaves.set(pane, leaf);
     pane.el.style.flex = "1 1 0";
@@ -1043,7 +1044,7 @@ export class Grid {
       pane.acknowledgeAttention();
       // The same rule as `restore` (#3912): the first pane of a group unfold
       // runs while `active` may still be a docked pane.
-      const plan = rejoinAnchor(pane, this.active, this.panes());
+      const plan = rejoinAnchor(pane, [this.active], this.panes());
       const leaf: LeafNode = { kind: "leaf", pane, parent: null };
       this.leaves.set(pane, leaf);
       pane.el.style.flex = "1 1 0";

@@ -1935,7 +1935,8 @@ fn readonly_pane_gets_a_settings_file_even_when_hook_provisioning_fails() {
 #[test]
 fn claude_panes_get_the_group_dir_from_settings_not_add_dir() {
     let (reg, _d) = test_registry();
-    let g = reg.create_group("C:/tmp/repo", rails()).unwrap();
+    // Room for all four at once — `rails()` caps live delegates at two.
+    let g = reg.create_group("C:/tmp/repo", Guardrails { max_agents: 4, ..rails() }).unwrap();
     let group_dir = reg.state_root().join(g.id.as_str()).display().to_string();
     for (role, name) in
         [(Role::Orchestrator, "o"), (Role::Worker, "w"), (Role::Reviewer, "r"), (Role::Planner, "p")]

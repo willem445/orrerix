@@ -429,40 +429,21 @@ impl OrchRegistry {
 
     /// Claude's `--settings` file (#417, split from `--mcp-config`'s file per
     /// rev-4 review N2 — see `write_mcp_config`'s doc): nothing shared with the
-    /// MCP config's schema. Three keys — `permissions` always (#3903), the
-    /// other two only when this agent actually has one:
+    /// MCP config's schema. Three keys, each written only when this agent
+    /// actually has one:
     ///
     /// - `hooks` — the #417/#112 compact-lifecycle config, absent when
     ///   `compact_hook_settings` has nothing to write (no `sh` resolvable).
     /// - `statusLine` — #993 S1, present exactly when `hooks` is (same script,
     ///   same `sh`); chains to the human's own status line resolved from `cwd`
     ///   (see `user_statusline`).
-    /// - `permissions` — always, since #3903: `additionalDirectories` holding
-    ///   exactly this group's state dir (see below). And for a
-    ///   [`Containment::is_read_only`] pane (#610):
+    /// - `permissions` — #610, for a [`Containment::is_read_only`] pane only:
     ///   [`CLAUDE_READONLY_SETTINGS_ALLOW`] under `allow` (the surface `dontAsk`
     ///   is documented to consult — see that constant for the full argument and
     ///   the WebFetch/`git fetch` decisions) and, since #614's review, the
     ///   matching `deny` from `readonly_settings_deny` so the rule that must
     ///   beat `Bash(git *)`'s prefix match sits in the same object as the allow
     ///   itself.
-    ///
-    /// **#3903: the group dir rides HERE, not on `--add-dir`.** A directory
-    /// passed with `--add-dir` stops a fresh interactive pane at Claude Code's
-    /// "Adding a new directory … Is this a directory you created or one you
-    /// trust?" prompt, and only the human may answer it. `--add-dir` is also
-    /// the heavier grant: it loads the directory's `.claude/skills`,
-    /// `.claude/commands`, `.claude/agents` and two settings keys, while
-    /// "Directories listed in `permissions.additionalDirectories` in a
-    /// settings file grant file access only and don't load any of the
-    /// configuration below" (permissions reference, "Additional directories
-    /// grant file access, not configuration"). File access is all a delegate
-    /// needs here — its instruction file, the ledger and scratch files under
-    /// the state dir — and orrerix puts no `.claude/` in it. The list MERGES
-    /// with the human's own (settings reference, "Lists merge instead of
-    /// overriding"), so it adds this one directory and displaces nothing. The
-    /// launch builders omit `--add-dir` exactly when this file exists, and
-    /// keep it as the fallback when it could not be written.
     ///
     /// **The name is now imprecise, deliberately** (same reasoning as
     /// `COMPACT_HOOK_SCRIPT`'s "Naming, kept imprecise on purpose"): this
@@ -471,11 +452,14 @@ impl OrchRegistry {
     /// agent whose `--settings` argv bakes in the old path, which is a worse
     /// trade than an imprecise name one comment can fix.
     ///
-    /// **`None` now means only "could not be written".** Until #610 this
-    /// returned `None` whenever hooks were unavailable; #610 kept a file for a
-    /// read-only pane, and #3903 keeps one for every pane, because the group
-    /// dir's `additionalDirectories` entry is never empty. A `None` therefore
-    /// reports a filesystem failure, and the caller falls back to `--add-dir`.
+    /// **The `None` policy changed with #610, and only for hooks.** This used
+    /// to return `None` whenever hooks were unavailable, and the caller then
+    /// omitted `--settings` entirely. Fail-open is right for a hook (the cost
+    /// is a missed compact nudge) and wrong for permissions: a `dontAsk` pane
+    /// with no allow rules can do nothing at all, so a read-only pane now
+    /// always gets a file. `None` survives for the case that is still genuinely
+    /// empty — a non-read-only agent with no hooks — because pointing
+    /// `--settings` at an empty object would be a flag with no content.
     ///
     /// Keys that would be empty are OMITTED rather than written as `{}`:
     /// `--settings` values "override the same keys in your `settings.json`
@@ -496,13 +480,9 @@ impl OrchRegistry {
             Some(s) => (Some(s.hooks), Some(s.status_line)),
             None => (None, None),
         };
-        let group_dir = self.group_dir(group);
-        let mut permissions = serde_json::Map::new();
-        // #3903: exactly the group's own state dir, nothing above it. See the
-        // doc above for why this replaces `--add-dir`.
-        permissions.insert("additionalDirectories".into(), json!([group_dir.display().to_string()]));
-        if containment.is_read_only() {
-            permissions.insert("allow".into(), json!(CLAUDE_READONLY_SETTINGS_ALLOW));
+        let permissions = containment.is_read_only().then(|| {
+            let mut p = serde_json::Map::new();
+            p.insert("allow".into(), json!(CLAUDE_READONLY_SETTINGS_ALLOW));
             // #614 review B1: the denials ride the SAME object as the allow
             // they have to beat, so `Bash(git *)`'s prefix match over
             // `git commit`/`git push` is carved out inside one documented
@@ -513,8 +493,12 @@ impl OrchRegistry {
             // makes the cross-layer direction sound as well.
             let deny = readonly_settings_deny(containment);
             if !deny.is_empty() {
-                permissions.insert("deny".into(), json!(deny));
+                p.insert("deny".into(), json!(deny));
             }
+            Value::Object(p)
+        });
+        if hooks.is_none() && permissions.is_none() {
+            return None;
         }
         let mut cfg = serde_json::Map::new();
         if let Some(hooks) = hooks {
@@ -523,8 +507,10 @@ impl OrchRegistry {
         if let Some(status_line) = status_line {
             cfg.insert("statusLine".into(), status_line);
         }
-        cfg.insert("permissions".into(), Value::Object(permissions));
-        let dir = group_dir.join("configs");
+        if let Some(permissions) = permissions {
+            cfg.insert("permissions".into(), permissions);
+        }
+        let dir = self.group_dir(group).join("configs");
         fs::create_dir_all(&dir).ok()?;
         let path = dir.join(format!("{agent_id}-hooks.json"));
         fs::write(&path, serde_json::to_string_pretty(&Value::Object(cfg)).unwrap()).ok()?;
@@ -986,10 +972,8 @@ impl OrchRegistry {
         // output, a SEPARATE file from `cfg` (rev-4 review N2: one file
         // serving both `--mcp-config` and `--settings` is a schema-drift
         // time bomb — see `write_mcp_config`'s doc). `None` omits
-        // `--settings` entirely (a non-Claude CLI, or a Claude agent whose
-        // file could not be written), and on Claude it also brings back
-        // `--add-dir <group dir>`, since the file is what carries the group
-        // dir otherwise (#3903).
+        // `--settings` entirely (a non-Claude CLI, or an agent with neither
+        // hooks nor a permissions block — #610).
         hook_settings: Option<&Path>,
         group_dir: &Path,
         workdir: &Path,
@@ -1528,21 +1512,11 @@ impl OrchRegistry {
                 // and cannot close here.
                 let perm = claude_effective_permission_mode(unattended, containment.is_read_only());
                 let model_arg = claude_model_arg(model, knobs.context);
-                // #3903: the group dir reaches a Claude pane through the
-                // `--settings` file's `permissions.additionalDirectories`
-                // (`write_hook_settings_file`, which writes it whenever it
-                // writes the file), because `--add-dir` stops a fresh pane at a
-                // trust prompt only the human may answer. `--add-dir` stays as
-                // the fallback for the one case with no file to carry it: the
-                // write failed. Same slot as before, so that line is unchanged.
-                let add_dir = match hook_settings {
-                    Some(_) => String::new(),
-                    None => format!(" --add-dir \"{}\"", group_dir.display()),
-                };
                 let mut cmd = format!(
                     "claude {session_flag}--mcp-config \"{}\" --strict-mcp-config \
-                     --model {model_arg} --permission-mode {perm}{add_dir} --allowedTools {tools}",
+                     --model {model_arg} --permission-mode {perm} --add-dir \"{}\" --allowedTools {tools}",
                     cfg.display(),
+                    group_dir.display(),
                     tools = brand::MCP_TOOL_PREFIX
                 );
                 if unattended {
@@ -1573,9 +1547,9 @@ impl OrchRegistry {
                 }
                 // #417: Claude Code's own ADDITIVE settings layer — never
                 // clobbers the user's own `.claude/settings.json` (hooks, and
-                // since #610 the read-only pane's `permissions.allow`; since
-                // #3903 every pane's group dir). Omitted entirely only when
-                // the file could not be written — see
+                // since #610 the read-only pane's `permissions.allow`).
+                // Omitted entirely (not pointed at an empty file) when this
+                // agent has nothing to put in one — see
                 // `write_hook_settings_file`.
                 //
                 // **Emitted HERE, after the last `--allowedTools` value, not
@@ -2056,13 +2030,8 @@ impl OrchRegistry {
                 // Same tier predicate as the string form (#465 + #462) — see
                 // that call for why it is is_read_only(), not denies_edits().
                 push(&mut a, claude_effective_permission_mode(unattended, containment.is_read_only()));
-                // #3903 — the same fallback as the string form: `--add-dir`
-                // only when there is no `--settings` file to carry the group
-                // dir. See that form's comment.
-                if hook_settings.is_none() {
-                    push(&mut a, "--add-dir");
-                    a.push(group_dir.display().to_string());
-                }
+                push(&mut a, "--add-dir");
+                a.push(group_dir.display().to_string());
                 push(&mut a, "--allowedTools");
                 push(&mut a, brand::MCP_TOOL_PREFIX);
                 if unattended {
@@ -2075,8 +2044,8 @@ impl OrchRegistry {
                     push(&mut a, pat);
                 }
                 // #417: a SEPARATE file from --mcp-config's (rev-4 review
-                // N2) — omitted entirely only when it could not be written
-                // (#3903). After the allow values, never before them: see the
+                // N2) — omitted entirely when this agent has nothing to put in
+                // one. After the allow values, never before them: see the
                 // string form's comment for the #610 defect that ordering fixes.
                 if let Some(hs) = hook_settings {
                     push(&mut a, "--settings");

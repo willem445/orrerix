@@ -975,7 +975,8 @@ what keeps that claim honest without anyone having to remember to re-run the har
 
 ## Validation-round additions (2026-07-03)
 
-- **Init friction / permissions**: agents launch with `--add-dir <group dir>` and
+- **Init friction / permissions**: agents launch with file access to the group dir (on
+  Claude, through the `--settings` file since #3903, not `--add-dir`) and
   pre-approved loomux MCP tools so initialization needs no human approvals; the "Auto"
   preset additionally pre-approves `git`/`gh`. Bypass-permissions mode was removed
   entirely — its confirm dialog defaults to "exit", which the typed kickoff would
@@ -4547,9 +4548,79 @@ tightening either reader's validation would be a silent breakage no local test c
 review, N2). Two small generated files, one per flag, costs one extra `fs::write` per Claude
 spawn and removes that risk entirely. Absent a resolvable `sh` interpreter (`resolve_hook_sh`,
 mirroring the `.cmd` shim delegators' `winpath::resolve_sh` reasoning — never trusting a bare
-`sh` on PATH, which Windows doesn't guarantee), `write_hook_settings_file` returns `None` and
-`--settings` is omitted entirely — never pointed at an empty file, fail-open, same policy as a
-missing gh/git shim.
+`sh` on PATH, which Windows doesn't guarantee), the file carries no `hooks` key — fail-open,
+same policy as a missing gh/git shim. The file itself is still written, because since #610 a
+read-only pane's `permissions.allow` rides in it and since #3903 every pane's group dir does
+(see the next section); `write_hook_settings_file` returns `None` only when the write fails.
+
+#### #3903: the group dir rides `--settings`, not `--add-dir`
+
+**The defect.** Every Claude pane used to launch with `--add-dir "<group dir>"`, so that reading
+its instruction file never prompted. Current Claude Code releases stop a fresh interactive pane on
+that flag with "Adding a new directory: … This session hasn't worked here before. Is this a
+directory you created or one you trust?", and wait. Agents may not answer a security prompt
+(CLAUDE.md constraint 9), so every new delegate stalled until the human clicked in its pane.
+
+**What a delegate needs from the group dir is file access, and nothing else.** It reads its own
+instruction file there (the post-compact self-check names that path), and the state dir holds
+the ledger and scratch files orrerix writes on its behalf. Claude Code itself reads the
+`--mcp-config` and `--settings` files there, which are flags, not working directories. orrerix
+puts no `.claude/` directory in the group dir: a persona's agent definition goes to
+`~/.claude/agents` (`agentfiles.rs`), not here.
+
+**The two documented ways to grant that access are not equal**
+([permissions reference](https://code.claude.com/docs/en/permissions), "Working directories" and
+"Additional directories grant file access, not configuration"):
+
+- `--add-dir` grants file access AND loads the directory's `.claude/skills`, `.claude/commands`,
+  `.claude/agents`, and the `enabledPlugins`/`extraKnownMarketplaces` settings keys. That is
+  configuration a directory supplies, which is what a trust question protects.
+- `permissions.additionalDirectories` in a settings file: "Directories listed in
+  `permissions.additionalDirectories` in a settings file grant file access only and don't load
+  any of the configuration below."
+
+So orrerix now writes `permissions.additionalDirectories: ["<group dir>"]` into the per-agent
+`--settings` file it already generates, and drops `--add-dir` from the Claude launch line.
+`--settings` is the command-line tier, which "can set any key your user settings file can set"
+([settings](https://code.claude.com/docs/en/settings), "Change a setting for one session"), and
+list keys merge across tiers ("Lists merge instead of overriding", same page), so the entry adds
+one directory and removes nothing the human configured. The trust gate the docs DO describe for
+this key applies to a repository's own `.claude/settings.json` ("entries in a project's
+`.claude/settings.json` take effect only after you accept the workspace trust dialog",
+[settings reference](https://code.claude.com/docs/en/settings-reference),
+`permissions.additionalDirectories`), not to a file the launcher passes.
+
+**Scope: exactly one directory.** The entry is `group_dir_at(root, group)` and nothing else: not
+the orchestration root above it, not the repo (which is the pane's working directory already),
+and not a home directory. A group dir holds only what orrerix generated for that group.
+
+**This is not pre-trust, and orrerix answers nothing.** No `~/.claude.json` key is written (the
+docs' "trust it by hand" route, `projects["<path>"].hasTrustDialogAccepted`, is exactly what this
+avoids), no prompt is answered on the human's behalf, and the repo's own workspace-trust dialog
+is untouched. The grant is the narrower of the two documented grants of the same access.
+
+**The fallback.** The launch builders emit `--add-dir` exactly when there is no `--settings` file
+to carry the directory, which since this change means the file could not be written. In that case
+the line is the pre-#3903 line byte for byte: a pane that may stall on the prompt beats a pane
+that cannot read its own instructions.
+
+**Residual — a live check for the human.** The docs describe the add-dir prompt nowhere, so they
+say neither when it fires nor that `permissions.additionalDirectories` skips it. The argument
+above rests on what the docs DO say: the settings key is the configuration-free grant, and its
+only documented trust gate is the repository-file one. Live check: spawn a Claude delegate in a
+fresh group and confirm it reaches its kickoff with no "Adding a new directory" prompt, and that
+`Read` on its instruction file does not prompt. If a release prompts for settings-supplied
+directories too, nothing here hides it: the pane stalls visibly as before, and surfacing such a
+stall to the human as needs-you (the interim ask in #3903) is the next step, not shipped here.
+
+**Other CLIs, checked and left alone.** Copilot's `--add-dir` is documented as "Allow file access
+to a directory and load its skills … and agents … as trusted configurations"
+([Copilot CLI command reference](https://docs.github.com/en/copilot/reference/copilot-cli-reference/cli-command-reference)),
+and the Copilot arm uses it to pre-trust the workspace, so it is not the same mechanism and has no
+settings-file equivalent in that arm. For Gemini's `--include-directories`, the trusted-folders
+page describes a dialog only for the folder Gemini runs from, and only once the human enables
+`security.folderTrust`; it says nothing about included directories
+([trusted folders](https://github.com/google-gemini/gemini-cli/blob/main/docs/cli/trusted-folders.md)).
 
 The hook `command` for each event explicitly invokes the resolved `sh` against ONE generic
 script (`COMPACT_HOOK_SCRIPT`, written once per machine to a `compacthook/` dir sibling to

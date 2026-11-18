@@ -923,7 +923,11 @@ fn a_promoted_pane_resumes_its_own_session_and_gets_orchestrator_wiring() {
     // FOR (a prompt-only re-roling would have none of these).
     assert!(req.command.contains("--mcp-config"), "MCP identity: {}", req.command);
     assert!(req.command.contains("--strict-mcp-config"), "{}", req.command);
-    assert!(req.command.contains("--add-dir"), "group dir access: {}", req.command);
+    // #3903: group dir access rides the `--settings` file's
+    // `permissions.additionalDirectories` now, not `--add-dir` (which raises
+    // a trust prompt only the human may answer).
+    assert!(req.command.contains("--settings"), "group dir access: {}", req.command);
+    assert!(!req.command.contains("--add-dir"), "{}", req.command);
     // The silent-failure trap named in the plan: a promoted pane spawned
     // without env looks fine, and has no gh shim and no group dir.
     let env: HashMap<&str, &str> = req.env.iter().map(|(k, v)| (k.as_str(), v.as_str())).collect();

@@ -99,6 +99,7 @@ import {
   type AttentionItem,
 } from "./orchestration";
 import { LEAD_RESTORE_GUARDRAILS } from "./agents";
+import { typeForkInto } from "./forkopen";
 import { tabAttention, sameAttention, findPaneByPty, orchestratorLaunchTarget } from "./tabroute";
 import { AttentionGate } from "./attentiongate";
 import {
@@ -953,7 +954,8 @@ const orchWiring: OrchWiring = {
       "row",
       source
     );
-    if (pane.ptyId !== null) remint.bind(pane.ptyId);
+    if (pane.ptyId !== null && !opts.typedFork) remint.bind(pane.ptyId); // a typed fork's bind is typeForkInto's, awaited
+    if (opts.typedFork && !(await typeForkInto(pane, remint, opts.forkOf, opts.typedFork.marker, () => ws.grid.closePane(pane)))) return false;
     if (pane.agentCli !== null) await adoptIfEligible(pane);
     reportHumanSession(pane);
     reapIfExited(ws, pane);
@@ -3488,7 +3490,7 @@ async function reconcileSessionIds(): Promise<void> {
       // alone — see that function's filter).
       const key = String(p.ptyId);
       keyed.set(key, p);
-      planPanes.push({ key, cli: p.agentCli!, cwd: p.workdir!, eligibleSinceMs: p.firstInputAt! });
+      planPanes.push({ key, cli: p.agentCli!, cwd: p.workdir!, eligibleSinceMs: p.firstInputAt!, title: p.forkMarker ?? undefined });
     }
     const adoptions = planSessionAdoption(planPanes, records, claimedSessionIds());
     if (!adoptions.length) return;

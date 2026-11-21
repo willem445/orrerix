@@ -1075,7 +1075,8 @@ fn fork_session_tool() -> Value {
          there is no worktree to cut there, so the fork opens in that folder beside its source, and \
          the answer says so. REFUSED, with the reason: an orchestrator, manager or lead source; a source a \
          review or plan drive owns (the driver routes its panes by agent id and never briefed the \
-         fork); a CLI with no command-line fork (copilot, gemini); a structured-driver block; a source \
+         fork); a CLI with no fork (gemini), or a copilot delegate (copilot's /fork is typed into \
+         a standalone pane, so only a lead's own copilot pane forks); a structured-driver block; a source \
          with no recorded session yet. As a LEAD, forking your OWN pane (agent = your id) opens a \
          standalone pane beside yours for your human instead — never a second lead. Nothing merges a \
          fork back: its results come back through its reports and its own PR.",

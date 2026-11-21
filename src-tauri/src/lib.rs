@@ -343,6 +343,7 @@ pub fn run() {
             orchestration::orch_human_pane_session,
             orchestration::orch_fork_agent,
             orchestration::orch_fork_solo_result,
+            orchestration::orch_solo_fork_deliver,
             orchestration::todo::todo_snapshot,
             orchestration::todo::todo_apply,
             cliprobe::probe_agent_cli,

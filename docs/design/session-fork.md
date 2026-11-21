@@ -6,9 +6,11 @@ directory, without disturbing the source. Slice **F1** shipped that gesture for
 **Claude Code alone**, on a standalone (Solo) pane. Slice **F2** adds codex, pi and
 opencode, the delegate fork (`fork_session` / `orch_fork_agent`), a lead's
 self-fork into a Solo pane, and the two F1 residuals #3331 names. The rejoin
-slice (F3) is dropped at the human's direction, and copilot stays refused (F4,
-held on live check L4). Slice **F5** (#3368) names a fork as it is made and
-derives its lineage for the session browser and the pane header.
+slice (F3) is dropped at the human's direction. Slice **F5** (#3368) names a fork
+as it is made and derives its lineage for the session browser and the pane
+header. **#3898** (the F4 copilot slice) forks copilot by TYPING its interactive
+`/fork` into a new Solo pane — see [copilot: a typed fork](#copilot-a-typed-fork-3898);
+a copilot delegate stays refused, and live check L4 is the human's.
 
 This note carries the survey citations both slices rest on, the argued carve-out
 of [session-id-learning.md](session-id-learning.md) B3, the live checks (L1 still
@@ -58,24 +60,29 @@ gesture asks.
 | **opencode** | `Flag { flag: "--fork", premints_child: false }` | `--session <parent> --fork` | learned by the store watcher | documented: "Fork the session when continuing (use with `--continue` or `--session`)"; read at the pinned tag `v1.18.25` (also the installed build): `cli/cmd/tui.ts` refuses `--fork` without `--session`/`--continue`, and the TUI calls `session.fork` once sync completes |
 | **codex** | `Subcommand("fork")` | `fork <parent>` in `resume <id>`'s slot, last on the line | learned by the store watcher | `codex fork [SESSION_ID]` — `cli/src/main.rs` at the pin `rust-v0.153.4` (`Subcommand::Fork`, `ForkCommand`); the TUI resolves a fork's cwd through the same `resolve_cwd_for_resume_or_fork` a resume uses, so the resume line's `-C` does the same work |
 | **pi** | `ParentFlag("--fork")` | `--session-id <child> --fork <parent>` | pre-minted, always | `--fork <path\|id>` ("Fork a session file or partial session ID into a new session"), and L2 answered below from the installed package |
-| **copilot** | `None` | — | — | no argv fork exists. `/fork` is interactive, absent from both published references, and per the issue lead it moves the *current* pane into the fork — which would invert the roster. Held behind live check L4 (#3318 F4) |
+| **copilot** | `Slash("/fork")` | the plain resume of the parent (`--resume=<parent>`) in a NEW Solo pane, then `/fork <marker>` TYPED into that pane | learned by the reconciler, by the marker as the session's name | no argv fork exists (command reference, checked 2026-11-17: the option table has none). `/fork [NAME]` is documented as "Fork the current session into a new session, optionally with a name. Usable while the agent is running—the source session keeps working in the background" — so the pane that types it becomes the child, and it is typed into a new pane, never the source. Solo only: a delegate is refused (`fork_delegate_refusal`). See [copilot: a typed fork](#copilot-a-typed-fork-3898); live check L4 is the human's |
 | **gemini** | `None` | — | — | documented *not* to exist: the command reference lists `/chat save\|resume\|list\|delete\|share` and `/resume`, and no fork |
 
-**Four variants, because the four vendors spell a fork three ways.** A flag with
+**Five variants, because the five vendors spell a fork four ways.** A flag with
 no value on the resume line (claude, opencode); a subcommand in the resume
 subcommand's slot (codex); a flag carrying the PARENT beside the CLI's own
-open-or-create id flag naming the CHILD (pi). Each row is pinned by a test that
+open-or-create id flag naming the CHILD (pi); and no line spelling at all — a
+command typed into the pane after it boots (copilot, #3898). Each line row is pinned by a test that
 builds the fork line and the same CLI's resume (or, for pi, fresh) line and
 asserts they differ in exactly the documented token(s) — `a_codex_fork_line_…`,
 `an_opencode_fork_line_…`, `a_pi_fork_line_…` beside F1's claude test — and
 `every_fork_line_tokenizes_to_its_argv_form` keeps the two spawn forms equal.
+copilot's row has no line to pin against its resume; its line IS the resume,
+and what is pinned instead is that the typed command stays off it.
 
 The frontend holds a mirror of the four rows (`FORK_SEAMS`, `src/panerestore.ts`),
 because a Solo fork builds its line there and never reaches the backend builder.
 `the frontend's fork table agrees with the engine's CliCaps rows, row by row`
 (`test/panerestore.test.ts`) reads the Rust table off disk, with a population
 control that every row was parsed, and requires each forkable row's token to be
-on the line the frontend emits — so a row cannot move on one side alone.
+on the line the frontend emits — or, for a `Slash` row, to be the command the
+frontend types and to be absent from the line — so a row cannot move on one
+side alone.
 
 ### L2 and L3, answered from the vendors' own code
 
@@ -200,6 +207,13 @@ case:
   describe, not a degraded restore.
 - **It is idempotent**, which is what makes it safe on *every* capture rather
   than on a special one: a record already discharged comes back unchanged.
+- **A typed fork's line carries no token at all (#3898)**: copilot's fork pane
+  runs `copilot … --resume=<parent>`, the plain resume, and the fork is typed
+  in afterwards. So the token scan cannot see it, and `forkLineNamesParent` —
+  `forkOf` set AND the line naming exactly `forkOf` — is the second trigger for
+  the discharge, and the reason `adoptableSessionId` (which now takes `forkOf`)
+  refuses to record the parent's id on that pane. A human's own
+  `--resume=<id>` line has no `forkOf` and stays byte-identical.
 
 **F2's one exception to B3's reconciler exclusion.** A codex or opencode fork
 cannot be handed its child's id at open, so the frontend reconciler is the only
@@ -213,6 +227,122 @@ argument is recorded beside B3 in [session-id-learning.md](session-id-learning.m
 `forkOf` also survives the discharge as the pane's **provenance** — after the
 command line is scrubbed, it is the only thing that still says this conversation
 began as a copy of that one.
+
+## copilot: a typed fork (#3898)
+
+### What the reference says
+
+From copilot's [command reference](https://docs.github.com/en/copilot/reference/copilot-cli-reference/cli-command-reference),
+fetched 2026-11-17 through the docs article-body API:
+
+1. **`/fork [NAME]`, `/branch [NAME]`** — "Fork the current session into a new
+   session, optionally with a name. Usable while the agent is running—the
+   source session keeps working in the background. `/fork worktree` forks the
+   current session … into a new Git worktree branched off `HEAD`." The pane that
+   types it moves to the NEW session, and the source keeps running in the
+   background of the same process.
+2. **No argv fork.** The option table has `--resume[=VALUE]`, `--session-id ID`,
+   `--continue`, `-n/--name` and `--connect`, and nothing that forks.
+3. **The child's id is not reported anywhere.** What the reference does say is
+   that a name can be given: `/fork NAME`, and `--name` is "Used by `--resume`
+   and `/resume` to find sessions by name".
+
+### Which pane types it
+
+Typing `/fork` into the SOURCE would make the source the child, which is the
+roster inversion #3318 F4 held the row for. So orrerix opens a **new** Solo pane
+on the source's line with its session and solo identity stripped, a fresh solo
+identity minted, and `--resume=<parent>` appended. It then types `/fork <marker>`
+into **that** pane. The source pane is never written to.
+
+The typing goes through the backend's delivery pipeline
+(`OrchRegistry::deliver_solo_fork`, the `orch_solo_fork_deliver` command), never
+a raw pty write. That pipeline waits for the resumed CLI to paint and go quiet,
+adds copilot's focus-in prefix (#98), checks the echo and confirms the submit.
+It is the path copilot's `/compact` already takes. The delivery is
+`ResumeKickoff`-class. The lost-kickoff monitor re-delivers only `FreshKickoff`,
+so one gesture types at most one `/fork`, and a second child is never minted by
+a retry. The door admits exactly one text, the row's command plus a marker in
+`slash_fork_text`'s grammar, and only into a bound Solo pane on a `Slash` CLI.
+It is not a way to type arbitrary text into a pane. Each typed fork writes a
+`solo-fork-typed` audit row naming the parent and the marker.
+
+If the new pane cannot be typed into, it is closed and the human is told. That
+covers a failed solo mint (which is best-effort for every other fork, but here
+the identity is the only thing that can type), a failed bind, or a refused
+delivery. Left open, the pane would be a second pane in the parent's session
+with nothing to make it fork.
+
+### How the child's id is learned (#3888)
+
+The marker is `<slug of the pane name, ≤40>-<6 hex>`, one token of `[a-z0-9-]`
+(`forkMarker`, `src/typedfork.ts`). It names the child, and the reconciler adopts
+a session for this pane only when that session's **title is the marker**
+(`ReconcilePane.title`). The other conditions are the usual ones: copilot, the
+pane's cwd, newer than the delivery (`noteTypedFork` stamps the eligibility clock
+before the delivery is queued), and unclaimed. The parent is claimed through
+`forkOf`, as for every fork. So the match is by identity, not "the one new
+copilot session in this folder". A sibling copilot pane's new session in the
+same folder cannot be recorded as the child, which is the crossing #3888
+describes for copilot panes in general.
+
+Why one token: the reference documents `/fork [NAME]` and is silent on how NAME
+is parsed, so nothing that could split or be quoted differently reaches the pane.
+The nonce makes two forks of one pane differ, and it means the marker is never
+the bare word `worktree`, which would start a different gesture.
+
+Two facts here are **orrerix's own observation, not the reference's**: that
+copilot stores a session's name as `name:` in `workspace.yaml`
+(`read_copilot_session` already reads it as the title), and that `/fork NAME`
+writes it there. If either is wrong, nothing is adopted. The fork pane stays
+unrecorded, and its record is discharged to a fresh line on the next restart
+(the one-shot rule above). That failure is safe: no crossing, and the parent is
+not lost. The marker is held in memory only (`Pane.forkMarker`): it is needed
+only until the child is adopted, and a restart before then discharges the line
+anyway.
+
+### Two processes on one session, briefly
+
+The fork pane resumes the parent while the source pane still has it open. That
+cannot be avoided: the only alternative is to type into the human's live pane.
+It is bounded:
+
+- the fork pane never sends a turn to the parent: the first and only thing typed
+  into it is `/fork`;
+- after `/fork`, the parent stays an **idle** background session in the fork
+  pane's process (reference item 1), and no turn ever runs in it;
+- copilot's own picker expects one session to be open in two places ("Sessions
+  already open in another window float to the top").
+
+The reference does not say what concurrent opens of one session do to its
+on-disk state. That is what **live check L4** settles. One residual stays for
+the human: a person who uses the fork pane's sidebar to bring the parent back to
+the foreground and types there has made two writers. Resuming any open session by
+hand does the same today, and orrerix never does it.
+
+### Why a delegate is refused
+
+A delegate fork opens in a **new worktree**. The reference lists `--resume`
+among the things that set "the session working directory (the `--resume`,
+`--worktree`, or `-C` directory)". So a resumed parent may run in the PARENT's
+checkout: two agents in one checkout is the conflict #338/#359 forbids, and the
+backend session watcher's cwd match would then not find the child. A delegate's
+first deliveries (the autopilot consent and the fork turn) also have an
+unverified order around a typed `/fork`. `fork_delegate_refusal` refuses it in
+those words. `fork_agent` and the line builders (`fork_line`) ask that predicate
+and the gesture asks `fork_refusal`, so the pane menu greys the delegate row out
+with the same reason (`canForkDelegateCli`). A **lead's** self-fork opens a Solo
+pane in the lead's own directory and is admitted.
+
+### Live check L4 (the human's)
+
+1. Fork a copilot Solo pane. The original keeps its conversation, and the new
+   pane switches to a session named `<marker>`.
+2. Within about a minute, the new pane's recorded session is the child: the
+   pane header's crumb and the Sessions tree.
+3. Restart orrerix. The fork pane resumes the **child**.
+4. With both panes open, the parent's transcript gets no stray entries from the
+   fork pane.
 
 ## The delegate fork (F2)
 
@@ -243,6 +373,7 @@ lead source a second root, so all three are refused outright.
 | orchestrator, manager, lead | a fork inherits the block; none of those is a delegate anyone may open a second of (a lead's own pane forks into a Solo pane instead, below) |
 | a pane a live review or plan drive owns | the drivers' ownership ladders are per agent id (`rd_owner`, `pd_owner`), and a fork is a new agent they never briefed — refusing is honest, a third owner would be invention. An UNREADABLE review-drive record refuses too (`rd_driven_panes`), the same fail-closed reading `kill_agent` takes on the same file |
 | a CLI whose seam is `None` | the row's own note, verbatim (`fork_refusal`) |
+| a copilot delegate (a `Slash` seam, #3898) | its fork is typed into a Solo pane, and a delegate's new worktree may not be where a resumed copilot session runs (`fork_delegate_refusal`) |
 | a structured-driver block | `pi_launch_spec` has no fork parameter, so a fork there would start a FRESH session and call it a fork |
 | a source with no recorded session | nothing to fork yet; codex and opencode record theirs a few seconds after the first prompt |
 | `worktree: false` on a worker or reviewer | #338/#359: two agents sharing one checkout is the conflict that rule exists for |
@@ -315,7 +446,7 @@ minted — never a lead one. The human can do the same from the lead pane's menu
 | --- | --- | --- |
 | Solo (or no identity yet) | a Solo fork beside it | frontend (`agentForkCommand`) — every CLI with a seam since F2 |
 | a lead's own pane | a Solo fork, the lead identity shed | frontend, the same route |
-| worker / reviewer / planner | a new delegate of the same block | backend (`fork-delegate` → `orch_fork_agent` → `fork_agent`) |
+| worker / reviewer / planner | a new delegate of the same block (a copilot one is a disabled row, #3898) | backend (`fork-delegate` → `orch_fork_agent` → `fork_agent`) |
 | orchestrator / manager | no row | — |
 
 A delegate row decides nothing beyond the CLI's seam, so the menu can never
@@ -349,7 +480,8 @@ toast.
 | the delegate fork | `src-tauri/src/orchestration/fork.rs` + `src-tauri/src/orchestration/registry/solo.rs` + `src-tauri/src/orchestration/registry/spawn.rs` | `ForkSpawn`, `fork_kickoff_prompt` (in `fork.rs`); `fork_agent`, `request_solo_fork` (in `registry/solo.rs`); `spawn_agent_full` (in `registry/spawn.rs`) |
 | the MCP tool | `src-tauri/src/orchestration/mcp.rs` | `fork_session_tool`, the `fork_session` arm, the lead's listing and gate rows |
 | the commands | `src-tauri/src/orchestration/commands/panes.rs` + `src/orchestration.ts` | `orch_fork_agent` / `orchForkAgent`; `orch_fork_solo_result` / `orchForkSoloResult` (the lead self-fork's ack) |
-| the frontend line | `src/panerestore.ts` | `FORK_SEAMS`, `forkGrammarOf`, `agentForkCommand`, `canForkCli`, `forkPremintsChild`, `forkPaneName` |
+| the frontend line | `src/panerestore.ts` | `FORK_SEAMS`, `forkGrammarOf`, `agentForkCommand`, `canForkCli`, `canForkDelegateCli`, `forkTypedCommand`, `forkLineNamesParent`, `forkPremintsChild`, `forkPaneName` |
+| the typed fork (#3898) | `crates/loomux-engine/src/model.rs` + `src-tauri/src/orchestration/fork.rs` + `src-tauri/src/orchestration/registry/solo.rs` + `src/typedfork.ts` + `src/forkopen.ts` + `src/sessionreconcile.ts` | `ForkSeam::Slash`, `fork_delegate_refusal`; `slash_fork_text`; `deliver_solo_fork`; `forkMarker`; `typeForkInto`, `orchSoloForkDeliver`; `ReconcilePane.title` |
 | the one-shot rule | `src/panerestore.ts` + `src/panecapture.ts` | `forkRecordCommand`, applied in `capturePane`; `hasForkSession` per CLI |
 | the reconciler exception | `src/main.ts` + `src/pane.ts` | `reconcileCandidates`, `claimedSessionIds`, `Pane.forkedFrom` |
 | the record | `src/tabstore.ts` | `PersistedPane.forkOf` (additive, blank coerces to null) |
@@ -401,6 +533,19 @@ toast.
     `agent-fork` only from the frontend's ack once the Solo pane opened
     (`agent-fork-failed` with the reason otherwise) — there the row does mean
     the pane opened, because the open happens after the backend has answered.
+- **`ForkSeam::Slash`** (#3898) — a fifth variant of the internal table type;
+  reaches no file and no wire. `fork_delegate_refusal` is new beside
+  `fork_refusal`.
+- **The `orch_solo_fork_deliver` Tauri command** (#3898) — `{ agentId,
+  parentSession, marker }`, in the `orch-control` ACL set, `async` through
+  `run_blocking` (it appends the audit log and persists the delivery queue, like
+  `orch_steer`). Wire, operator, in the remote-engine roster.
+- **The `solo-fork-typed` audit action** (#3898) — `agent`, `cli`,
+  `parent_session`, `marker`, written in the `__solo__` group before the
+  delivery is admitted; the delivery's own rows follow it.
+- **`adoptableSessionId(command, argv, forkOf?)`** and **`ReconcilePane.title?`**
+  (#3898) — frontend-internal; both new parameters are optional and default to
+  the old behaviour.
 - **The `orch_fork_solo_result` Tauri command** (F2, review round 1) — the
   frontend's ack for `orch-fork-solo-request`, in the `orch-control` ACL set,
   `async` through `run_blocking` because it writes the audit log.
@@ -490,12 +635,13 @@ child id is always freshly minted, so a loop is impossible by construction, and
 the walk stops at the first repeat instead of looping; the tree puts every
 member of a loop at the top level, since none of them is reachable from a root.
 
-**orrerix's record is the source of truth for all four forkable CLIs.** pi's
+**orrerix's record is the source of truth for every forkable CLI.** pi's
 `parentId` and opencode's `parent_id` are NOT read: opencode does not set
 `parent_id` on a fork at all (L3 above), claude and codex have no such field
 to read, and a lineage that read vendor fields would mean something different
-per CLI. orrerix's pointer is written by orrerix's gesture, identically for all
-four.
+per CLI. orrerix's pointer is written by orrerix's gesture, identically for
+every CLI — copilot's typed fork included, whose `forkOf` is set at the open
+like any other.
 
 ### Where it shows
 
@@ -543,6 +689,7 @@ the second is the eviction rule the log already documents.
   one id as *interleaving*, i.e. the failure mode. The rejoin slice (F3) was
   dropped by the human; a true transcript merge would mean writing a vendor's
   internal format, and orrerix will not.
-- **copilot stays refused** (F4, held on live check L4).
+- **copilot stayed refused** at F2. #3898 then forked it by a typed `/fork`, Solo only (see
+  [copilot: a typed fork](#copilot-a-typed-fork-3898)); live check L4 is the human's.
 - **The Agents tab does not show "fork of …" yet.** The roster records the
   parent; rendering it is a UI follow-up, not part of F2's brief.

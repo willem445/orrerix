@@ -68,5 +68,6 @@ permissions = [
     "allow-orch-human-pane-session",
     "allow-orch-fork-agent",
     "allow-orch-fork-solo-result",
+    "allow-orch-solo-fork-deliver",
     "allow-todo-apply",
 ]

@@ -1900,12 +1900,101 @@ fn readonly_pane_gets_a_settings_file_even_when_hook_provisioning_fails() {
     let planner_cmd = reg.spawn_request_for_test(&p.id).expect("no spawn request for the planner").command;
     assert!(planner_cmd.contains("--settings"), "{planner_cmd}");
 
-    // The fail-open policy is unchanged for a pane with nothing to put in the
-    // file: a worker has no permissions block of its own, so with hooks
-    // unavailable there is still no settings file and no flag.
+    // #3903 retired the last empty case: a worker has no allow rules of its
+    // own, but every pane's file carries the group dir, so with hooks
+    // unavailable the worker still gets a file, the flag, and no `--add-dir`.
     let worker_cmd = reg.spawn_request_for_test(&w.id).expect("no spawn request for the worker").command;
-    assert!(!settings(&w.id).exists(), "a non-read-only pane with no hooks must get no settings file");
-    assert!(!worker_cmd.contains("--settings"), "{worker_cmd}");
+    let worker_cfg: Value = serde_json::from_str(
+        &fs::read_to_string(settings(&w.id))
+            .unwrap_or_else(|e| panic!("#3903: a pane with no hooks must still get a settings file: {e}")),
+    )
+    .unwrap();
+    assert!(worker_cfg.get("hooks").is_none(), "{worker_cfg}");
+    assert!(worker_cfg["permissions"].get("allow").is_none(), "a worker's file grants no allow rules: {worker_cfg}");
+    assert_eq!(
+        worker_cfg["permissions"]["additionalDirectories"],
+        json!([reg.state_root().join(g.id.as_str()).display().to_string()]),
+        "{worker_cfg}"
+    );
+    assert!(worker_cmd.contains("--settings"), "{worker_cmd}");
+    assert!(!worker_cmd.contains("--add-dir"), "{worker_cmd}");
+}
+
+/// #3903: every Claude pane reaches its group's state dir through the
+/// `--settings` file's `permissions.additionalDirectories`, never through
+/// `--add-dir`. A directory passed with `--add-dir` stops a fresh interactive
+/// pane at Claude Code's "Adding a new directory … Is this a directory you
+/// created or one you trust?" prompt, which only the human may answer, so the
+/// pane stalls until they do.
+///
+/// Asserted on the real spawn request (string AND argv — the pane runs one,
+/// the restore path the other) for all four classes, because the read-only
+/// planner's file had its own `permissions` object before this fix and the
+/// directory entry must land in it without displacing the #610 allow list.
+/// The entry is exactly the group dir and nothing else: no parent, no repo.
+#[test]
+fn claude_panes_get_the_group_dir_from_settings_not_add_dir() {
+    let (reg, _d) = test_registry();
+    // Room for all four at once — `rails()` caps live delegates at two.
+    let g = reg.create_group("C:/tmp/repo", Guardrails { max_agents: 4, ..rails() }).unwrap();
+    let group_dir = reg.state_root().join(g.id.as_str()).display().to_string();
+    for (role, name) in
+        [(Role::Orchestrator, "o"), (Role::Worker, "w"), (Role::Reviewer, "r"), (Role::Planner, "p")]
+    {
+        let a = reg.spawn_agent(&g.id, role, name, "t", false, None).unwrap();
+        let req = reg.spawn_request_for_test(&a.id).unwrap_or_else(|| panic!("no spawn request for {name}"));
+        assert!(!req.command.contains("--add-dir"), "{name}: --add-dir is what raises the prompt: {}", req.command);
+        assert!(!req.argv.iter().any(|t| t == "--add-dir"), "{name}: {:?}", req.argv);
+
+        let path = reg.state_root().join(g.id.as_str()).join("configs").join(format!("{}-hooks.json", a.id));
+        assert!(
+            req.argv.windows(2).any(|w| w[0] == "--settings" && w[1] == path.display().to_string()),
+            "{name}: the pane must be pointed at the file that carries the group dir: {:?}",
+            req.argv
+        );
+        let cfg: Value = serde_json::from_str(
+            &fs::read_to_string(&path).unwrap_or_else(|e| panic!("{name}: no settings file at {path:?}: {e}")),
+        )
+        .unwrap();
+        assert_eq!(
+            cfg["permissions"]["additionalDirectories"],
+            json!([group_dir.clone()]),
+            "{name}: exactly the group dir, nothing above it: {cfg}"
+        );
+        if role == Role::Planner {
+            assert!(
+                cfg["permissions"]["allow"].as_array().is_some_and(|a| !a.is_empty()),
+                "{name}: the #610 allow list must survive beside the new key: {cfg}"
+            );
+        }
+    }
+}
+
+/// #3903, the builder half: `--add-dir <group dir>` is emitted exactly when
+/// there is no `--settings` file to carry the group dir — the fallback for a
+/// settings write that failed — and in the same slot as before, so the
+/// fallback line is the pre-#3903 line byte for byte. Both forms, both states.
+#[test]
+fn claude_add_dir_is_only_the_fallback_when_no_settings_file_exists() {
+    let (reg, _d) = test_registry();
+    let cfg = Path::new("C:/x/cfg.json");
+    let hooks = Path::new("C:/x/cfg-hooks.json");
+    let gdir = Path::new("C:/data/group");
+    let wd = Path::new("C:/repo");
+    let p = PersonaInject::default();
+
+    let with = reg.build_agent_command("claude", "sonnet", true, cfg, Some(hooks), gdir, wd, None, false, Containment::None, &p);
+    let with_argv = reg.build_agent_argv("claude", "sonnet", true, cfg, Some(hooks), gdir, wd, None, false, Containment::None, &p);
+    assert!(!with.contains("--add-dir"), "{with}");
+    assert!(!with_argv.iter().any(|t| t == "--add-dir"), "{with_argv:?}");
+    assert!(!with.contains("C:/data/group"), "the group dir must not reach the line any other way: {with}");
+    assert_eq!(shell_tokenize(&with), with_argv);
+
+    let without = reg.build_agent_command("claude", "sonnet", true, cfg, None, gdir, wd, None, false, Containment::None, &p);
+    let without_argv = reg.build_agent_argv("claude", "sonnet", true, cfg, None, gdir, wd, None, false, Containment::None, &p);
+    assert!(without.contains("--permission-mode auto --add-dir \"C:/data/group\" --allowedTools"), "{without}");
+    assert!(without_argv.windows(2).any(|w| w == ["--add-dir", "C:/data/group"]), "{without_argv:?}");
+    assert_eq!(shell_tokenize(&without), without_argv);
 }
 
 /// Split a shell command line into argv, honoring the two quotings

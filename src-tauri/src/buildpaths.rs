@@ -55,8 +55,7 @@ pub fn profile_dir_from_out_dir(out_dir: &std::path::Path) -> Option<&std::path:
 pub fn conhost_destination(out_dir: &std::path::Path) -> Result<&std::path::Path, String> {
     profile_dir_from_out_dir(out_dir).ok_or_else(|| {
         format!(
-            "orrerix: no `build` directory above OUT_DIR ({}), an unrecognised cargo \
-             layout, so conpty.dll and OpenConsole.exe were not copied next to the \
+            "orrerix: no `build` directory above OUT_DIR ({}), an unrecognised cargo           layout, so conpty.dll and OpenConsole.exe were not copied next to the \
              executables and this build's panes use the inbox Windows conhost \
              (see src-tauri/src/buildpaths.rs, #3897)",
             out_dir.display()

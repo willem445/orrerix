@@ -58,6 +58,7 @@ import { WATCHED_MARK, dockChipWatched } from "./watchedpanes";
 import { dockChipQueue, queuePresentation } from "./queuebadge";
 import { dockChipMail, mailboxPresentation } from "./mailboxbadge";
 import { planGroupMinimize } from "./group";
+import { rejoinAnchor } from "./rejoinanchor";
 import {
   shouldFocusNewPane,
   shouldRestoreFocus,
@@ -495,23 +496,28 @@ export class Grid {
       ? this.maximized
       : null;
     if (this.maximized && !keepMaximized) this.exitMaximize(); // a layout change exits fullscreen
+    // Anchor decided by the tree, before the new leaf is registered (#3912,
+    // `rejoinanchor.ts`): an active or `relativeTo` pane that is docked has no
+    // leaf, which the old `!target` test read as an empty grid (re-rooting over
+    // the live tree) or handed to `insertBeside` as `undefined` (a throw). A
+    // docked `relativeTo` falls back to the active pane before any other.
+    const plan = rejoinAnchor(pane, [relativeTo, this.active], this.panes());
     const leaf: LeafNode = { kind: "leaf", pane, parent: null };
     this.leaves.set(pane, leaf);
 
-    const target = relativeTo ?? this.active;
-    const wasEmpty = !this.root || !target;
+    const wasEmpty = plan.kind === "root";
 
     // A background spawn opens the pane without stealing focus/active from where
     // the human is typing (#117) — but an empty grid still focuses, or the app
     // would be left with no active terminal.
     const takeFocus = shouldFocusNewPane(!background, wasEmpty);
 
-    if (wasEmpty) {
+    if (plan.kind === "root") {
       this.root = leaf;
       pane.el.style.flex = "1 1 0";
       this.rootEl.appendChild(pane.el);
     } else {
-      this.insertBeside(this.leaves.get(target)!, leaf, dir, policy);
+      this.insertBeside(this.leaves.get(plan.anchor)!, leaf, dir, policy);
     }
 
     // Preserving fullscreen (#155): insertBeside re-seated the maximized pane's
@@ -948,8 +954,9 @@ export class Grid {
     this.onChange();
   }
 
-  /** Bring a parked pane back into the grid, beside the active pane (or as the
-   *  root if the grid is empty). Reuses the live Pane — its terminal buffer and
+  /** Bring a parked pane back into the grid, beside the active pane when that
+   *  pane is in the tree, else beside the first visible pane — and as the root
+   *  only when no other pane is visible (`rejoinAnchor`, #3912). Reuses the live Pane — its terminal buffer and
    *  PTY are intact; re-attaching triggers a single genuine fit. */
   restore(pane: Pane): void {
     const idx = this.minimizedPanes.indexOf(pane);
@@ -961,20 +968,24 @@ export class Grid {
     // report the same way clicking a pane does; live reasons re-badge its
     // header on the next scan.
     pane.acknowledgeAttention();
+    // Decided BEFORE the new leaf is registered, and by the tree rather than by
+    // whether `active` resolved: the active pane can itself be docked (an agent
+    // reveal sets it without restoring), and treating that as an empty grid
+    // replaced the whole tree — the orchestrator included — with this pane
+    // (#3912, `rejoinanchor.ts`).
+    const plan = rejoinAnchor(pane, [this.active], this.panes());
     const leaf: LeafNode = { kind: "leaf", pane, parent: null };
     this.leaves.set(pane, leaf);
     pane.el.style.flex = "1 1 0";
 
-    const target = this.active;
-    const targetLeaf = target ? this.leaves.get(target) : undefined;
-    if (!this.root || !targetLeaf) {
+    if (plan.kind === "root") {
       this.root = leaf;
       this.rootEl.replaceChildren(pane.el);
     } else {
       // `share`: a dock restore is a pane REJOINING the grid, not the human
       // splitting the pane they are in — the row makes room for it the way it
       // always has. (#885 slice B revisits what happens when there is no room.)
-      this.insertBeside(targetLeaf, leaf, "row", "share");
+      this.insertBeside(this.leaves.get(plan.anchor)!, leaf, "row", "share");
     }
     this.setActive(pane);
     pane.focus();
@@ -1031,19 +1042,21 @@ export class Grid {
       // Restoring is "turning to" the pane — clear a latched attention report,
       // same as `restore`.
       pane.acknowledgeAttention();
+      // The same rule as `restore` (#3912): the first pane of a group unfold
+      // runs while `active` may still be a docked pane.
+      const plan = rejoinAnchor(pane, [this.active], this.panes());
       const leaf: LeafNode = { kind: "leaf", pane, parent: null };
       this.leaves.set(pane, leaf);
       pane.el.style.flex = "1 1 0";
 
-      const targetLeaf = this.active ? this.leaves.get(this.active) : undefined;
-      if (!this.root || !targetLeaf) {
+      if (plan.kind === "root") {
         this.root = leaf;
         this.rootEl.replaceChildren(pane.el);
       } else {
         // `share`, as in `restore` — and doubly so here: a batch group-unfold
         // laying panes out as an even matrix is exactly what that policy is
         // for, where halving each restore in turn would deal out slivers.
-        this.insertBeside(targetLeaf, leaf, "row", "share");
+        this.insertBeside(this.leaves.get(plan.anchor)!, leaf, "row", "share");
       }
       // Seat the next restore beside this one, not back at the orchestrator.
       this.setActive(pane);

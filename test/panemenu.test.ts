@@ -14,6 +14,7 @@ import {
   buildPaneMenu,
   forkActionFor,
   forkClickRefusal,
+  RESET_TERMINAL_MODES_LABEL,
   type PaneConnectState,
   type PaneMenuItem,
   type PendingConnect,
@@ -37,6 +38,9 @@ const free = (overrides: Partial<PaneConnectState> = {}): PaneConnectState => ({
   // Spelled out rather than left to fall through as `undefined`: this file is
   // not in tsconfig's `include`, so nothing would have told us it was missing.
   watched: false,
+  // #3894: a terminal pane, which is what every pane here is unless a test
+  // says it is a content pane.
+  terminal: true,
   // #3318 F1: the recorded launch line the FORK item rewrites. A real line,
   // not a stub: the fork fixtures below assert the child keeps the flags on it.
   command: "claude --session-id 11111111-2222-3333-4444-555555555555 --model opus",
@@ -67,10 +71,13 @@ const pendingFrom = (overrides: Partial<PendingConnect> = {}): PendingConnect =>
  *  #3318 F2's `fork-delegate` row is dropped for the same reason: it is
  *  offered on EVERY orchestration delegate pane — which is what most of this
  *  file's fixtures are — so it would otherwise say "and a fork row" in every
- *  connect expectation. Its own block at the bottom pins it. */
+ *  connect expectation. Its own block at the bottom pins it.
+ *
+ *  #3894's `reset-terminal-modes` is dropped for the watch's reason: it is
+ *  on every terminal pane, and its own block at the bottom pins it. */
 const kinds = (items: ReturnType<typeof buildPaneMenu>) =>
   items
-    .filter((i) => !i.separator && i.action?.kind !== "toggle-watch" && i.action?.kind !== "fork-delegate")
+    .filter((i) => !i.separator && i.action?.kind !== "toggle-watch" && i.action?.kind !== "fork-delegate" && i.action?.kind !== "reset-terminal-modes")
     .map((i) => i.action?.kind);
 
 /** Everything the menu offers, watch item included — for the assertions that
@@ -83,7 +90,7 @@ const allKinds = (items: ReturnType<typeof buildPaneMenu>) =>
  *  not about the menu's length. */
 const connectItemsOf = (items: ReturnType<typeof buildPaneMenu>): PaneMenuItem[] =>
   items.filter(
-    (i) => !i.separator && i.action?.kind !== "toggle-watch" && i.action?.kind !== "fork-delegate"
+    (i) => !i.separator && i.action?.kind !== "toggle-watch" && i.action?.kind !== "fork-delegate" && i.action?.kind !== "reset-terminal-modes"
   );
 
 test("a free, MCP-capable pane with no pending arm offers only Connect (arm)", () => {
@@ -584,4 +591,50 @@ test("#3318 F1: the fork item survives every connect short-circuit the menu has"
   // ...and mid-connect-gesture, where the menu is showing completion items.
   const pending = pendingFrom();
   assert.ok(forkOf(buildPaneMenu(soloPane(), pending)), "armed elsewhere, still forkable");
+});
+
+// ---------------------------------------------------------------------------
+// #3894 — "Reset terminal modes": turns off the mouse reporting a program left
+// on. Offered on every TERMINAL pane, composed outside the connect branches.
+
+const resetOf = (items: PaneMenuItem[]) => items.find((i) => i.action?.kind === "reset-terminal-modes");
+
+test("#3894: every terminal pane offers Reset terminal modes, including the ones connect refuses", () => {
+  // A plain shell is THE pane the issue is about (ssh from PowerShell), and it
+  // is exactly the pane every connect branch short-circuits on — so this is
+  // the case a reset composed inside `connectItems` would lose.
+  const cases: [string, PaneConnectState][] = [
+    ["a shell", free({ group: null, agentId: null, role: null, agentCli: null })],
+    ["a worker", free()],
+    ["a planner", free({ role: "planner" })],
+    ["a solo pane", soloPane()],
+    ["a connected pane", free({ channelId: "c1", senderId: "orch-1", senderName: "orch-1" })],
+  ];
+  for (const [what, pane] of cases) {
+    const reset = resetOf(buildPaneMenu(pane, null));
+    assert.ok(reset, `${what} offers no Reset terminal modes item`);
+    assert.equal(reset.label, RESET_TERMINAL_MODES_LABEL);
+    assert.equal(reset.disabled, undefined, `${what}'s reset is disabled`);
+    assert.deepEqual(reset.action, { kind: "reset-terminal-modes" });
+  }
+});
+
+test("#3894: a content pane (no terminal on screen) is not offered the reset", () => {
+  const items = buildPaneMenu(free({ group: null, agentId: null, role: null, agentCli: null, terminal: false }), null);
+  assert.equal(resetOf(items), undefined);
+  // Control: the same pane as a terminal IS offered it, so the absence above is
+  // the `terminal` flag's doing and not a menu that never offers the item.
+  assert.ok(resetOf(buildPaneMenu(free({ group: null, agentId: null, role: null, agentCli: null }), null)));
+  // And the content pane's menu is otherwise intact — still the watch item last.
+  assert.equal(items[items.length - 1].action?.kind, "toggle-watch");
+});
+
+test("#3894: the reset sits in its own section directly above the watch item", () => {
+  const items = buildPaneMenu(soloPane(), null);
+  const i = items.findIndex((x) => x.action?.kind === "reset-terminal-modes");
+  assert.ok(i > 0);
+  assert.equal(items[i - 1].separator, true, "no separator above the reset — it would read as a connect option");
+  assert.equal(items[i + 1].separator, true);
+  assert.equal(items[i + 2].action?.kind, "toggle-watch");
+  assert.equal(i + 2, items.length - 1);
 });

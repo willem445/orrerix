@@ -73,14 +73,27 @@ fn an_unrecognised_layout_warns_instead_of_copying_nothing_silently() {
     );
 }
 
-/// cargo reads `cargo:warning=` to the end of the line; a line break would turn
-/// the rest of the message into a malformed build-script directive.
+/// cargo reads `cargo:warning=` to the end of the line and ignores the following
+/// lines that do not start with `cargo:`, so a line break would silently drop the
+/// rest of the message.
 #[test]
 fn the_warning_is_one_line() {
     let warning = conhost_destination(Path::new("somewhere/else/out")).unwrap_err();
     assert!(
         !warning.contains('\n') && !warning.contains('\r'),
         "the cargo:warning text spans lines: {warning:?}"
+    );
+}
+
+/// The other half of one paragraph (#1426 B2, #1457): a `\` continuation that
+/// collapsed in authoring drops the line break but keeps the source indent, so the
+/// message reads one line with a gap of spaces in it, and the check above stays green.
+#[test]
+fn the_warning_carries_no_source_indentation() {
+    let warning = conhost_destination(Path::new("somewhere/else/out")).unwrap_err();
+    assert!(
+        !warning.contains("          "),
+        "the cargo:warning text carries a ten-space run: {warning:?}"
     );
 }
 

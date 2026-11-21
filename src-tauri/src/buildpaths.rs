@@ -49,8 +49,9 @@ pub fn profile_dir_from_out_dir(out_dir: &std::path::Path) -> Option<&std::path:
 /// silently as layout v2 did (#3897). The `Err` is the warning itself rather
 /// than a bare `None`, so the text is pinned here and not left to `build.rs`.
 ///
-/// It is ONE line: cargo reads `cargo:warning=` up to the end of the line, and a
-/// second line would be parsed as a new build-script directive.
+/// It is ONE line: cargo reads `cargo:warning=` up to the end of the line and
+/// ignores every following line that does not start with `cargo:`, so the rest of
+/// a broken message would be silently dropped.
 pub fn conhost_destination(out_dir: &std::path::Path) -> Result<&std::path::Path, String> {
     profile_dir_from_out_dir(out_dir).ok_or_else(|| {
         format!(

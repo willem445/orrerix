@@ -106,6 +106,36 @@ goes down together. The Job Object code is entirely behind
 - **`assign_job_is_fail_soft_on_a_bad_pid`** — enrolling a nonexistent PID
   returns `None` (the fail-soft contract), never panics or leaks.
 
+### The fixture plays the terminal's part (#3897)
+
+The test reads the pane and answers it the way xterm.js does in a real pane,
+because the ConPTY host does not run the shell for a silent terminal.
+portable-pty creates every pseudo console with `PSEUDOCONSOLE_INHERIT_CURSOR`,
+so the host asks the terminal for its cursor position (`ESC[6n`) as it starts.
+The inbox Windows conhost waits for the reply before the shell runs. The
+sideloaded OpenConsole asks too, but does not wait.
+
+For as long as the build put the sideloaded host next to the test, an
+unanswered query cost nothing. Cargo's build-dir layout v2 (seen with Rust
+1.100.0) moved `OUT_DIR` one directory deeper. `build.rs` counted a fixed three
+ancestors up from it, so the copy landed in `<target>/<profile>/build`. The test
+then fell back to the inbox host and waited 60 s on `ESC[6n` with no shell. It
+reported the stall as "the typed command never ran", because any output byte —
+the host's own query included — counted as "the shell spoke".
+
+So the fixture now does three things:
+
+- It answers `ESC[6n` with `ESC[1;1R`, as a freshly opened terminal does.
+- It waits for `cmd`'s banner, not for any byte.
+- Its failure messages carry everything the pane printed.
+
+The test therefore tests the job object on either host. Where the host comes
+from is pinned on its own: `build.rs` and `tests/buildpaths.rs` share
+`profile_dir_from_out_dir` (`src/buildpaths.rs`). That function takes the parent
+of the nearest `build` ancestor of `OUT_DIR`, the one component both layouts
+share. The installed app does not depend on any of this: `tauri.conf.json`
+bundles `resources/conhost/*` next to the executable.
+
 ### Why the test starts no PowerShell (#1345)
 
 The first cut of the descendant-tree test drove the pane with PowerShell, had

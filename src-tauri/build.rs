@@ -64,8 +64,12 @@ fn copy_sideloaded_conhost() {
     // The executable lands in <target>/<profile>, and how far above OUT_DIR
     // that is depends on cargo's build-dir layout — see buildpaths.rs (#3897).
     let out = PathBuf::from(std::env::var("OUT_DIR").unwrap());
-    let Some(profile_dir) = profile_dir_from_out_dir(&out) else {
-        return;
+    let profile_dir = match conhost_destination(&out) {
+        Ok(dir) => dir,
+        Err(warning) => {
+            println!("cargo:warning={warning}");
+            return;
+        }
     };
     for name in ["conpty.dll", "OpenConsole.exe"] {
         let from = src.join(name);

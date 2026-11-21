@@ -175,7 +175,7 @@ removed them instead of widening the window:
   since a handle names one process for as long as it is held.
 
 What remains is slack rather than schedule. The test's three budgets — 60 s for
-the shell to say something, 60 s for the typed tree to appear in the process
+the shell to print its banner, 60 s for the typed tree to appear in the process
 table, 30 s for the kernel to tear the job down — are each a wait that ends when
 its event happens, on a local read or a kernel handle rather than on a process
 start. Measured on the CI leg the old test flaked on, everything before teardown

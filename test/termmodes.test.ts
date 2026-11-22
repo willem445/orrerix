@@ -57,11 +57,13 @@ test("the reset turns off mouse tracking, SGR encoding, focus reporting and brac
   assert.equal(mouseEncoding(term), "DEFAULT");
 });
 
-test("every mouse-tracking protocol a program can switch on is switched off — X10, VT200, drag and any-event", async () => {
-  // One case per protocol, because xterm keeps ONE active protocol: a reset
-  // that only names 1003 still clears a 1000 in xterm.js 6 (any of the four
-  // resets sets NONE), so only a per-protocol case notices a sequence that
-  // relies on that implementation detail rather than naming each mode.
+test("every mouse-tracking protocol a program can switch on ends up off — X10, VT200, drag and any-event", async () => {
+  // This checks the OUTCOME per protocol: whichever one a program switched
+  // on, tracking is NONE after the reset. It cannot check that each
+  // protocol's row is in the sequence: in xterm.js 6 a reset of ANY of
+  // 9/1000/1002/1003 sets the one active protocol to NONE, so this loop stays
+  // green with any single tracking row dropped. The literal pin below
+  // ("names every mode exactly") is what checks each row is there.
   for (const [mode, expected] of [
     [9, "x10"],
     [1000, "vt200"],
@@ -76,7 +78,10 @@ test("every mouse-tracking protocol a program can switch on is switched off — 
   }
 });
 
-test("the SGR-pixel encoding (1016) is reset too", async () => {
+test("the SGR-pixel encoding (1016) ends up reset", async () => {
+  // Outcome only, like the tracking loop above: `?1006l` also sets the
+  // encoding back to DEFAULT in xterm.js 6, so this passes with the 1016 row
+  // dropped. The literal pin below is what checks the row is there.
   const term = fresh();
   await write(term, "\x1b[?1000h\x1b[?1016h");
   assert.equal(mouseEncoding(term), "SGR_PIXELS");
@@ -84,19 +89,37 @@ test("the SGR-pixel encoding (1016) is reset too", async () => {
   assert.equal(mouseEncoding(term), "DEFAULT");
 });
 
-test("the sequence names every mode the issue lists, as a reset (l), never a set (h)", () => {
-  // The issue's list: mouse reporting 1000/1002/1003, encodings 1005/1006/1015,
-  // focus 1004, bracketed paste 2004. 1005/1015 are not implemented by
-  // xterm.js 6 (see src/termmodes.ts), so no parser test can witness them —
-  // this string-level pin is the only thing that does.
+test("the sequence names every mode exactly, as a reset (l), never a set (h)", () => {
+  // The ONLY witness for most rows. A real parser cannot tell them apart:
+  // 9/1000/1002/1003 each reset the one active protocol, 1006 and 1016 each
+  // reset the encoding, and xterm.js 6 ignores 1005/1015 outright (see
+  // src/termmodes.ts). So the expected modes are written out here as a
+  // literal — never rebuilt from RESET_MODES, which is the code under test
+  // and would make this pin agree with any row being dropped.
+  const EXPECTED_MODES = [9, 1000, 1002, 1003, 1005, 1006, 1015, 1016, 1004, 2004];
   const seq = terminalModeResetSequence();
-  for (const mode of [1000, 1002, 1003, 1005, 1006, 1015, 1004, 2004]) {
+  for (const mode of EXPECTED_MODES) {
     assert.ok(seq.includes(`\x1b[?${mode}l`), `?${mode}l missing from the reset`);
   }
   assert.doesNotMatch(seq, /h/, "the reset switches a mode ON");
-  // And it is nothing but DECRSTs: each listed mode once, no other bytes.
-  assert.equal(seq, RESET_MODES.map((m) => `\x1b[?${m.mode}l`).join(""));
-  assert.equal(new Set(RESET_MODES.map((m) => m.mode)).size, RESET_MODES.length);
+  // Nothing but these DECRSTs, each once, tracking before the encodings.
+  assert.equal(
+    seq,
+    "\x1b[?9l\x1b[?1000l\x1b[?1002l\x1b[?1003l\x1b[?1005l\x1b[?1006l\x1b[?1015l\x1b[?1016l\x1b[?1004l\x1b[?2004l"
+  );
+  assert.deepEqual(
+    RESET_MODES.map((m) => m.mode),
+    EXPECTED_MODES
+  );
+});
+
+test("the table marks 1005 and 1015 unsupported and every other row supported", () => {
+  // The module header and the PR state which modes xterm.js 6 implements; the
+  // table's flag is that statement in code, so it is pinned to the same list.
+  assert.deepEqual(
+    RESET_MODES.filter((m) => !m.supportedByXterm).map((m) => m.mode),
+    [1005, 1015]
+  );
 });
 
 test("the reset keeps the screen and the scrollback — it is not a terminal reset", async () => {

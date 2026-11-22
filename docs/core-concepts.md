@@ -103,9 +103,19 @@ the scrollback, does not change the pane's size, and sends nothing to the
 program running in the pane.
 
 Use it only after the program that switched the modes on has exited. A
-full-screen program that is still running loses its mouse input until it
-switches mouse reporting on again. Orrerix does not reset these modes
-automatically yet ([#3894](https://github.com/willem445/orrerix/issues/3894)).
+program that is still running loses all three until it switches them on again:
+
+- **Mouse input** stops reaching it.
+- **Pasted text** arrives without bracketed-paste markers, so a multi-line
+  paste runs as separate lines, each one entered on its own.
+- **Focus reports** stop. Opening the header menu takes focus away from the
+  terminal, and after the reset the terminal never reports focus coming back.
+  An agent CLI that ignores typing while it believes it is unfocused (GitHub
+  Copilot's does) can then ignore your keys until Orrerix next delivers a
+  message to it.
+
+Orrerix does not reset these modes automatically yet
+([#3894](https://github.com/willem445/orrerix/issues/3894)).
 
 ### Notes on an agent pane
 

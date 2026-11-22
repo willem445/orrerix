@@ -217,6 +217,9 @@ use loomux_lib::orchestration::{
     // #3318 F1: the per-CLI fork seam, the refusal a fork gesture asks, and
     // the L1 constant both line builders select their arm from.
     fork_refusal, ForkSeam, CLAUDE_FORK_PREMINTS_CHILD_ID,
+    // #3898: copilot's typed fork — the delegate refusal, and the one text a
+    // Solo fork pane may be typed.
+    fork_delegate_refusal, slash_fork_text,
     gemini_settings_json, CodexMcpAuth,
     CLI_CAPS, GEMINI_EDIT_DENY_TOOLS, GEMINI_READONLY_DENY_GIT, KNOWN_GEMINI_TOOLS,
     // #687: the per-block model knobs — the capability rows that decide which

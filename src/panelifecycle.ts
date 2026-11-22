@@ -120,7 +120,7 @@ export class PaneLifecycle {
     // guarded extractor (refuses on --fork-session). A bare `claude` line, or
     // one with no session flag, yields null here — the reconciler (main.ts)
     // is the OTHER half of D1, catching that case post-start.
-    this.pane.agentSessionId = opts.sessionId ?? adoptableSessionId(opts.command ?? null, opts.argv ?? null);
+    this.pane.agentSessionId = opts.sessionId ?? adoptableSessionId(opts.command ?? null, opts.argv ?? null, opts.forkOf ?? null);
     this.pane.forkOf = opts.forkOf ?? null;
     this.pane.firstInputMs = null; // this process hasn't been typed into yet (#440 B2)
     if (opts.badge) this.pane.setBadge(opts.badge);
@@ -580,7 +580,7 @@ export class PaneLifecycle {
     // Same learn-it-from-the-line fallback as start() (#440) — a fresh respawn
     // (BUG-1 backstop, or a dormant Start with a recorded command) can equally
     // carry a self-naming --resume/--session-id.
-    this.pane.agentSessionId = opts.sessionId ?? adoptableSessionId(opts.command ?? null, opts.argv ?? null);
+    this.pane.agentSessionId = opts.sessionId ?? adoptableSessionId(opts.command ?? null, opts.argv ?? null, opts.forkOf ?? null);
     this.pane.forkOf = opts.forkOf ?? null;
     this.pane.firstInputMs = null; // fresh process, nothing typed into it yet (#440 B2)
     if (opts.cwd) {

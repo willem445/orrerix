@@ -31,19 +31,71 @@ pub(in crate::orchestration) struct ForkLine<'a> {
 /// `resume`, which a fork does not pass) and reports it as a fork. So the
 /// builder refuses in the row's own words, which is also the sentence
 /// `fork_refusal` gives a gesture: one predicate, asked by both.
+///
+/// **It asks `fork_delegate_refusal`, not `fork_refusal`** (#3898): a builder
+/// line is a delegate's, and a [`ForkSeam::Slash`] CLI (copilot) has no fork
+/// a LINE can carry — its fork is a command typed into a Solo pane, which
+/// never comes through here. Admitting it would build the plain resume of the
+/// parent and call it a fork: a second agent in the parent's session.
 pub(in crate::orchestration) fn fork_line<'a>(cli: &str, fork_of: Option<&'a str>) -> Result<Option<ForkLine<'a>>, String> {
     let Some(parent) = fork_of else { return Ok(None) };
-    if let Some(refusal) = fork_refusal(cli) {
+    if let Some(refusal) = fork_delegate_refusal(cli) {
         return Err(refusal);
     }
-    // `fork_refusal` answered `None`, which it does only for a known row whose
-    // seam carries a spelling — so the row is there. Reported rather than
+    // `fork_delegate_refusal` answered `None`, which it does only for a known
+    // row whose seam carries a spelling a line can hold — so the row is there. Reported rather than
     // unwrapped all the same: this runs on a spawn path, and constraint 10
     // makes a panic here a process abort, not an error.
     let seam = cli_caps(cli)
         .map(|c| c.fork)
         .ok_or_else(|| format!("loomux cannot fork a {cli} session: no capability record"))?;
     Ok(Some(ForkLine { parent, seam }))
+}
+
+/// The text typed into a Solo fork pane on a [`ForkSeam::Slash`] CLI (#3898):
+/// the row's command and the child's NAME, `"/fork <marker>"`.
+///
+/// The marker is how the child's id is learned — the frontend's reconciler
+/// adopts only the session whose recorded name equals it — so it is held to a
+/// grammar that keeps it ONE token the CLI cannot read as anything else:
+///
+/// - `[a-z0-9-]`, 1..=64 characters, not starting with `-`. The reference
+///   documents `/fork [NAME]` and is silent on how NAME is parsed, so nothing
+///   that could split it (a space) or be quoted differently reaches the pane,
+///   and nothing a terminal or the TUI's own input box treats specially (a
+///   control byte, `@`, `/`) can ride it in.
+/// - never `worktree`: "`/fork worktree` forks the current session … into a
+///   new Git worktree" (command reference, checked 2026-11-17), which would be
+///   a different gesture entirely.
+///
+/// Refused rather than sanitized: the frontend mints the marker and matches on
+/// the SAME string later, so a rewrite here would make the pane carry a name
+/// nothing looks for. A CLI whose seam is not `Slash` is refused too — this is
+/// never a way to type an arbitrary command into a pane.
+#[doc(hidden)] // pub for integration tests
+pub fn slash_fork_text(cli: &str, marker: &str) -> Result<String, String> {
+    let Some(ForkSeam::Slash(command)) = cli_caps(cli).map(|c| c.fork) else {
+        return Err(format!(
+            "loomux has no typed fork for {cli}: only a CLI whose fork is an interactive command \
+             is forked by typing it into a pane"
+        ));
+    };
+    let well_formed = !marker.is_empty()
+        && marker.len() <= 64
+        && !marker.starts_with('-')
+        && marker.bytes().all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-');
+    if !well_formed {
+        return Err(format!(
+            "fork marker {marker:?} is not one token of [a-z0-9-] (1-64 characters, no leading '-')"
+        ));
+    }
+    if marker == "worktree" {
+        return Err(format!(
+            "fork marker \"worktree\" would be read as `{command} worktree`, a fork into a new git \
+             worktree — not the fork that was asked for"
+        ));
+    }
+    Ok(format!("{command} {marker}"))
 }
 
 /// The source of a delegate fork, as the spawn path needs it (#3318 F2).

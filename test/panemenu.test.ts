@@ -463,19 +463,21 @@ test("#3318 F1: a solo claude pane with a session, a workdir and a line offers F
   });
 });
 
-test("#3318 F2: a solo codex, pi or opencode pane offers Fork too — the menu is widened to every CLI with a seam", () => {
+test("#3318 F2: a solo codex, pi, opencode or copilot pane offers Fork too — the menu is widened to every CLI with a seam", () => {
   for (const [cli, command] of [
     ["codex", "codex -C /repo/poc resume 11111111-2222-3333-4444-555555555555"],
     ["pi", "pi --session-id 11111111-2222-3333-4444-555555555555"],
     ["opencode", "opencode --session 11111111-2222-3333-4444-555555555555"],
+    // #3898: a typed /fork, Solo only.
+    ["copilot", "copilot --resume=11111111-2222-3333-4444-555555555555"],
   ] as const) {
     const fork = forkOf(buildPaneMenu(soloPane({ agentCli: cli, command }), null));
     assert.ok(fork, `${cli}: offered`);
     assert.equal(fork.disabled, undefined, `${cli}: enabled`);
     assert.equal(fork.action?.kind, "fork", cli);
   }
-  // The negative control: copilot and gemini have no argv fork, and say so.
-  for (const cli of ["copilot", "gemini"]) {
+  // The negative control: gemini has no fork at all, and says so.
+  for (const cli of ["gemini"]) {
     const fork = forkOf(buildPaneMenu(soloPane({ agentCli: cli }), null));
     assert.equal(fork?.disabled, true, cli);
   }
@@ -487,7 +489,7 @@ test("#3318 F1: each ineligibility is a DISABLED row naming its own reason, neve
   // a single shared string would pass a per-case test while telling the human
   // the wrong thing three times out of four.
   const cases: Array<[string, Partial<PaneConnectState>, RegExp]> = [
-    ["a CLI with no argv fork", { agentCli: "copilot" }, /no command-line fork/i],
+    ["a CLI with no fork", { agentCli: "gemini" }, /no fork orrerix can run/i],
     ["no session yet", { sessionId: null }, /prompt/i],
     ["no working directory", { workdir: null }, /working directory/i],
     ["no recorded launch line", { command: null, argv: null }, /launch line/i],
@@ -522,7 +524,7 @@ test("#3318 F2: three routes by owner — a delegate forks through the backend, 
   assert.equal(forkOf(buildPaneMenu(free({ agentId: null }), null)), undefined);
   // A delegate on a CLI with no seam is a DISABLED row, not a backend call
   // that can only fail.
-  assert.equal(forkOf(buildPaneMenu(free({ agentCli: "copilot" }), null))?.disabled, true);
+  assert.equal(forkOf(buildPaneMenu(free({ agentCli: "gemini" }), null))?.disabled, true);
   // A LEAD's own pane: the frontend route, marked so the child sheds the
   // lead's identity — a Solo pane, never a second lead.
   const lead = forkOf(buildPaneMenu(free({ role: "lead", agentId: "lead-1" }), null));
@@ -533,6 +535,28 @@ test("#3318 F2: three routes by owner — a delegate forks through the backend, 
   for (const role of ["orchestrator", "manager"]) {
     assert.equal(forkOf(buildPaneMenu(free({ role }), null)), undefined, role);
   }
+});
+
+test("#3898: a copilot pane forks through the Solo route only — its delegate row is disabled and says why", () => {
+  const line = "copilot --model gpt-5 --resume=11111111-2222-3333-4444-555555555555";
+  // Solo and lead panes: the frontend route, enabled, carrying the copilot line.
+  for (const pane of [soloPane({ agentCli: "copilot", command: line }), free({ role: "lead", agentId: "lead-1", agentCli: "copilot", command: line })]) {
+    const fork = forkOf(buildPaneMenu(pane, null));
+    assert.equal(fork?.disabled, undefined, `${pane.role}: enabled`);
+    assert.equal(fork?.action?.kind, "fork", `${pane.role}: the Solo route`);
+    assert.equal(fork?.action?.kind === "fork" && fork.action.cli, "copilot");
+  }
+  // A copilot DELEGATE, every class: disabled, with the typed-fork reason —
+  // never the backend route, which `fork_delegate_refusal` refuses.
+  for (const role of ["worker", "reviewer", "planner"]) {
+    const fork = forkOf(buildPaneMenu(free({ role, agentCli: "copilot" }), null));
+    assert.equal(fork?.disabled, true, role);
+    assert.equal(fork?.action, undefined, `${role}: a disabled row fires nothing`);
+    assert.match(fork?.reason ?? "", /\/fork.*new worktree/, role);
+  }
+  // The control: the same delegate on claude IS the backend route, so the
+  // refusal above is about copilot and not about delegates.
+  assert.equal(forkOf(buildPaneMenu(free({ role: "worker" }), null))?.action?.kind, "fork-delegate");
 });
 
 test("#3331: the click re-reads the pane — a session or CLI that moved since the menu opened refuses the fork", () => {

@@ -108,8 +108,8 @@ pub(crate) use loomux_engine::text::tail_snippet;
 // flat form — a method's visibility is the defining crate's to set, and no
 // re-export narrows it.
 pub use loomux_engine::model::{
-    self, cli_can_host, cli_caps, fork_refusal, premints_session_id, CliCaps, Containment,
-    ForkSeam, ReadyMarker, Role, CLAUDE_FORK_PREMINTS_CHILD_ID, CLI_CAPS, CONTEXT_VARIANTS,
+    self, cli_can_host, cli_caps, fork_delegate_refusal, fork_refusal, premints_session_id, CliCaps,
+    Containment, ForkSeam, ReadyMarker, Role, CLAUDE_FORK_PREMINTS_CHILD_ID, CLI_CAPS, CONTEXT_VARIANTS,
     EFFORT_LEVELS, SUPPORTED_CLIS,
 };
 pub(crate) use loomux_engine::model::{default_model, sanitize_model_opt};

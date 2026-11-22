@@ -1416,21 +1416,30 @@ export const FORK_PREMINTS_CHILD_ID = true;
  *  - `subcommand` — the resume subcommand's slot with this word (codex `fork`).
  *  - `parentFlag` — a flag taking the PARENT, beside the CLI's own
  *    open-or-create id flag naming the child (pi `--session-id <child>
- *    --fork <parent>`); always pre-mints. */
+ *    --fork <parent>`); always pre-mints.
+ *  - `slash` — NO argv fork: an interactive command typed into the pane, which
+ *    moves THAT pane into the new session (copilot `/fork`, #3898). The line is
+ *    the CLI's plain resume of the parent, opened as a NEW pane, and the
+ *    command is typed into it after it boots (`orch_solo_fork_deliver`), so
+ *    the source pane is never written to. Never pre-mints; the child is
+ *    learned by its marker name (`forkMarker`). Solo only — a delegate fork of
+ *    such a CLI is refused (`canForkDelegateCli`). */
 type ForkSpelling =
   | { kind: "flag"; flag: string; premintsChild: boolean }
   | { kind: "subcommand"; word: string }
-  | { kind: "parentFlag"; flag: string };
+  | { kind: "parentFlag"; flag: string }
+  | { kind: "slash"; command: string };
 
 const FORK_SEAMS: Readonly<Record<string, ForkSpelling>> = {
   claude: { kind: "flag", flag: CLAUDE_FORK_FLAG, premintsChild: FORK_PREMINTS_CHILD_ID },
   opencode: { kind: "flag", flag: "--fork", premintsChild: false },
   codex: { kind: "subcommand", word: "fork" },
   pi: { kind: "parentFlag", flag: "--fork" },
+  copilot: { kind: "slash", command: "/fork" },
 };
 
 /** The fork spelling for a recorded program, or null for one loomux cannot
- *  fork (copilot, gemini, a plain shell). */
+ *  fork (gemini, a plain shell). */
 function forkSeamOf(program: string | null | undefined): ForkSpelling | null {
   return FORK_SEAMS[normalizeAgentProgram(program ?? "")] ?? null;
 }
@@ -1445,14 +1454,61 @@ function hasForkToken(seam: ForkSpelling, tokens: string[]): boolean {
       return tokens.includes(seam.word);
     case "parentFlag":
       return tokens.some((t) => t === seam.flag || t.startsWith(`${seam.flag}=`));
+    case "slash":
+      // A typed fork leaves nothing on the line: it IS the plain resume of the
+      // parent. `forkLineNamesParent` is how such a line is recognised, and it
+      // needs the pane's `forkOf`, which a token scan does not have.
+      return false;
   }
 }
 
 /** Can loomux fork this pane's CLI? — the one question a menu item asks of
- *  `FORK_SEAMS`. claude, codex, pi and opencode since #3318 F2; copilot and
- *  gemini have no argv fork at all (their `CliCaps` rows say why). */
+ *  `FORK_SEAMS`. claude, codex, pi and opencode since #3318 F2, copilot since
+ *  #3898 (a typed `/fork`, Solo only); gemini has no fork at all (its
+ *  `CliCaps` row says why). */
 export function canForkCli(program: string | null | undefined): boolean {
   return forkSeamOf(program) !== null;
+}
+
+/** Can loomux fork a DELEGATE (worker, reviewer, planner) on this CLI? — the
+ *  frontend mirror of the engine's `fork_delegate_refusal` (#3898). Every CLI
+ *  `canForkCli` admits except a `slash` one: a delegate fork opens in a new
+ *  worktree, and copilot's reference does not say whether a resumed session
+ *  keeps the launch directory there or returns to the parent's — so the menu
+ *  does not offer a row the backend would refuse. */
+export function canForkDelegateCli(program: string | null | undefined): boolean {
+  const seam = forkSeamOf(program);
+  return seam !== null && seam.kind !== "slash";
+}
+
+/** The command a fork of this CLI TYPES into its new pane, or null for a CLI
+ *  whose fork rides the launch line (#3898). copilot's `/fork`; the backend
+ *  builds the text itself from its own row, so this is what the frontend asks
+ *  to decide whether the open needs a delivery after it. */
+export function forkTypedCommand(program: string | null | undefined): string | null {
+  const seam = forkSeamOf(program);
+  return seam?.kind === "slash" ? seam.command : null;
+}
+
+/** Whether this line still resumes the very session the pane was FORKED from
+ *  — the shape a typed fork's line has (#3898): `copilot … --resume=<parent>`,
+ *  with the fork itself typed in after boot and so nowhere on the line.
+ *
+ *  Such a line must be treated exactly like a line carrying a fork token, and
+ *  for B3's own reason: the id it NAMES is the parent's, not the one the
+ *  process ends up running under. So `adoptableSessionId` must not adopt it
+ *  (that would record the PARENT as the fork's session) and `forkRecordCommand`
+ *  must discharge it (a recorded resume of the parent would put a second pane
+ *  in the parent's session on every restart). Gated on `forkOf`, which only
+ *  loomux's own fork gesture sets: a human's `--resume=<id>` line is not a fork
+ *  and is untouched. Program-agnostic on purpose — it asks what the line
+ *  NAMES, which `sessionIdFromCommand` already answers per CLI. */
+export function forkLineNamesParent(
+  command: string | null,
+  argv: string[] | null,
+  forkOf: string | null
+): boolean {
+  return !!forkOf && sessionIdFromCommand(command, argv) === forkOf;
 }
 
 /** Whether a fork of this CLI names its CHILD's session id on the line — so
@@ -1469,6 +1525,7 @@ export function forkPremintsChild(program: string | null | undefined): boolean {
     case "parentFlag":
       return true;
     case "subcommand":
+    case "slash":
       return false;
   }
 }
@@ -1535,6 +1592,18 @@ function forkGrammarOf(program: string | null): ForkGrammar {
         bareArgv: (a) => stripCodexSubcommandFromArgv(stripCodexResumeFromArgv(a), "fork"),
         forkTail: (parent) => ["fork", parent],
         resumeTail: (id) => ["resume", id],
+      };
+    case "copilot":
+      // #3898: a typed fork. The LINE is copilot's plain resume of the parent —
+      // `=` form, as `agentResumeCommand` emits it (#458) — and the fork is
+      // `/fork <marker>` typed into the new pane after it boots, so `forkTail`
+      // ignores the child: copilot names it, and the marker is how it is
+      // learned. `resumeTail` is the discharged record's resume of the child.
+      return {
+        bareCommand: (c) => stripSessionFlagsFromCommand(c, SESSION_FLAG_NAMES),
+        bareArgv: (a) => stripSessionFlagsFromArgv(a, SESSION_FLAG_NAMES),
+        forkTail: (parent) => [`--resume=${parent}`],
+        resumeTail: (id) => [`--resume=${id}`],
       };
     case "pi": {
       // `--fork` takes a value on pi, so it is excised by the value-consuming
@@ -1684,7 +1753,12 @@ export function forkRecordCommand(
   forkOf: string | null
 ): { command: string | null; argv: string[] | null } {
   if (!forkOf) return { command, argv };
-  if (!hasForkSession(command, argv)) return { command, argv };
+  // #3898: a typed fork's line carries no token — it is the plain resume of
+  // the parent, which is just as one-shot: replayed, it would open a second
+  // pane in the parent's session on every restart.
+  if (!hasForkSession(command, argv) && !forkLineNamesParent(command, argv, forkOf)) {
+    return { command, argv };
+  }
   // Both representations are rewritten INDEPENDENTLY, not routed through
   // `agentResumeCommand` — that function answers with whichever ONE of the two
   // it preferred, which is right for building a launch and wrong for a capture:
@@ -1719,9 +1793,19 @@ export function forkRecordCommand(
  *  new session ID instead of reusing the original"), the id named on the line
  *  is NOT the id the running process ends up with, so adopting it would record
  *  a wrong id — worse than recording none, since a wrong id silently resumes
- *  into the wrong (or someone else's) transcript next boot. */
-export function adoptableSessionId(command: string | null, argv: string[] | null): string | null {
+ *  into the wrong (or someone else's) transcript next boot.
+ *
+ *  `forkOf` (#3898) closes the same hole for a TYPED fork, whose line carries
+ *  no fork token at all — `copilot … --resume=<parent>` — so only the pane's
+ *  own `forkOf` can say the id it names is the parent's (`forkLineNamesParent`).
+ *  Defaulted, so a caller with no fork in hand reads exactly as before. */
+export function adoptableSessionId(
+  command: string | null,
+  argv: string[] | null,
+  forkOf: string | null = null
+): string | null {
   if (hasForkSession(command, argv)) return null;
+  if (forkLineNamesParent(command, argv, forkOf)) return null;
   return sessionIdFromCommand(command, argv);
 }
 

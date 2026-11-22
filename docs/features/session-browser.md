@@ -204,17 +204,30 @@ invisible to the pane you forked.
 
 The fork is the CLI's own: orrerix asks the CLI to fork the session rather
 than copying any files around — Claude Code's `--fork-session`, codex's
-`codex fork`, pi's `--fork` and opencode's `--fork`. That means the fork carries
-the conversation up to this moment. Expect to re-approve tools you had allowed
-"for this session" — the fork is a new process, so those approvals are not
-expected to carry.
+`codex fork`, pi's `--fork`, opencode's `--fork` and copilot's `/fork`. That
+means the fork carries the conversation up to this moment. Expect to re-approve
+tools you had allowed "for this session" — the fork is a new process, so those
+approvals are not expected to carry.
 
-**Claude Code, codex, pi and opencode.** On a standalone agent pane the item is
-always there: greyed out with the reason on copilot and gemini (neither has a
-command-line fork), and greyed out until the agent has been prompted at least
-once (there is no conversation to fork before that). A codex or opencode fork
-learns its own session id a little after its first prompt, the way any fresh
-pane of those CLIs does.
+**Claude Code, codex, pi, opencode and copilot.** On a standalone agent pane the
+item is always there: greyed out with the reason on gemini (it has no fork), and
+greyed out until the agent has been prompted at least once (there is no
+conversation to fork before that). A codex or opencode fork learns its own
+session id a little after its first prompt, the way any fresh pane of those
+CLIs does.
+
+**Copilot forks by typing `/fork` into the new pane.** Copilot has no
+command-line fork, and its `/fork` command moves the pane that types it into the
+new session. So orrerix opens the new pane on the original's session and types
+`/fork <name>` into **that** pane once it is ready. You see the new pane start
+on the original conversation, then switch to the fork. Nothing is typed into the
+pane you forked. The name copilot gives the fork is your pane name in lowercase
+with a short code on the end (for example `poc-fork-3f9a2c`). That is how orrerix
+recognises the fork's session, usually within a minute, and it also tells forks
+apart in copilot's own `/resume` list. If you rename that session inside copilot
+before orrerix has recognised it, orrerix does not record it, and on the next
+restart the pane opens a fresh session. If orrerix cannot type the `/fork`, it
+closes the new pane and says why. It does not leave two panes on one session.
 
 If the pane restarted between opening the menu and clicking **Fork session…**,
 orrerix refuses and asks you to open the menu again, rather than forking the
@@ -224,9 +237,13 @@ conversation the pane was having before.
 a new agent of the same kind in its group — same persona, CLI and model — with
 its own worktree cut from the original's branch; it counts against the group's
 agent limit and reports to the orchestrator like any other. A pane a review or
-plan drive is using can't be forked while the drive runs. On a **lead** pane,
-the fork is a standalone pane for you (never a second lead), and the lead can
-ask for the same thing itself. An orchestrator or manager pane has no Fork item.
+plan drive is using can't be forked while the drive runs. A **copilot** worker,
+reviewer or planner can't be forked: its fork would have to open in a new
+worktree, and copilot's documentation does not say whether a resumed session
+stays in that worktree or goes back to the original's. The item is greyed out
+with that reason. On a **lead** pane, the fork is a standalone pane for you
+(never a second lead), copilot included, and the lead can ask for the same thing
+itself. An orchestrator or manager pane has no Fork item.
 See [Orchestration](../orchestration.html#forking-an-agents-session).
 
 **There is no rejoin.** Nothing merges two conversations back together — no

@@ -893,11 +893,11 @@ pub struct CliCaps {
 /// written down once here and consulted, never re-derived as an
 /// `if cli == "..."` at a spawn site.
 ///
-/// **Four variants, because the four vendors that can fork spell it three
-/// different ways** (#3318 F2). Each spelling is a fact read off the vendor at
-/// the version loomux pins — `docs/design/session-fork.md` carries the
-/// citation per row — and each row is exercised by a test that pins the fork
-/// line against the same CLI's resume line, token for token.
+/// **Five variants, because the five vendors that can fork spell it four
+/// different ways** (#3318 F2, #3898 for the fourth). Each spelling is a fact
+/// read off the vendor at the version loomux pins — `docs/design/session-fork.md`
+/// carries the citation per row — and each row is exercised by a test that
+/// pins the fork line against the same CLI's resume line, token for token.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ForkSeam {
     /// The resume line plus one flag that takes no value: loomux builds the
@@ -927,6 +927,22 @@ pub enum ForkSeam {
     /// pre-minted — that composition is the whole point of this variant, and
     /// it is measured on the installed pi rather than assumed (see pi's row).
     ParentFlag(&'static str),
+    /// No argv fork at all — the fork is an INTERACTIVE command, which moves
+    /// the pane that types it into the new session (#3898). copilot's
+    /// `/fork [NAME]`: "Fork the current session into a new session, optionally
+    /// with a name. Usable while the agent is running—the source session keeps
+    /// working in the background"
+    /// ([command reference](https://docs.github.com/en/copilot/reference/copilot-cli-reference/cli-command-reference),
+    /// checked 2026-11-17).
+    ///
+    /// So loomux never types it into the SOURCE pane, which would invert the
+    /// roster. It opens a NEW pane on the CLI's ordinary resume of the parent
+    /// and delivers this command into THAT pane, naming the child with a
+    /// one-token marker it then learns the child's id by. Only a Solo pane can
+    /// take that route: a delegate fork is refused
+    /// ([`fork_delegate_refusal`]), and the line builders never see this
+    /// variant as a fork line. Never pre-mints — the vendor names the child.
+    Slash(&'static str),
     /// loomux cannot fork this CLI from argv. The note says *why*, and is
     /// quoted into the refusal so a rejected gesture names what is missing
     /// rather than saying "unsupported".
@@ -935,12 +951,15 @@ pub enum ForkSeam {
 
 impl ForkSeam {
     /// The vendor's fork token, or `None` for a CLI loomux cannot fork. For
-    /// [`ForkSeam::Subcommand`] this is the subcommand WORD, not a flag.
+    /// [`ForkSeam::Subcommand`] this is the subcommand WORD, not a flag; for
+    /// [`ForkSeam::Slash`] it is the interactive command, which is typed into a
+    /// pane and never appears on a launch line.
     pub fn token(&self) -> Option<&'static str> {
         match self {
             ForkSeam::Flag { flag, .. } => Some(flag),
             ForkSeam::Subcommand(word) => Some(word),
             ForkSeam::ParentFlag(flag) => Some(flag),
+            ForkSeam::Slash(command) => Some(command),
             ForkSeam::None(_) => None,
         }
     }
@@ -952,7 +971,7 @@ impl ForkSeam {
         match self {
             ForkSeam::Flag { premints_child, .. } => *premints_child,
             ForkSeam::ParentFlag(_) => true,
-            ForkSeam::Subcommand(_) | ForkSeam::None(_) => false,
+            ForkSeam::Subcommand(_) | ForkSeam::Slash(_) | ForkSeam::None(_) => false,
         }
     }
 }
@@ -1011,12 +1030,50 @@ pub fn fork_refusal(cli: &str) -> Option<String> {
     match cli_caps(cli) {
         Some(caps) => match caps.fork {
             ForkSeam::None(note) => Some(format!("loomux cannot fork a {cli} session: {note}")),
-            ForkSeam::Flag { .. } | ForkSeam::Subcommand(_) | ForkSeam::ParentFlag(_) => None,
+            ForkSeam::Flag { .. }
+            | ForkSeam::Subcommand(_)
+            | ForkSeam::ParentFlag(_)
+            | ForkSeam::Slash(_) => None,
         },
         None => Some(format!(
             "loomux cannot fork a {cli} session: loomux has no capability record for {cli} at all, \
              so it has no fork spelling to use"
         )),
+    }
+}
+
+/// Why a DELEGATE of this CLI cannot be forked, or `None` when it can (#3898).
+///
+/// [`fork_refusal`] plus one more refusal: a [`ForkSeam::Slash`] fork. That
+/// route is a pane that resumes the parent and is then TYPED the fork command,
+/// and two of its facts are unsettled for a delegate, whose fork opens in a
+/// NEW worktree:
+///
+/// - copilot's reference names `--resume` among the things that set "the
+///   session working directory (the `--resume`, `--worktree`, or `-C`
+///   directory)", so a resumed parent may run in the PARENT's checkout — two
+///   agents in one checkout is the conflict #338/#359 forbids, and the session
+///   watcher's cwd match would no longer find the child;
+/// - a delegate's first deliveries are the autopilot consent and the fork
+///   turn, and their order around a typed `/fork` is unverified.
+///
+/// The Solo pane menu and a lead's self-fork ask [`fork_refusal`] instead,
+/// because their fork opens in the SOURCE's own directory, where neither
+/// question arises. `fork_agent` and the line builders ask this one.
+pub fn fork_delegate_refusal(cli: &str) -> Option<String> {
+    if let Some(refusal) = fork_refusal(cli) {
+        return Some(refusal);
+    }
+    match cli_caps(cli).map(|c| c.fork) {
+        Some(ForkSeam::Slash(command)) => Some(format!(
+            "loomux cannot fork a {cli} delegate: {cli}'s fork is the interactive {command}, which \
+             loomux types into a new pane resuming the parent — and a delegate fork opens in a new \
+             worktree, where {cli}'s reference does not say whether a resumed session keeps the \
+             launch directory or returns to the parent's (it lists --resume among the things that \
+             set the session working directory). Fork the pane from its own menu into a Solo \
+             pane, or spawn a fresh agent and brief it (#3898)."
+        )),
+        _ => None,
     }
 }
 
@@ -1200,19 +1257,18 @@ pub const CLI_CAPS: &[CliCaps] = &[
         // No structured surface loomux can drive; R4's ACP adapter is where
         // one would come from.
         structured_driver: None,
-        // No argv fork exists to call. copilot's `/fork` is an INTERACTIVE
-        // slash command and is absent from both published CLI references
-        // (command reference and configuration guide, checked 2026-09-21);
-        // per the survey on #3318 it also moves the CURRENT terminal into
-        // the fork rather than opening a second one, which would invert the
-        // roster. Held behind a live check (#3318 F4), never guessed at.
+        // No argv fork exists to call (the option table has none, command
+        // reference checked 2026-11-17). copilot's fork is the INTERACTIVE
+        // `/fork [NAME]`, which the reference documents as moving the pane
+        // that types it into the new session while "the source session keeps
+        // working in the background" — so typed into the source pane it would
+        // invert the roster. loomux types it into a NEW pane resuming the
+        // parent instead (#3898; `ForkSeam::Slash`), Solo only. Live check L4
+        // (#3318 F4) is the human's.
         // Copilot routes to several providers, each with its own cache rule,
         // so there is no single TTL to assume (#3407).
         cache_ttl_minutes: None,
-        fork: ForkSeam::None(
-            "copilot's /fork is an interactive slash command with no documented argv equivalent, \
-             and per the issue lead it moves the current pane into the fork rather than opening a new one",
-        ),
+        fork: ForkSeam::Slash("/fork"),
     },
     CliCaps {
         cli: "gemini",

@@ -1756,8 +1756,12 @@ A **fork** opens a new agent whose conversation starts as a copy of an existing 
 while the original keeps running untouched — for a side quest that needs what that agent
 already knows (an alternative approach, an investigation off a half-finished task), without
 briefing a fresh agent from nothing. It is the CLI's own fork, never a copy of its files:
-Claude Code, codex, pi and opencode can fork; copilot and gemini have no command-line fork,
-and orrerix refuses them with the reason.
+Claude Code, codex, pi and opencode can fork; gemini has no fork, and orrerix refuses it with
+the reason. Copilot's fork is the interactive `/fork`, which orrerix types into a new
+**standalone** pane ([Session browser](features/session-browser.html#fork-a-session)). So a
+lead can fork its own copilot pane, but a copilot worker, reviewer or planner is refused:
+its fork would open in a new worktree, and copilot's reference does not say whether a resumed
+session stays in that worktree or returns to the original's checkout.
 
 **Who can fork what.** The orchestrator calls `fork_session(agent, task?, worktree?,
 branch?, name?)`; so does a lead, for one of its helpers. You can do the same from any
@@ -1775,7 +1779,7 @@ a new delegate of the **same block** — persona, CLI, model and capability clas
 
 **What is refused**, each with its reason: an orchestrator, manager or lead as the source;
 a pane a live review or plan drive is using (the drive briefs and routes its panes by agent
-id, and never briefed the fork); a CLI with no fork; a block on the structured driver; and an
+id, and never briefed the fork); a CLI with no fork, or copilot as a delegate; a block on the structured driver; and an
 agent whose session orrerix has not recorded yet (codex and opencode learn theirs a few
 seconds after the first prompt).
 

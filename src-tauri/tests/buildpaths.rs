@@ -8,7 +8,7 @@
 //! conhost with nothing red to say so until `job_object.rs` hung on it. These pin
 //! the derivation on both layouts' real `OUT_DIR` shapes.
 
-use loomux_lib::buildpaths::profile_dir_from_out_dir;
+use loomux_lib::buildpaths::{conhost_destination, profile_dir_from_out_dir};
 use std::path::Path;
 
 #[test]
@@ -51,4 +51,65 @@ fn a_build_component_above_the_target_dir_is_not_the_layouts() {
 #[test]
 fn an_out_dir_with_no_build_ancestor_yields_nothing() {
     assert_eq!(profile_dir_from_out_dir(Path::new("somewhere/else/out")), None);
+}
+
+/// An OUT_DIR no layout explains must not cost the modern host silently: with the
+/// fixture answering the host's cursor query, `job_object.rs` passes on the inbox
+/// conhost too, so this warning is the only thing that says the copy missed
+/// (#3897 review follow-up). It names the OUT_DIR it could not read and what the
+/// build lost, which is what a developer reading a build log needs to act on it.
+#[test]
+fn an_unrecognised_layout_warns_instead_of_copying_nothing_silently() {
+    let out_dir = Path::new("somewhere/else/out");
+    let warning = conhost_destination(out_dir).expect_err("no build ancestor must warn");
+    assert!(!warning.trim().is_empty(), "the warning is silent: {warning:?}");
+    assert!(
+        warning.contains(&out_dir.display().to_string()),
+        "the warning does not name the OUT_DIR it could not place: {warning:?}"
+    );
+    assert!(
+        warning.contains("conpty.dll") && warning.contains("inbox"),
+        "the warning does not say what the build lost: {warning:?}"
+    );
+}
+
+/// cargo reads `cargo:warning=` to the end of the line and ignores the following
+/// lines that do not start with `cargo:`, so a line break would silently drop the
+/// rest of the message.
+#[test]
+fn the_warning_is_one_line() {
+    let warning = conhost_destination(Path::new("somewhere/else/out")).unwrap_err();
+    assert!(
+        !warning.contains('\n') && !warning.contains('\r'),
+        "the cargo:warning text spans lines: {warning:?}"
+    );
+}
+
+/// The other half of one paragraph (#1426 B2, #1457): a `\` continuation that
+/// collapsed in authoring drops the line break but keeps the source indent, so the
+/// message reads one line with a gap of spaces in it, and the check above stays green.
+#[test]
+fn the_warning_carries_no_source_indentation() {
+    let warning = conhost_destination(Path::new("somewhere/else/out")).unwrap_err();
+    assert!(
+        !warning.contains("          "),
+        "the cargo:warning text carries a ten-space run: {warning:?}"
+    );
+}
+
+/// The other side: a layout the derivation knows copies, and warns about nothing —
+/// a warning on every build would be noise nobody reads.
+#[test]
+fn a_recognised_layout_copies_without_a_warning() {
+    for (out_dir, profile_dir) in [
+        ("target/debug/build/orrerix-0123abcd/out", "target/debug"),
+        ("target/debug/build/orrerix/0123abcd/out", "target/debug"),
+        ("ci/build/repo/target/release/build/orrerix/0123abcd/out", "ci/build/repo/target/release"),
+    ] {
+        assert_eq!(
+            conhost_destination(Path::new(out_dir)),
+            Ok(Path::new(profile_dir)),
+            "{out_dir}"
+        );
+    }
 }

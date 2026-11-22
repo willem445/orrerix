@@ -1230,9 +1230,7 @@ function paneConnectState(pane: Pane): PaneConnectState {
     channelId: pane.channelId,
     canSend,
     watched: pane.watched,
-    // #3894: a content pane's xterm is never shown, so there is nothing for
-    // the human to reset there.
-    terminal: !pane.isContent,
+    terminal: !pane.isContent, // #3894: a content pane's xterm is never shown, so nothing to reset
     quick: quickMenuFor(pane.orchGroupId),
     senderId: badge?.senderId ?? null,
     senderName: badge?.senderName ?? null,
@@ -1360,13 +1358,8 @@ async function handlePaneMenuAction(action: PaneMenuAction, pane: Pane): Promise
     showToast(now ? `Watching "${pane.name}".` : `No longer watching "${pane.name}".`, "info");
     return;
   }
-  // #3894: a terminal-mode reset is local to this pane's xterm instance —
-  // no backend call and no channel meaning — so it leaves before the reducer
-  // for the watch's reason.
-  if (action.kind === "reset-terminal-modes") {
-    showToast(pane.resetTerminalModes(), "info");
-    return;
-  }
+  // #3894: a terminal-mode reset is local to this pane's xterm, so it leaves here for the watch's reason.
+  if (action.kind === "reset-terminal-modes") return showToast(pane.resetTerminalModes(), "info");
   // #3679: a quick run's controls are not connect actions either — they act on
   // a group, not on a channel — so they leave before the reducer for the same
   // reason the watch does.

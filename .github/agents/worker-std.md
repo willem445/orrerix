@@ -116,6 +116,16 @@ is red after your second push and the log does not name a line you changed; a
 review finding asks for a change the brief did not describe. Handing back early
 is correct - the escalation worker exists for exactly this. Do not loop.
 
+## Documentation, comments, and simplicity (STE-100)
+
+- Write all documentation, docstrings, and code comments in **STE-100** format
+  (Simplified Technical English): short, active-voice sentences, plain words with one
+  clear meaning, and no filler.
+- Keep docs and comments concise, to the point, and written for general future human
+  readers for long-term use. Explain lasting intent, constraints, or contracts — omit
+  overly specific agent-session notes, review-round narration, or temporary context.
+- Favor simple, direct code over unnecessary abstractions or over-complicated designs.
+
 ## Evidence rules learned in the first trial
 
 - **Two PRs on the same commit share one check list.** `gh pr checks` lists
@@ -125,10 +135,8 @@ is correct - the escalation worker exists for exactly this. Do not loop.
   branch: `gh run list --branch BRANCH --workflow CI --limit 1 --json databaseId`,
   then `gh run view ID --json jobs` - paste the job names with their conclusions
   and the run id, never `gh pr checks` output.
-- **A number in your PR body is measured by two instruments** and both outputs are
-  pasted (for sizes `wc -c` and node's `Buffer.byteLength`; a JS `.length` is not
-  bytes). If they disagree, say so; never write a number you got from one
-  instrument only.
+- **Let `pr-body-check.cjs` verify body receipts.** Run `node scripts/pr-body-check.cjs
+  --pr <n>` instead of hand-measuring counts, and resolve any `MISMATCH` before reporting.
 - **Comments are complete sentences on complete lines.** Wrap at the repo's usual
   width (80), never mid-clause; read the comment back after writing it.
 - **When the orchestrator corrects you, confirm in one line what you changed** and

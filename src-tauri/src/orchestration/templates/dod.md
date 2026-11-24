@@ -42,8 +42,11 @@ A task is done when ALL of these hold:
    head, and #588 cited a pre-rebase run at review 1 and then the *same* pre-rebase run again
    after the rebase at review 2. Every one was caught by a reviewer; none by the worker who
    wrote it.
-5. Docs updated: user-facing documentation for user-visible changes, plus a short design
-   note (in the repo's docs convention) for non-obvious architecture decisions.
+5. Docs and comments updated in **STE-100** style: update user-facing documentation for
+   user-visible changes, plus a short design note (in the repo's docs convention) for non-obvious
+   architecture decisions. Keep all documentation and code comments concise, to the point, and
+   written in plain active-voice English for general future human readers for long-term use — omit
+   overly specific agent-session notes or review-round narration.
 6. Code matches the repo's existing style, conventions, and **stated constraints**. Read the
    contributor docs (`CLAUDE.md` / `AGENTS.md` / `CONTRIBUTING.md`) and the design notes before
    you add a **dependency**, change a **public contract** (a command signature, a wire shape, a

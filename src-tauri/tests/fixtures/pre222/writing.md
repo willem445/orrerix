@@ -12,6 +12,10 @@ usually in under a minute. Write for that reader.
   long goes in a fold, exactly as in a body.
 - **Board text is one or two plain sentences** — a task's description and each note. The issue
   or PR it links carries the rest.
+- **Code comments and documentation use STE-100 style.** Use Simplified Technical English: short,
+  active-voice sentences, plain words with one clear meaning, and no filler. Write for a general
+  future human reader for long-term use. State lasting intent, constraints, or contracts — omit
+  overly specific agent notes, review-round narration, or temporary session context.
 - **Open an issue only for work that must be tracked:** a feature, or a real defect. A review
   nit deferred from a PR is a line in that PR's disposition comment and a line to the human,
   never a new issue. When small follow-ups pile up in one area, they go as lines on that area's

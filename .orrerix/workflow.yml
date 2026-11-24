@@ -19,14 +19,14 @@
 #     worker fixes -> rev-std re-records (cheap) -> ONE rev-final delta.
 #     Measured: run in parallel, rev-final was resumed 3-4x per PR for rounds
 #     that were pure re-verification (#1764: four Opus deltas for body receipts).
-#     DEFER RULE (human decision q-38, #2168): when every required lane has
-#     passed and the only open findings are non-blocking, at review round >= 2
-#     the orchestrator DEFERS them (reason, a line in the PR's disposition
-#     comment, one line to the human -- not a new issue, #3441) instead of
-#     routing another round -- UNLESS a
-#     finding names a defect: a wrong value, an unreachable arm, a claim the
-#     code contradicts. Those route as blocking. Round-1 non-blocking findings
-#     are still fixed in the PR. (#2168)
+#     DEFER RULE (human decision q-38, #2168): aim to resolve reviews in 2 passes
+#     (3 passes max). Pass 1 may flag small non-blocking items alongside main
+#     points. At review round >= 2, once main points are addressed, reviewers let
+#     unimportant nits go and pass, and the orchestrator DEFERS any remaining
+#     non-blocking items (reason, a line in the PR's disposition comment, one line
+#     to the human -- not a new issue, #3441) instead of routing another round --
+#     UNLESS a finding names a real defect (a wrong value, an unreachable arm, a
+#     claim the code contradicts). Those route as blocking. (#2168)
 #
 #  2. ROUTE BY DIFF SHAPE (gates.merge.routing below, #1176). The static gate is
 #     rev-std alone; rev-final is REQUIRED only when the diff touches code, tests,
@@ -99,8 +99,11 @@ merge_queue:
 # the WHOLE file, gates and roster included; do not hand-tune before a first run.
 # Known gap while dogfooding: #1857 (a kick-back notice reaching no pane has no
 # re-delivery). Set enabled: false to turn it off; absent and false are equivalent.
+# Review driver: cap fix hand-backs at 2 so reviews settle in 2 passes and never
+# exceed 3 passes (Pass 1 -> Fix 1 -> Pass 2 -> Fix 2 -> Pass 3 -> stop).
 driver:
   enabled: true
+  max_review_rounds: 2
 
 # S1 dogfood (#3304). An orchestrator wake costs ~1.3 M cache-read tokens, and the
 # census over this group's own log found 64 % of 368 wakes closing by the LEADING
@@ -154,7 +157,7 @@ blocks:
 
   # -- reviewers: rev-std runs every round; rev-final ONCE, last, code PRs only
   - id: rev-std
-    name: "Standard review (EVERY ROUND - Claude Sonnet; round 1 measures the WHOLE diff, later rounds the scope line the brief names; every finding must carry a repro; iterate to PASS with a FINAL body)"
+    name: "Standard review (EVERY ROUND - Claude Sonnet; focus on big-picture architecture, simplicity, maintainability, correctness, and STE-100 docs; aim for 2 passes, 3 max)"
     kind: reviewer
     cli: claude
     model: sonnet
@@ -162,7 +165,7 @@ blocks:
     profile: .github/agents/rev-std.md
 
   - id: rev-final
-    name: "Final validation (ONCE, LAST, after rev-std PASSED on the final body - Opus; required on code PRs only, see gates.merge.routing)"
+    name: "Final validation (ONCE, LAST, after rev-std PASSED - Opus; big-picture design, simplicity, maintainability, and STE-100 docs; aim for 2 passes, 3 max; code PRs only)"
     kind: reviewer
     cli: claude
     model: opus

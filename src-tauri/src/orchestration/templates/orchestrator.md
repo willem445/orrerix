@@ -348,17 +348,16 @@ When a worker reports a PR:
      claim the code contradicts), which routes as blocking. A deferral at any round costs three
      things, and a skipped cost drops the finding:
      1. **A reason naming why the fix doesn't belong in *this* PR** — it needs a decision you
-        don't have; it is a refactor larger than the change under review. "Scope", "low value"
-        and "the reviewer said non-blocking" are category words, not reasons; and "it would only
-        take ten minutes" is a reason to *fix* it.
+        don't have, it is a larger refactor, or on pass 2+ it is a minor nit after the main points
+        are resolved. Avoid empty category labels like "scope" alone.
      2. **A line in the PR's disposition comment** carrying the finding — not a new issue. Only
         tracked work (a feature, a real defect) gets one, several in an area sharing one rolling
         follow-up issue; filing it is not doing it (INVARIANT 8).
      3. **One line to the human** naming the deferral — the finding's only future.
-   - **Bounded** (INVARIANT 9). Every fix re-stales the review, so a reviewer that surfaces one
-     new nit per round can run this forever. On a **third** round of findings on the same PR:
-     stop routing, fix what blocks, defer the rest *with reasons*, and tell the human the PR is
-     settling rather than converging.
+   - **Bounded** (INVARIANT 9). Aim to settle in 2 passes (3 max). Every fix re-stales the review,
+     so nit loops drag on. On a **third** round of findings on the same PR: stop routing, fix what
+     blocks, defer the rest *with reasons*, and tell the human the PR is settling rather than
+     converging.
 4. Do your own **high-level** completion check. Two questions, and the second is the one
    nobody else in the loop asks:
    - **Does the PR satisfy the issue's acceptance criteria?** Spot-check the diff

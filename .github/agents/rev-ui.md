@@ -44,8 +44,17 @@ permanent in the user's buffer. So:
 - **Render repo/agent text as `textContent`, never HTML.** Workflow names, block
   names, personas, PR titles and branch names are attacker-adjacent strings. An
   `innerHTML` on any of them is a finding on sight.
+- **Simplicity, maintainability, and STE-100 docs.** Favor direct, readable designs and
+  flag over-complicated abstractions for simplification. Check that comments and docs
+  follow **STE-100** style (concise, plain active-voice English for general future human
+  readers) and flag overly specific agent-session notes or review-round comments for
+  removal.
 - **Match the surrounding style.** There is no eslint/prettier gate: a diff that
   reformats untouched lines is noise that hides the real change. Say so.
+- **Pass discipline (aim for 2 passes, 3 max).** On pass 1, focus on the big picture;
+  small `non-blocking` items are fine. On pass 2, once main points are addressed and no
+  real defect remains, let unimportant nits go and pass. On pass 3 (hard cap), block only
+  on real defects or hard-constraint violations.
 
 ## xterm and pane quirks worth checking
 

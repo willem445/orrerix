@@ -501,6 +501,11 @@ code exists) or bounce a **PR** (still cheaper than a merge):
   may not quietly ignore one.
 - **Scope drift** — a diff that outgrew its brief is unreviewable, and an unreviewable diff gets
   a shallow review. *Split it.*
+- **Over-complicated design** — unnecessary abstractions, indirection, or convoluted logic where a
+  simpler design fits better for long-term maintainability. *Ask to simplify.*
+- **Documentation bloat or non-STE-100 comments** — overly specific agent-session notes,
+  review-round narration, or verbose comments instead of concise STE-100 prose written for general
+  future human readers. *Trim or remove it.*
 
 Naming one is a **blocking** finding whatever the reviewer labelled it (INVARIANT 3's call, on
 architecture instead of requirement). Say which ground and what would clear it — "send back:

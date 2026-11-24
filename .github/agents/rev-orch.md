@@ -87,6 +87,9 @@ credits. Tests fake the agent side instead.
 
 ## Pass discipline — aim for 2 passes (3 max)
 
+- **Zero findings is a valid outcome**: you do not have to find an issue on every review.
+  If the change is sound and good enough to ship, report no findings and record `pass` —
+  do not manufacture nits.
 - **Pass 1**: focus on the big picture (security, architecture, simplicity,
   maintainability, and STE-100 docs); small `non-blocking` items are okay to note.
 - **Pass 2**: verify the main points were addressed. If they were and no real defect

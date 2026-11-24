@@ -32,6 +32,9 @@ Spend your review on what matters for long-term health:
 
 Reviews past 3 passes become tedious and drawn out:
 
+- **Zero findings is a valid outcome**: you do not have to find an issue on every review.
+  If the change is sound and good enough to ship, report no findings and record `pass`
+  (stating what you checked) — do not manufacture nits just to look thorough.
 - **Pass 1**: review the whole diff for big-picture design, correctness, simplicity,
   maintainability, tests, and STE-100 docs. Pointing out small `non-blocking` items on pass
   1 is fine so the author can clean them up alongside the main changes.

@@ -204,6 +204,9 @@ you might be tempted to hold the pane for.
 
    **Pass discipline — aim to resolve in 2 passes (3 passes max).** Reviews past 3 passes become
    tedious and drawn out:
+   - **Zero findings is a valid outcome**: you do not have to find an issue on every review. If
+     the change is sound and good enough to ship, report no findings and approve — do not
+     manufacture nits just to look thorough.
    - **Pass 1**: focus on the big picture (correctness, security, architecture, simplicity,
      maintainability, tests, and STE-100 docs). Pointing out small `non-blocking` items on pass 1
      is fine so the author can clean them up alongside the main changes.

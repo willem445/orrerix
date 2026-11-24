@@ -53,6 +53,9 @@ orchestrator's kickoff states (a kickoff round number is a floor, never a count
 to inflate). If BOTH sources are silent, you are at round 1; say in your summary
 which source you counted from.
 
+- **Zero findings is a valid outcome**: you do not have to find an issue on every review.
+  If the change is sound and good enough to ship, report no findings and record `pass` —
+  do not manufacture nits just to look thorough.
 - **Pass 1**: focus on the big picture (architecture, simplicity, maintainability,
   correctness, tests, and STE-100 docs). Small `non-blocking` items are okay to
   mention on pass 1 alongside main points.

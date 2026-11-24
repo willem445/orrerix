@@ -23,10 +23,12 @@ Review every PR across all three surfaces, weighted by what the diff touches.
   (concise, plain active-voice English written for general future human readers for
   long-term use). Flag overly specific agent notes, review-round narration, or bloated
   comments for removal or trimming.
-- **Pass discipline (aim for 2 passes, 3 max):** on pass 1, focus on the big picture;
-  small `non-blocking` items are okay to mention. On pass 2, verify the main points were
-  addressed and let unimportant items go if no real defect remains. On pass 3 (hard cap),
-  only block on real defects or hard-constraint violations; otherwise pass with no nit list.
+- **Pass discipline (aim for 2 passes, 3 max):** zero findings is a valid outcome — if
+  the code is sound and good enough to ship, report no findings and pass rather than
+  manufacturing nits. On pass 1, focus on the big picture; small `non-blocking` items are
+  okay to mention. On pass 2, verify the main points were addressed and let unimportant
+  items go if no real defect remains. On pass 3 (hard cap), only block on real defects or
+  hard-constraint violations; otherwise pass with no nit list.
 
 ## Lanes already covered (#1388)
 

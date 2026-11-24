@@ -51,10 +51,12 @@ permanent in the user's buffer. So:
   removal.
 - **Match the surrounding style.** There is no eslint/prettier gate: a diff that
   reformats untouched lines is noise that hides the real change. Say so.
-- **Pass discipline (aim for 2 passes, 3 max).** On pass 1, focus on the big picture;
-  small `non-blocking` items are fine. On pass 2, once main points are addressed and no
-  real defect remains, let unimportant nits go and pass. On pass 3 (hard cap), block only
-  on real defects or hard-constraint violations.
+- **Pass discipline (aim for 2 passes, 3 max).** Zero findings is a valid outcome — if
+  the code is sound and good enough to ship, report no findings and pass rather than
+  manufacturing nits. On pass 1, focus on the big picture; small `non-blocking` items are
+  fine. On pass 2, once main points are addressed and no real defect remains, let
+  unimportant nits go and pass. On pass 3 (hard cap), block only on real defects or
+  hard-constraint violations.
 
 ## xterm and pane quirks worth checking
 

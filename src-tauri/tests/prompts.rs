@@ -1316,6 +1316,12 @@ fn reviewer_and_playbook_focus_on_big_picture_simplicity_ste100_docs_and_two_pas
     pinned(
         "reviewer.md",
         &r,
+        "zero findings is a valid outcome",
+        "reviewers must know they can approve with no findings instead of manufacturing nits",
+    );
+    pinned(
+        "reviewer.md",
+        &r,
         "let unimportant items go and approve",
         "on pass 2, reviewers should let unimportant items go once main points are addressed",
     );

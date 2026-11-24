@@ -1813,8 +1813,9 @@ comparison is honest either way. If it still says MISMATCH, that is a real one.
     long-term use) and omit overly specific agent-session notes or review-round narration.
   - `reviewer.md`: direct reviewers to focus on the big picture (architecture, simplicity,
     long-term maintainability), check STE-100 docs and flag overly specific comments for
-    removal, and follow pass discipline (aim for 2 passes, 3 max; small items okay on pass 1,
-    let unimportant items go on pass 2 once main points are addressed).
+    removal, treat zero findings as a valid outcome when the code is good enough to ship,
+    and follow pass discipline (aim for 2 passes, 3 max; small items okay on pass 1, let
+    unimportant items go on pass 2 once main points are addressed).
   - `orchestrator.md`: align round-2+ deferral reasoning and bounded review guidance with the
     2-pass target (3 max) while staying under `RESIDENT_CORE_BUDGET` (35,000 B).
   - `orchestrator-playbook.md`: add over-complicated design and documentation bloat /

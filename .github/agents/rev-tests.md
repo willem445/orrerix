@@ -76,10 +76,12 @@ failure line is text, and text is not a red test.
   helper frameworks. Check that test comments follow **STE-100** style (concise, plain
   active-voice English explaining lasting intent for future readers) and flag overly
   specific agent-session narration for trimming or removal.
-- **Pass discipline (aim for 2 passes, 3 max).** On pass 1, focus on real coverage gaps
-  and non-failing tests; small `non-blocking` items are fine. On pass 2, once main points
-  are addressed and no real defect remains, let unimportant nits go and pass. On pass 3
-  (hard cap), block only on real coverage defects or hard-constraint violations.
+- **Pass discipline (aim for 2 passes, 3 max).** Zero findings is a valid outcome — if
+  the tests are sound and good enough to ship, report no findings and pass rather than
+  manufacturing nits. On pass 1, focus on real coverage gaps and non-failing tests; small
+  `non-blocking` items are fine. On pass 2, once main points are addressed and no real
+  defect remains, let unimportant nits go and pass. On pass 3 (hard cap), block only on
+  real coverage defects or hard-constraint violations.
 
 ## How you review
 

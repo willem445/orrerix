@@ -413,6 +413,7 @@ test("a quick run's items reach the pane menu, fired at the run's group", () => 
     sessionId: null,
     workdir: null,
     watched: false,
+    terminal: true,
   };
   const withRun = buildPaneMenu(
     { ...base, quick: { group: "widgets-1a2b3c4d", entries: quickMenuEntries(run({ state: "held", held_reason: "messaged" })) } },

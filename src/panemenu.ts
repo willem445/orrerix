@@ -78,6 +78,12 @@ export type PaneMenuAction =
    *  dispatcher already holds, and inventing a second way to say so would be a
    *  second thing that can disagree. */
   | { kind: "toggle-watch" }
+  /** Turn off the input modes a program left switched on in this pane's
+   *  terminal — mouse reporting, focus reporting, bracketed paste (#3894).
+   *  Like `toggle-watch` it names no pane: it always acts on the menu's own,
+   *  and it acts on the TERMINAL only — written into xterm.js locally, never
+   *  to the PTY, and never a resize (see termmodes.ts). */
+  | { kind: "reset-terminal-modes" }
   | { kind: "disconnect"; pane: PaneIdentity }
   /** Human-only sender swap (B5) — "Make this pane the sender" on a
    *  token-holding receiver of an already-live channel. */
@@ -198,6 +204,11 @@ export interface PaneConnectState {
    *  field here that gates nothing and enables nothing. Every pane can be
    *  watched, so this decides the item's VERB and never its presence. */
   watched: boolean;
+  /** Whether this pane shows a terminal (#3894) — false for a content pane
+   *  (files, to-do, a structured agent view), whose xterm is never on screen
+   *  and has no program in it to have left a mode on. Gates only the
+   *  "Reset terminal modes" item. */
+  terminal: boolean;
   // ── #3318 F1: what the FORK gesture needs beyond the three above ──
   /** The pane's recorded launch line, both representations, exactly as
    *  `Pane.launchLine` reports them. A fork is that line rewritten, so the
@@ -207,6 +218,9 @@ export interface PaneConnectState {
   command: string | null;
   argv: string[] | null;
 }
+
+/** #3894 — named here so the docs and the tests quote one spelling. */
+export const RESET_TERMINAL_MODES_LABEL = "Reset terminal modes";
 
 const NOT_CAPABLE_REASON =
   "This pane has no connectable agent — only orchestrator, worker, reviewer, and standalone agent panes can join a channel.";
@@ -461,6 +475,17 @@ export function buildPaneMenu(pane: PaneConnectState, pending: PendingConnect | 
   // sits below the two that do. It is never `disabled` — there is no pane this
   // question cannot be asked about, which is why `PaneConnectState.watched`
   // gates nothing.
+  //
+  // #3894's reset sits in its own section ABOVE the watch, composed here for
+  // the same reason: a plain shell is exactly the pane a stuck mouse mode
+  // ruins, and every connect branch short-circuits on one. It is offered on
+  // every TERMINAL pane, with nothing stuck or something stuck alike — the
+  // menu cannot see the modes (they live in the xterm instance, not in this
+  // state), and resetting a pane with nothing on is harmless.
+  if (pane.terminal) {
+    if (items.length) items.push({ label: "", separator: true });
+    items.push({ label: RESET_TERMINAL_MODES_LABEL, action: { kind: "reset-terminal-modes" } });
+  }
   if (items.length) items.push({ label: "", separator: true });
   items.push({ label: watchMenuLabel(pane.watched), action: { kind: "toggle-watch" } });
   return items;

@@ -67,9 +67,13 @@ and costs the human a debugging session later.
    still red and what you tried, and say the same on the issue, rather than marking
    the PR ready. Never spawn a real agent CLI — it burns the human's paid credits;
    tests fake the agent side instead.
-4. **Update the doc the change touches** — the `docs/` page for user-visible
-   behaviour. If it needs a *new* design note, that is a sign the task was not
-   quick: escalate.
+4. **Update the doc the change touches (STE-100 style)** — the `docs/` page for
+   user-visible behaviour, plus concise code comments where lasting intent is non-obvious.
+   Write all docs and comments in **STE-100** style (Simplified Technical English): short,
+   active-voice sentences, plain words, concise and written for general future human
+   readers for long-term use — omit overly specific agent-session notes or review-round
+   narration. If it needs a *new* design note, that is a sign the task was not quick:
+   escalate.
 5. **Run the pre-report receipt check, then mark ready.** Before every
    `report("done")` — and again after EVERY push, including a body-only fix
    (the stale figure is usually collateral of the previous round's own edit,

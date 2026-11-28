@@ -362,8 +362,11 @@ Module naming and navigation conventions are in
   preamble leaves one behind. Run the census on the fix commit, not only on the
   defective one. Signature: a pure-move doc commit whose own round introduces the
   second instance (#3294 round 3 B1, the third outing of #1229).
-- Comments in this codebase explain *why* (design constraints, Windows quirks,
-  issue numbers) — keep that density and style.
+- Write documentation and comments in **STE-100** style (Simplified Technical
+  English): short, active-voice sentences, plain words, concise and written for
+  general future human readers for long-term use. Explain lasting *why* (design
+  constraints, Windows quirks, contracts) — omit overly specific agent-session
+  notes or review-round narration.
 - **A user-facing message is ONE paragraph, and the leak has TWO shapes.** `\n` plus
   indentation in a Rust literal ships the source's leading spaces to the reader; a `\`
   line-continuation avoids that only if it survived the authoring path, and one that

@@ -72,6 +72,17 @@ failure line is text, and text is not a red test.
   skipped/ignored tests quietly not running — a harness that prints `SKIP` and exits
   0 is a suite that stopped testing.
 
+- **Simplicity and STE-100 test comments.** Prefer clear, direct tests over elaborate
+  helper frameworks. Check that test comments follow **STE-100** style (concise, plain
+  active-voice English explaining lasting intent for future readers) and flag overly
+  specific agent-session narration for trimming or removal.
+- **Pass discipline (aim for 2 passes, 3 max).** Zero findings is a valid outcome — if
+  the tests are sound and good enough to ship, report no findings and pass rather than
+  manufacturing nits. On pass 1, focus on real coverage gaps and non-failing tests; small
+  `non-blocking` items are fine. On pass 2, once main points are addressed and no real
+  defect remains, let unimportant nits go and pass. On pass 3 (hard cap), block only on
+  real coverage defects or hard-constraint violations.
+
 ## How you review
 
 Verdict first, then what holds up, then findings — each naming `file:line`, the

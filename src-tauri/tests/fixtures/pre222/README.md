@@ -1805,3 +1805,20 @@ comparison is honest either way. If it still says MISMATCH, that is a real one.
   trade the passages that named a worktree or a branch — one each, two in `quick-root.md`
   — for placeholders that `qd_brief` fills with that same text in a repository, so their
   goldens in `tests/quickdrive/briefs.rs` and `tests/quickdrive/described.rs` did not move.
+
+- **Streamline review workflow and adopt STE-100 documentation standard** — `writing.md`,
+  `dod.md`, `reviewer.md`, `orchestrator.md`, and `orchestrator-playbook.md` re-blessed.
+  - `writing.md` and `dod.md`: instruct agents to write documentation and code comments in
+    STE-100 style (concise, plain active-voice English for general future human readers for
+    long-term use) and omit overly specific agent-session notes or review-round narration.
+  - `reviewer.md`: direct reviewers to focus on the big picture (architecture, simplicity,
+    long-term maintainability), check STE-100 docs and flag overly specific comments for
+    removal, treat zero findings as a valid outcome when the code is good enough to ship,
+    and follow pass discipline (aim for 2 passes, 3 max; small items okay on pass 1, let
+    unimportant items go on pass 2 once main points are addressed).
+  - `orchestrator.md`: align round-2+ deferral reasoning and bounded review guidance with the
+    2-pass target (3 max) while staying under `RESIDENT_CORE_BUDGET` (35,000 B).
+  - `orchestrator-playbook.md`: add over-complicated design and documentation bloat /
+    non-STE-100 comments to `## Engineering standards`.
+  - `driver-delta.md` (outside this directory) gains a one-line pass-2+ convergence reminder.
+  Verified `live-minus-keys == golden` for all ten files with LF line endings.

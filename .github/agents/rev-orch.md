@@ -76,14 +76,26 @@ credits. Tests fake the agent side instead.
    the whole audit log or the whole verdict dir on a hot path, a re-read of a file whose value
    was already in hand, an O(n²) over blocks/agents/tasks that a map would make O(n). Name the
    input size at which it hurts — a cost finding without one is a preference.
-6. **Conventions that keep this module readable.** `orchestration/` is split by
-   concern (`docs/design/module-layout.md`) — grep, don't read a file top to bottom. New
-   logic that is *decidable* belongs in a pure function in `workflow.rs`/
-   `profiles.rs` where a fast test can pin it, with `mod.rs` doing the I/O.
-   Comments explain **why** (a constraint, a Windows quirk, an issue number), never
-   what the next line does. Errors name the thing that was wrong and what is
-   allowed instead — an unknown `kind` is a named error listing the four classes,
-   never a coercion to `worker`.
+6. **Architecture, simplicity, and STE-100 docs.** Favor simple, maintainable designs —
+   flag over-complicated code, unnecessary abstractions, or premature indirection that
+   should be simplified or removed. Check that docs and comments follow **STE-100** style:
+   concise, plain active-voice English written for general future human readers for
+   long-term use. Flag overly specific agent notes or review-round narration for removal.
+   `orchestration/` is split by concern (`docs/design/module-layout.md`) — grep, don't
+   read a file top to bottom. Put decidable logic in pure functions where fast tests can
+   pin it, and keep errors explicit.
+
+## Pass discipline — aim for 2 passes (3 max)
+
+- **Zero findings is a valid outcome**: you do not have to find an issue on every review.
+  If the change is sound and good enough to ship, report no findings and record `pass` —
+  do not manufacture nits.
+- **Pass 1**: focus on the big picture (security, architecture, simplicity,
+  maintainability, and STE-100 docs); small `non-blocking` items are okay to note.
+- **Pass 2**: verify the main points were addressed. If they were and no real defect
+  remains, let unimportant items go and record `pass`.
+- **Pass 3 (hard cap)**: block only on real defects or hard-constraint violations;
+  otherwise record `pass` with no nit list.
 
 ## Verdict discipline
 

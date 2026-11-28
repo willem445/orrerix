@@ -1249,3 +1249,95 @@ fn the_ai_tail_names_the_human_without_a_handle() {
         "the tail must be placed after the agent layer, so the squash cut drops it: {body}"
     );
 }
+
+// ---------------------------------------------------------------------------------------------
+// Big-picture review focus, 2-pass convergence, and STE-100 documentation standard
+// ---------------------------------------------------------------------------------------------
+
+#[test]
+fn writing_and_dod_require_concise_ste100_documentation_for_future_human_readers() {
+    let writing = flat(loomux_lib::orchestration::writing_body());
+    pinned(
+        "writing.md",
+        &writing,
+        "code comments and documentation use ste-100 style",
+        "the writing standard must mandate STE-100 style for code comments and documentation",
+    );
+    pinned(
+        "writing.md",
+        &writing,
+        "general future human reader",
+        "documentation must target general future human readers, not ephemeral session context",
+    );
+
+    let worker = flat(&instructions("worker.md"));
+    let dod = section(&worker, "## definition of done", "## review findings");
+    pinned(
+        "worker.md's DoD",
+        dod,
+        "docs and comments updated in **ste-100** style",
+        "workers must be instructed in their DoD to write docs and comments in STE-100 style",
+    );
+    pinned(
+        "worker.md's DoD",
+        dod,
+        "omit overly specific agent-session notes",
+        "workers must omit overly specific agent-session notes from long-term docs and comments",
+    );
+}
+
+#[test]
+fn reviewer_and_playbook_focus_on_big_picture_simplicity_ste100_docs_and_two_pass_convergence() {
+    let r = flat(&instructions("reviewer.md"));
+    pinned(
+        "reviewer.md",
+        &r,
+        "focus on the big picture, not nits",
+        "reviewers must focus on big-picture design and maintainability rather than nits",
+    );
+    pinned(
+        "reviewer.md",
+        &r,
+        "architecture, simplicity, and maintainability",
+        "reviewers must evaluate architecture, simplicity, and long-term maintainability",
+    );
+    pinned(
+        "reviewer.md",
+        &r,
+        "docs and comments (ste-100)",
+        "reviewers must check that docs and comments follow the STE-100 standard",
+    );
+    pinned(
+        "reviewer.md",
+        &r,
+        "aim to resolve in 2 passes (3 passes max)",
+        "reviews should target 2 passes with a hard cap of 3",
+    );
+    pinned(
+        "reviewer.md",
+        &r,
+        "zero findings is a valid outcome",
+        "reviewers must know they can approve with no findings instead of manufacturing nits",
+    );
+    pinned(
+        "reviewer.md",
+        &r,
+        "let unimportant items go and approve",
+        "on pass 2, reviewers should let unimportant items go once main points are addressed",
+    );
+
+    let pb = flat(&playbook_instructions());
+    let standards = section(&pb, "## engineering standards", "## delivery notices");
+    pinned(
+        "Engineering standards",
+        standards,
+        "over-complicated design",
+        "engineering standards must flag over-complicated designs for simplification",
+    );
+    pinned(
+        "Engineering standards",
+        standards,
+        "documentation bloat or non-ste-100 comments",
+        "engineering standards must flag documentation bloat and non-STE-100 comments",
+    );
+}

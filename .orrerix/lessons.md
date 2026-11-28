@@ -81,18 +81,20 @@ When the roster carries `worker-std`/`rev-std`:
 4. `rev-std` runs every round, to PASS on a FINAL body (batch body edits before
    the record). `rev-final` is spawned ONCE, last, only then — and only where
    the gate's routing requires it (code, tests, CI, manifests).
-5. A rev-std brief lists explicit steps AND says: base check, full-body claim
-   list, completeness list against every case the text names, squash-awareness.
-   The persona carries the rules; the brief names the cases. Numbers: two
-   instruments, pasted; a mismatch is a finding, never an explanation.
+5. A rev-std brief focuses on big-picture architecture, simplicity, maintainability,
+   correctness, and STE-100 docs — let `pr-body-check.cjs` handle receipt checks.
+   Pass 1 may note small items; pass 2+ lets unimportant nits go once main points are
+   addressed (2 passes target, 3 max).
 6. Read rev-final's "review findings" per PR; when three consecutive PRs show no
    blocking miss by rev-std, propose dropping rev-final (the human's rule).
 
-## Non-blocking findings at review round >= 2: defer, don't route another round
+## Non-blocking findings and review convergence (aim for 2 passes, 3 max)
 
-When every required lane has passed and the only open findings are non-blocking, at
-review round >= 2 the orchestrator DEFERS them to a follow-up issue (reason, filed
-issue, one line to the human) instead of routing another round — UNLESS a finding
-names a defect: a wrong value, an unreachable arm, a claim the code contradicts.
-Those route as blocking. Round-1 non-blocking findings are still fixed in the PR.
-(#2168, #2104, #1758)
+Reviewers focus on the big picture: architecture, simplicity, long-term maintainability,
+correctness, and concise STE-100 docs/comments written for general future human readers
+(strip overly specific agent notes). Pass 1 may flag small non-blocking items; on pass 2+,
+once main points are addressed, let unimportant nits go and pass. When every required lane
+passes with only non-blocking items open at round >= 2, defer them (reason, a line in the
+PR's disposition comment, one line to the human — not a new issue) instead of routing
+another round, unless a finding names a real defect. Workers always document code and
+docs in STE-100 format. (#2168, #3441)

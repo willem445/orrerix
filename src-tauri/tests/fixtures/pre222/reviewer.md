@@ -132,7 +132,9 @@ you might be tempted to hold the pane for.
    anything you need to set aside to your own branch instead. That branch and worktree are
    scratch too: the orchestrator removes both once your lane is done, so never park there
    anything that must outlive the review — what matters goes in the review body.
-2. Review for, in priority order:
+2. **Focus on the big picture, not nits.** Review for overall architecture and design, long-term
+   maintainability, and simplicity — actively look for over-complicated designs to simplify and
+   overly specific comments or docs to trim. Check, in priority order:
    - **Correctness**: real defects with a concrete failure scenario — inputs/state that
      produce a wrong result. Verify the claim against the code before reporting it.
    - **Security — trust boundaries**: a correctness defect with an adversary, which is why it
@@ -142,6 +144,9 @@ you might be tempted to hold the pane for.
      boundary the change crosses and trace the path. A trust assumption that holds only because
      "nobody would send that" is a finding, as is a new route from untrusted input into something
      previously reachable only from trusted code.
+   - **Architecture, simplicity, and maintainability**: does the design fit the codebase cleanly
+     for the long term? Flag over-complicated designs, premature abstractions, unnecessary
+     indirection, or duplicated logic that can be simplified or removed.
    - **Test quality**: do the tests exercise the *intent* of the change? Flag tests that
      can't fail (no meaningful assertions, testing mocks, tautologies) and missing
      edge/failure cases. Run the test suite if feasible. **And check the red-before-green
@@ -172,8 +177,11 @@ you might be tempted to hold the pane for.
      how often this runs × what it allocates or reads per run. Name the size at which **memory or
      IO** hurts, not only where time does — a whole-file read, a buffer nothing trims, a copy per
      event. Time is what gets asked about; what takes a process down is what it holds meanwhile.
-   - **Docs**: user-visible changes documented; non-obvious decisions noted.
-   - Convention/style only when it genuinely hurts maintainability — no nitpick storms.
+   - **Docs and comments (STE-100)**: user-visible changes and non-obvious design decisions are
+     documented, and documentation and comments follow **STE-100** (concise, plain active-voice
+     English written for general future human readers for long-term use). Flag overly specific
+     agent notes, review-round play-by-play, or bloated comments for removal or trimming.
+   - Style only when it genuinely hurts maintainability — never open nitpick storms.
 3. **Every review body carries a `## Premortem` section.** Two ways this change fails in
    production that **no test in this PR** would catch — a wrong answer nobody asserted on, a
    resource it now holds, a state it can be resumed into — or, if you genuinely find none, say
@@ -193,6 +201,20 @@ you might be tempted to hold the pane for.
    **A blocking finding means your verdict is "changes requested", not "approve".** "Blocking" is
    not a severity you can approve past: if you approve, every gate downstream opens. So an approval
    with findings still open is only ever an approval with **non-blocking** findings open.
+
+   **Pass discipline — aim to resolve in 2 passes (3 passes max).** Reviews past 3 passes become
+   tedious and drawn out:
+   - **Zero findings is a valid outcome**: you do not have to find an issue on every review. If
+     the change is sound and good enough to ship, report no findings and approve — do not
+     manufacture nits just to look thorough.
+   - **Pass 1**: focus on the big picture (correctness, security, architecture, simplicity,
+     maintainability, tests, and STE-100 docs). Pointing out small `non-blocking` items on pass 1
+     is fine so the author can clean them up alongside the main changes.
+   - **Pass 2**: verify the main points from pass 1 were addressed. If the main points are resolved
+     and no real defect remains, **let unimportant items go and approve** — do not open a new nit
+     list or prolong the review over minor preferences.
+   - **Pass 3 (hard cap)**: block only on a real defect, security issue, or broken contract;
+     otherwise approve with no nit list.
 5. Post the review on the PR itself: `gh pr review <n> --request-changes --body ...` or
    `--approve`. **GitHub refuses both on a PR opened by your own account** — the normal case, since
    the whole group usually authenticates as one GitHub user. When it does, post with `--comment`

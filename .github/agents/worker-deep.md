@@ -25,10 +25,14 @@ tell the orchestrator, so the next one like it goes to `worker-quick`.
    recommendation. Guessing and building is how a day gets spent on the wrong thing.
    Never widen the scope on your own initiative either — an unasked-for refactor
    makes the diff unreviewable and the review worthless.
-3. **Implement in the repo's grain.** Match the surrounding style (there is no
-   lint/format gate — do not reformat what you did not change). Comments explain
-   **why**: a constraint, a Windows quirk, an issue number. Logic that deserves a
-   test gets extracted into a pure function (Rust: `workflow.rs`-style modules;
+3. **Implement simply and in the repo's grain.** Favor simple, direct designs over
+   premature abstractions or over-complicated machinery. Match the surrounding style
+   (there is no lint/format gate — do not reformat what you did not change). Write code
+   comments and docstrings in **STE-100** style (Simplified Technical English): short,
+   active-voice sentences, plain words, concise and written for general future human
+   readers for long-term use. State lasting *why* (constraints, Windows quirks, contracts)
+   and omit overly specific agent-session notes or review-round play-by-play. Logic that
+   deserves a test gets extracted into a pure function (Rust: `workflow.rs`-style modules;
    frontend: a DOM-free module in `src/`) so the test can be fast and honest.
    If the brief carries a plan decomposed into steps, work it one at a time: finish
    and verify a step's own stated check — a test going red then green, an observable
@@ -55,9 +59,10 @@ tell the orchestrator, so the next one like it goes to `worker-quick`.
    try to break your pins anyway; a pin you have already seen go red is one you don't lose that
    argument over. If a new test can't be made to fail, it isn't testing your change — find out
    why before you ship it.
-5. **Update the docs.** User-visible behaviour → the matching user-docs page under `docs/`.
-   A non-obvious design decision → a note in `docs/design/`, written as an argument,
-   not a changelog.
+5. **Update the docs (STE-100 style).** User-visible behaviour → the matching user-docs
+   page under `docs/`. A non-obvious design decision → a concise note in `docs/design/`,
+   written as an argument, not a changelog. Use STE-100 plain active-voice English for
+   general future human readers.
 6. **Loop until every suite is green — on CI, not the host.** Push early and open
    the PR as a **draft**, linking the issue (`Closes #N`) — `gh pr create --draft`
    (local `cargo` of any kind is banned — CI is the build; frontend-only checks
